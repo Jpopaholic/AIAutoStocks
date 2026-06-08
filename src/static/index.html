@@ -1,0 +1,1484 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AIAutoStocks - 智慧交易儀表板</title>
+    <meta name="description" content="AIAutoStocks 是一套台股盤後自動化交易與回測引擎，結合 Gemini LLM 提供多股配適投資決策。">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <style>
+        /* CSS 變數定義：建立和諧、高質感的暗黑系發光調色盤 */
+        :root {
+            --bg-color: #0b0f19;
+            --glass-bg: rgba(15, 22, 42, 0.45);
+            --glass-border: rgba(255, 255, 255, 0.08);
+            --glass-highlight: rgba(255, 255, 255, 0.03);
+            
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            
+            --color-primary: #6366f1; /* 靛藍 */
+            --color-primary-glow: rgba(99, 102, 241, 0.15);
+            --color-success: #10b981; /* 寶石綠 */
+            --color-success-glow: rgba(16, 185, 129, 0.15);
+            --color-danger: #f43f5e; /* 薔薇紅 */
+            --color-danger-glow: rgba(244, 63, 94, 0.15);
+            --color-warning: #f59e0b; /* 琥珀金 */
+            
+            --glow-cyan: rgba(6, 182, 212, 0.3);
+            --glow-pink: rgba(236, 72, 153, 0.3);
+            
+            --font-display: 'Outfit', 'Inter', system-ui, -apple-system, sans-serif;
+            --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+            
+            --shadow-sm: 0 2px 8px -2px rgba(0, 0, 0, 0.5);
+            --shadow-md: 0 8px 24px -4px rgba(0, 0, 0, 0.5);
+            --shadow-lg: 0 16px 48px -8px rgba(0, 0, 0, 0.7);
+        }
+
+        /* 基礎重設與滾動條 */
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            font-family: var(--font-sans);
+            min-height: 100vh;
+            overflow-x: hidden;
+            position: relative;
+        }
+
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(15, 22, 42, 0.3);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(99, 102, 241, 0.25);
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(99, 102, 241, 0.45);
+        }
+
+        /* 背景流光極光效果 */
+        .ambient-glows {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            pointer-events: none;
+            z-index: 0;
+            overflow: hidden;
+        }
+
+        .glow-sphere {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(120px);
+            opacity: 0.35;
+        }
+
+        .glow-sphere-1 {
+            background: radial-gradient(circle, var(--color-primary) 0%, transparent 70%);
+            width: 500px;
+            height: 500px;
+            top: -100px;
+            right: -50px;
+            animation: drift-slow 20s infinite alternate ease-in-out;
+        }
+
+        .glow-sphere-2 {
+            background: radial-gradient(circle, var(--glow-cyan) 0%, transparent 70%);
+            width: 600px;
+            height: 600px;
+            bottom: -150px;
+            left: -100px;
+            animation: drift-slow 25s infinite alternate-reverse ease-in-out;
+        }
+
+        @keyframes drift-slow {
+            0% { transform: translate(0, 0) scale(1); }
+            100% { transform: translate(80px, 40px) scale(1.1); }
+        }
+
+        /* 磨砂玻璃框線設計 */
+        .glass-card {
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            box-shadow: var(--shadow-md);
+            padding: 24px;
+            position: relative;
+            overflow: hidden;
+            transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), 
+                        box-shadow 0.3s cubic-bezier(0.16, 1, 0.3, 1),
+                        border-color 0.3s ease;
+        }
+
+        .glass-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, var(--glass-highlight) 0%, transparent 100%);
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        .glass-card:hover {
+            border-color: rgba(99, 102, 241, 0.25);
+            box-shadow: 0 12px 32px -4px rgba(99, 102, 241, 0.08), var(--shadow-md);
+        }
+
+        /* 主佈局架構 */
+        .app-container {
+            max-width: 1300px;
+            margin: 0 auto;
+            padding: 32px 16px;
+            position: relative;
+            z-index: 10;
+        }
+
+        /* 頂部 Header & 交易狀態 */
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 32px;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+
+        .header-title-group h1 {
+            font-family: var(--font-display);
+            font-size: 32px;
+            font-weight: 800;
+            background: linear-gradient(135deg, #ffffff 30%, #a5b4fc 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.5px;
+        }
+
+        .header-title-group p {
+            color: var(--text-secondary);
+            font-size: 14px;
+            margin-top: 4px;
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            border-radius: 99px;
+            font-size: 13px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(15, 22, 42, 0.6);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        /* 狀態點發光動畫 */
+        .status-dot.active {
+            background-color: var(--color-success);
+            box-shadow: 0 0 12px var(--color-success);
+            animation: pulse-green 2s infinite;
+        }
+
+        .status-dot.warning {
+            background-color: var(--color-warning);
+            box-shadow: 0 0 12px var(--color-warning);
+            animation: pulse-yellow 2s infinite;
+        }
+
+        .status-dot.idle {
+            background-color: var(--text-muted);
+        }
+
+        @keyframes pulse-green {
+            0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5); }
+            70% { box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+        }
+
+        @keyframes pulse-yellow {
+            0% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.5); }
+            70% { box-shadow: 0 0 0 8px rgba(245, 158, 11, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
+        }
+
+        /* 按鈕設計 */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 10px 20px;
+            border-radius: 10px;
+            font-family: var(--font-sans);
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            border: 1px solid transparent;
+            outline: none;
+            user-select: none;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--color-primary) 0%, #4f46e5 100%);
+            color: #ffffff;
+            box-shadow: 0 4px 16px rgba(99, 102, 241, 0.25);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(99, 102, 241, 0.4);
+        }
+
+        .btn-primary:active {
+            transform: translateY(0);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--glass-border);
+            color: var(--text-primary);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(255, 255, 255, 0.15);
+        }
+
+        .btn-danger-soft {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: #fca5a5;
+        }
+
+        .btn-danger-soft:hover {
+            background: rgba(239, 68, 68, 0.2);
+            border-color: rgba(239, 68, 68, 0.5);
+            color: #fecaca;
+            transform: translateY(-1px);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none !important;
+            box-shadow: none !important;
+        }
+
+        /* 核心指標網格 (Metrics) */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 20px;
+            margin-bottom: 32px;
+        }
+
+        .metric-card {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .metric-icon-wrapper {
+            width: 56px;
+            height: 56px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(99, 102, 241, 0.08);
+            border: 1px solid rgba(99, 102, 241, 0.15);
+            color: var(--color-primary);
+            flex-shrink: 0;
+        }
+
+        .metric-card:nth-child(2) .metric-icon-wrapper {
+            background: rgba(6, 182, 212, 0.08);
+            border: 1px solid rgba(6, 182, 212, 0.15);
+            color: #06b6d4;
+        }
+
+        .metric-card:nth-child(3) .metric-icon-wrapper {
+            background: rgba(16, 185, 129, 0.08);
+            border: 1px solid rgba(16, 185, 129, 0.15);
+            color: var(--color-success);
+        }
+
+        .metric-info h3 {
+            font-size: 13px;
+            color: var(--text-secondary);
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .metric-value {
+            font-family: var(--font-display);
+            font-size: 28px;
+            font-weight: 700;
+            margin-top: 4px;
+            letter-spacing: -0.5px;
+        }
+
+        .metric-change {
+            font-size: 12px;
+            margin-top: 4px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .metric-change.positive { color: var(--color-success); }
+        .metric-change.negative { color: var(--color-danger); }
+        .metric-change.neutral { color: var(--text-muted); }
+
+        /* 主要內容排版：持股與控制面板雙欄 */
+        .main-grid {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 20px;
+            margin-bottom: 32px;
+        }
+
+        @media (max-width: 1024px) {
+            .main-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* 模組標題 */
+        .section-title {
+            font-family: var(--font-display);
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .section-title span {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* 持股與交易歷史資料表 */
+        .table-responsive {
+            width: 100%;
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+        }
+
+        th {
+            padding: 14px 16px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            border-bottom: 1px solid var(--glass-border);
+            letter-spacing: 0.5px;
+        }
+
+        td {
+            padding: 16px;
+            font-size: 14px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+            color: var(--text-primary);
+        }
+
+        tr {
+            transition: background 0.2s ease;
+        }
+
+        tbody tr:hover {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .stock-tag-td {
+            font-family: var(--font-display);
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .stock-tag-td span {
+            background: rgba(99, 102, 241, 0.1);
+            color: #a5b4fc;
+            padding: 4px 8px;
+            border-radius: 6px;
+            border: 1px solid rgba(99, 102, 241, 0.2);
+            font-size: 12px;
+        }
+
+        .price-td {
+            font-family: var(--font-display);
+            font-weight: 500;
+        }
+
+        .pnl-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 12px;
+            font-family: var(--font-display);
+        }
+
+        .pnl-badge.positive {
+            background: var(--color-success-glow);
+            color: var(--color-success);
+        }
+
+        .pnl-badge.negative {
+            background: var(--color-danger-glow);
+            color: var(--color-danger);
+        }
+
+        /* 側邊欄控制面版：自選股與動態配置 */
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        /* 自選股標籤群 */
+        .watchlist-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 16px;
+            min-height: 40px;
+            align-content: flex-start;
+        }
+
+        .watchlist-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--glass-border);
+            font-family: var(--font-display);
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.2s ease;
+        }
+
+        .watchlist-tag:hover {
+            border-color: var(--color-danger);
+            background: var(--color-danger-glow);
+            color: var(--color-danger);
+        }
+
+        .watchlist-tag svg {
+            width: 12px;
+            height: 12px;
+            cursor: pointer;
+            transition: transform 0.2s ease;
+        }
+
+        .watchlist-tag.holding-tag {
+            background: rgba(245, 158, 11, 0.12);
+            border-color: rgba(245, 158, 11, 0.35);
+            color: var(--color-warning);
+        }
+        .watchlist-tag.holding-tag:hover {
+            background: rgba(245, 158, 11, 0.2);
+            border-color: rgba(245, 158, 11, 0.6);
+        }
+
+        .watchlist-tag:hover svg {
+            transform: scale(1.2);
+        }
+
+        /* 文字輸入框與表單設計 */
+        .input-group {
+            display: flex;
+            gap: 8px;
+        }
+
+        .form-control {
+            flex-grow: 1;
+            background: rgba(15, 22, 42, 0.6);
+            border: 1px solid var(--glass-border);
+            border-radius: 10px;
+            padding: 10px 14px;
+            color: var(--text-primary);
+            font-family: var(--font-sans);
+            font-size: 14px;
+            outline: none;
+            transition: all 0.2s ease;
+        }
+
+        .form-control:focus {
+            border-color: var(--color-primary);
+            box-shadow: 0 0 8px rgba(99, 102, 241, 0.3);
+            background: rgba(15, 22, 42, 0.85);
+        }
+
+        /* 系統設定配置表單 */
+        .settings-form {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .form-row {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .form-row label {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .settings-actions {
+            margin-top: 8px;
+        }
+
+        /* 系統日誌監控面板 */
+        .logs-card {
+            margin-bottom: 32px;
+        }
+
+        .log-console {
+            background: rgba(5, 8, 16, 0.95);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 16px;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 12px;
+            line-height: 1.6;
+            height: 250px;
+            overflow-y: auto;
+            color: #d1d5db;
+            box-shadow: inset 0 4px 16px rgba(0, 0, 0, 0.8);
+        }
+
+        .log-line {
+            margin-bottom: 6px;
+            word-break: break-all;
+            white-space: pre-wrap;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+            padding-bottom: 4px;
+        }
+
+        .log-time {
+            color: var(--text-muted);
+            margin-right: 8px;
+        }
+
+        .log-level {
+            font-weight: bold;
+            margin-right: 8px;
+            padding: 1px 4px;
+            border-radius: 3px;
+        }
+
+        .log-level.INFO {
+            color: #10b981;
+            background: rgba(16, 185, 129, 0.1);
+        }
+
+        .log-level.WARN {
+            color: #f59e0b;
+            background: rgba(245, 158, 11, 0.1);
+        }
+
+        .log-level.ERROR {
+            color: #f43f5e;
+            background: rgba(244, 63, 94, 0.1);
+        }
+
+        /* 空狀態樣式 */
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-muted);
+            font-size: 14px;
+        }
+
+        .empty-state svg {
+            width: 48px;
+            height: 48px;
+            margin-bottom: 12px;
+            stroke: var(--text-muted);
+            opacity: 0.5;
+        }
+
+        /* 模擬交易通知條 */
+        .paper-notice {
+            background: linear-gradient(135deg, rgba(6, 182, 212, 0.15) 0%, rgba(99, 102, 241, 0.15) 100%);
+            border: 1px solid rgba(6, 182, 212, 0.3);
+            border-radius: 12px;
+            padding: 12px 20px;
+            margin-bottom: 24px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 13px;
+            color: #e0f2fe;
+        }
+
+        .paper-notice svg {
+            color: #22d3ee;
+            flex-shrink: 0;
+        }
+
+        /* 微動畫效果 */
+        .loading-spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 0.8s linear infinite;
+            display: inline-block;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Toast 通知元件 */
+        #toast-container {
+            position: fixed;
+            bottom: 28px;
+            right: 28px;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            pointer-events: none;
+        }
+        .toast {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 18px;
+            border-radius: 10px;
+            font-size: 13px;
+            font-weight: 500;
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+            pointer-events: auto;
+            animation: toast-in 0.3s ease forwards;
+            max-width: 360px;
+        }
+        .toast.success { background: rgba(16,185,129,0.18); border: 1px solid rgba(16,185,129,0.4); color: #6ee7b7; }
+        .toast.error   { background: rgba(244,63,94,0.18);  border: 1px solid rgba(244,63,94,0.4);  color: #fda4af; }
+        .toast.info    { background: rgba(99,102,241,0.18); border: 1px solid rgba(99,102,241,0.4); color: #a5b4fc; }
+        @keyframes toast-in {
+            from { opacity: 0; transform: translateY(16px) scale(0.95); }
+            to   { opacity: 1; transform: translateY(0)    scale(1);    }
+        }
+        @keyframes toast-out {
+            from { opacity: 1; transform: translateY(0)    scale(1);    }
+            to   { opacity: 0; transform: translateY(16px) scale(0.95); }
+        }
+    </style>
+</head>
+<body>
+    <!-- Toast 通知容器 -->
+    <div id="toast-container"></div>
+    <!-- 氛圍流光元素 -->
+    <div class="ambient-glows">
+        <div class="glow-sphere glow-sphere-1"></div>
+        <div class="glow-sphere glow-sphere-2"></div>
+    </div>
+
+    <div class="app-container">
+        <!-- 頂部導航 -->
+        <header>
+            <div class="header-title-group">
+                <h1>AIAutoStocks 交易主控台</h1>
+                <p>結合雙 LLM 與即時/沙盒回測之全自動台股配置系統</p>
+            </div>
+            
+            <div class="header-actions">
+                <div class="status-badge" id="env-badge">
+                    <span class="status-dot warning" id="env-dot"></span>
+                    <span id="env-text">讀取中...</span>
+                </div>
+                <div class="status-badge" id="sys-badge">
+                    <span class="status-dot idle" id="sys-dot"></span>
+                    <span id="sys-text">系統狀態: 讀取中</span>
+                </div>
+                <button class="btn btn-primary" id="btn-trigger" onclick="triggerTradingJob()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                    立即執行自動交易
+                </button>
+            </div>
+        </header>
+
+        <!-- 模擬交易提示 -->
+        <div class="paper-notice" id="paper-alert" style="display: none; justify-content: space-between; align-items: center;">
+            <div style="display: flex; align-items: center; gap: 12px;">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                <span><strong>目前處於沙盒/模擬交易模式 (Paper Trading)。</strong>所有下單均在 Supabase 資料庫進行帳務模擬，不會觸發永豐證券真實資金下單。</span>
+            </div>
+            <button class="btn btn-danger-soft" style="padding: 4px 10px; font-size: 11px; border-radius: 6px;" onclick="clearSandboxData()">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 3px; vertical-align: middle;"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                清除模擬交易與持股
+            </button>
+        </div>
+
+        <!-- 核心指標 (Metrics) -->
+        <section class="metrics-grid">
+            <div class="glass-card metric-card">
+                <div class="metric-icon-wrapper">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+                </div>
+                <div class="metric-info">
+                    <h3>總資產淨值 (NAV)</h3>
+                    <div class="metric-value" id="nav-val">$0</div>
+                    <div class="metric-change neutral" id="nav-change">
+                        <span>初始本金: --</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="glass-card metric-card">
+                <div class="metric-icon-wrapper">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2" ry="2"></rect><line x1="12" y1="10" x2="12" y2="20"></line><line x1="8" y1="14" x2="16" y2="14"></line></svg>
+                </div>
+                <div class="metric-info">
+                    <h3>可用現金餘額 (Cash)</h3>
+                    <div class="metric-value" id="cash-val">$0</div>
+                    <div class="metric-change" id="cash-pct">
+                        <span>現金占比: --</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="glass-card metric-card">
+                <div class="metric-icon-wrapper">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"></path><path d="M22 12A10 10 0 0 0 12 2v10z"></path></svg>
+                </div>
+                <div class="metric-info">
+                    <h3>持股總市值 (Portfolio Value)</h3>
+                    <div class="metric-value" id="holdings-val">$0</div>
+                    <div class="metric-change" id="holdings-pct">
+                        <span>持股占比: --</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 主要欄位 -->
+        <div class="main-grid">
+            <!-- 左欄：持股清單與近期交易 -->
+            <div style="display: flex; flex-direction: column; gap: 20px;">
+                <!-- 持股明細卡片 -->
+                <div class="glass-card">
+                    <div class="section-title">
+                        <span>
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line><line x1="15" y1="3" x2="15" y2="21"></line><line x1="3" y1="9" x2="21" y2="9"></line><line x1="3" y1="15" x2="21" y2="15"></line></svg>
+                            目前庫存明細 (Active Positions)
+                        </span>
+                    </div>
+                    
+                    <div class="table-responsive">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>股票</th>
+                                    <th>股數</th>
+                                    <th>平均成本</th>
+                                    <th>目前市價</th>
+                                    <th>持股市值</th>
+                                    <th style="text-align: right;">未實現損益 / 報酬率</th>
+                                </tr>
+                            </thead>
+                            <tbody id="holdings-table-body">
+                                <tr>
+                                    <td colspan="6" class="empty-state">
+                                        <div class="loading-spinner" style="margin-bottom: 8px;"></div>
+                                        <div>正在載入持股明細...</div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 近期交易紀錄 -->
+                <div class="glass-card">
+                    <div class="section-title">
+                        <span>
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                            近期交易訂單 (Recent Orders)
+                        </span>
+                    </div>
+                    
+                    <div class="table-responsive">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>交易時間</th>
+                                    <th>股票代號</th>
+                                    <th>類型</th>
+                                    <th>成交價格</th>
+                                    <th>數量</th>
+                                    <th>交易費用</th>
+                                    <th>總金額</th>
+                                    <th style="text-align: right;">實現損益</th>
+                                </tr>
+                            </thead>
+                            <tbody id="orders-table-body">
+                                <tr>
+                                    <td colspan="8" class="empty-state">
+                                        <div>暫無交易紀錄</div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 右欄：自選股與配置面板 -->
+            <div class="sidebar">
+                <!-- 自選股管理器 -->
+                <div class="glass-card">
+                    <div class="section-title">
+                        <span>
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"></path></svg>
+                            自選監控標的 (Watchlist)
+                        </span>
+                        <button class="btn btn-secondary" id="btn-clear-watchlist" onclick="clearWatchlist()" style="padding: 4px 10px; font-size: 11px; color: var(--color-danger); border-color: rgba(244,63,94,0.3); background: rgba(244,63,94,0.08);" title="清除全部自選股">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:3px"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4h6v2"></path></svg>
+                            全部清除
+                        </button>
+                    </div>
+                    
+                    <div class="watchlist-container" id="watchlist-tags">
+                        <!-- 動態填充標籤 -->
+                    </div>
+
+                    <!-- 推薦股群預設載入按鈕 -->
+                    <div style="margin-bottom: 20px;">
+                        <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;">載入推薦股群預設：</div>
+                        <div style="display: flex; flex-wrap: wrap; gap: 6px;" id="preset-buttons-container">
+                            <!-- 將由 API 動態載入 -->
+                        </div>
+                    </div>
+
+                    <div class="input-group">
+                        <input type="text" class="form-control" id="input-stock" placeholder="輸入 4 碼股票代號 (如 2884)" maxlength="10">
+                        <button class="btn btn-primary" onclick="addWatchlist()">新增</button>
+                    </div>
+                </div>
+
+                <!-- 動態參數配置面板 -->
+                <div class="glass-card">
+                    <div class="section-title">
+                        <span>
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                            動態風險與系統設定
+                        </span>
+                    </div>
+                    
+                    <div class="settings-form">
+                        <div class="form-row">
+                            <label for="cfg-initial-cash">初始本金 (INITIAL_CASH)</label>
+                            <input type="number" class="form-control" id="cfg-initial-cash" placeholder="例如: 1000000">
+                        </div>
+                        <div class="form-row">
+                            <label for="cfg-single-pct">單一個股交易限額比例 (SINGLE_STOCK_PCT)</label>
+                            <input type="number" step="0.01" class="form-control" id="cfg-single-pct" placeholder="例如: 0.05 代表 5%">
+                        </div>
+                        <div class="form-row">
+                            <label for="cfg-daily-pct">每日累計交易限額比例 (DAILY_TOTAL_PCT)</label>
+                            <input type="number" step="0.01" class="form-control" id="cfg-daily-pct" placeholder="例如: 0.15 代表 15%">
+                        </div>
+                        <div class="form-row">
+                            <label for="cfg-paper">交易模式 (PAPER_TRADING_MODE)</label>
+                            <select class="form-control" id="cfg-paper">
+                                <option value="true">模擬交易 (Sandbox / Paper)</option>
+                                <option value="false">實盤交易 (Live Trading)</option>
+                            </select>
+                        </div>
+                        <div class="form-row">
+                            <label for="cfg-sandbox-start">沙盒模擬開始日期 (SANDBOX_START_DATE)</label>
+                            <input type="date" class="form-control" id="cfg-sandbox-start">
+                        </div>
+                        <div class="form-row">
+                            <label for="cfg-sandbox-end">沙盒模擬結束日期 (SANDBOX_END_DATE)</label>
+                            <input type="date" class="form-control" id="cfg-sandbox-end">
+                        </div>
+                        <div class="form-row">
+                            <label for="cfg-model">Gemini 決策模型 (GEMINI_MODEL)</label>
+                            <input type="text" class="form-control" id="cfg-model" placeholder="例如: gemini-1.5-flash">
+                        </div>
+                        <div class="form-row">
+                            <label for="cfg-timezone">系統時區 (TIMEZONE)</label>
+                            <input type="text" class="form-control" id="cfg-timezone" placeholder="Asia/Taipei" readonly>
+                        </div>
+                        
+                        <div class="settings-actions">
+                            <button class="btn btn-primary" style="width: 100%;" onclick="saveConfig()">
+                                儲存動態配置
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 系統日誌底欄 -->
+        <section class="glass-card logs-card">
+            <div class="section-title">
+                <span>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 15 16 22 9"></polyline><polyline points="22 16 22 9 15 9"></polyline></svg>
+                    系統即時運行日誌 (Execution Logs)
+                </span>
+                <button class="btn btn-secondary" style="padding: 4px 8px; font-size: 11px;" onclick="loadLogs()">手動刷新</button>
+            </div>
+            
+            <div class="log-console" id="log-console">
+                <!-- 載入日誌 -->
+            </div>
+        </section>
+    </div>
+
+    <!-- 前端互動 Javascript -->
+    <script>
+        const API_BASE = "";
+        let currentWatchlist = [];
+
+        // 頁面加載完成後的初始化
+        window.addEventListener("DOMContentLoaded", () => {
+            fetchPresets();
+            fetchStatus();
+            fetchWatchlist();
+            fetchConfig();
+            loadLogs();
+
+            // 定時刷新：狀態 8 秒，日誌 10 秒，分析範疇 12 秒
+            setInterval(fetchStatus, 8000);
+            setInterval(loadLogs, 10000);
+        });
+
+        // Toast 輕量通知（替代 alert）
+        function showToast(msg, type = "info", duration = 3500) {
+            const container = document.getElementById("toast-container");
+            if (!container) { console.log("[Toast]", msg); return; }
+            const icons = { success: "✓", error: "✕", info: "ℹ" };
+            const el = document.createElement("div");
+            el.className = `toast ${type}`;
+            el.innerHTML = `<span style="font-size:16px;flex-shrink:0;">${icons[type] || "ℹ"}</span><span>${msg}</span>`;
+            container.appendChild(el);
+            setTimeout(() => {
+                el.style.animation = "toast-out 0.3s ease forwards";
+                setTimeout(() => el.remove(), 300);
+            }, duration);
+        }
+
+        // 格式化數字為台幣/貨幣樣式
+        function formatCurrency(val) {
+            return new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD', maximumFractionDigits: 0 }).format(val);
+        }
+
+        // 獲取狀態資料
+        async function fetchStatus() {
+            try {
+                const response = await fetch(`${API_BASE}/api/status`);
+                if (!response.ok) throw new Error("API 狀態加載失敗");
+                
+                const data = await response.json();
+                
+                // 1. 更新指標
+                const initialCash = parseFloat(document.getElementById("cfg-initial-cash").value) || 1000000;
+                document.getElementById("nav-val").textContent = formatCurrency(data.nav);
+                
+                const navDiff = data.nav - initialCash;
+                const navChangeEl = document.getElementById("nav-change");
+                if (navDiff > 0) {
+                    navChangeEl.className = "metric-change positive";
+                    navChangeEl.innerHTML = `▲ +${formatCurrency(navDiff)} (+${(navDiff/initialCash*100).toFixed(2)}%)`;
+                } else if (navDiff < 0) {
+                    navChangeEl.className = "metric-change negative";
+                    navChangeEl.innerHTML = `▼ ${formatCurrency(navDiff)} (${(navDiff/initialCash*100).toFixed(2)}%)`;
+                } else {
+                    navChangeEl.className = "metric-change neutral";
+                    navChangeEl.innerHTML = `無損益增減 (本金 ${formatCurrency(initialCash)})`;
+                }
+
+                document.getElementById("cash-val").textContent = formatCurrency(data.cash);
+                const cashPct = (data.cash / data.nav * 100).toFixed(1);
+                document.getElementById("cash-pct").innerHTML = `<span>現金佔比: <strong>${cashPct}%</strong></span>`;
+
+                document.getElementById("holdings-val").textContent = formatCurrency(data.holdings_value);
+                const holdingsPct = (data.holdings_value / data.nav * 100).toFixed(1);
+                document.getElementById("holdings-pct").innerHTML = `<span>持股佔比: <strong>${holdingsPct}%</strong></span>`;
+
+                // 2. 更新交易/模擬模式徽章
+                const envBadge = document.getElementById("env-badge");
+                const envDot = document.getElementById("env-dot");
+                const envText = document.getElementById("env-text");
+                const paperAlert = document.getElementById("paper-alert");
+
+                if (data.is_paper) {
+                    envBadge.style.borderColor = "rgba(6, 182, 212, 0.3)";
+                    envDot.className = "status-dot warning";
+                    envText.textContent = "模擬沙盒盤 (Sandbox)";
+                    paperAlert.style.display = "flex";
+                } else {
+                    envBadge.style.borderColor = "rgba(244, 63, 94, 0.3)";
+                    envDot.className = "status-dot active";
+                    envText.textContent = "實盤交易中 (Live)";
+                    paperAlert.style.display = "none";
+                }
+
+                // 3. 更新系統運作狀態
+                const sysDot = document.getElementById("sys-dot");
+                const sysText = document.getElementById("sys-text");
+                const btnTrigger = document.getElementById("btn-trigger");
+
+                if (data.is_running) {
+                    sysDot.className = "status-dot active";
+                    sysText.textContent = "系統狀態: 交易執行中...";
+                    btnTrigger.disabled = true;
+                    btnTrigger.innerHTML = `<span class="loading-spinner"></span> 交易進行中...`;
+                } else {
+                    sysDot.className = "status-dot idle";
+                    sysText.textContent = `系統狀態: 空閒 (${data.last_run_status})`;
+                    btnTrigger.disabled = false;
+                    btnTrigger.innerHTML = `
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                        立即執行自動交易
+                    `;
+                }
+
+                // 4. 填充持股表格
+                const holdingsBody = document.getElementById("holdings-table-body");
+                holdingsBody.innerHTML = "";
+
+                if (data.holdings.length === 0) {
+                    holdingsBody.innerHTML = `
+                        <tr>
+                            <td colspan="6" class="empty-state">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="8" y1="12" x2="16" y2="12"></line></svg>
+                                <div>目前無任何庫存持股</div>
+                            </td>
+                        </tr>
+                    `;
+                } else {
+                    data.holdings.forEach(h => {
+                        const row = document.createElement("tr");
+                        const pnlClass = h.pnl >= 0 ? "positive" : "negative";
+                        const pnlSign = h.pnl >= 0 ? "+" : "";
+                        
+                        row.innerHTML = `
+                            <td class="stock-tag-td"><span>${h.stock_code}</span></td>
+                            <td class="price-td">${h.quantity.toLocaleString()} 股</td>
+                            <td class="price-td">${formatCurrency(h.average_price)}</td>
+                            <td class="price-td">${formatCurrency(h.current_price)}</td>
+                            <td class="price-td" style="font-weight:600;">${formatCurrency(h.market_value)}</td>
+                            <td style="text-align: right;">
+                                <span class="pnl-badge ${pnlClass}">
+                                    ${pnlSign}${formatCurrency(h.pnl)} (${pnlSign}${h.pnl_pct.toFixed(2)}%)
+                                </span>
+                            </td>
+                        `;
+                        holdingsBody.appendChild(row);
+                    });
+                }
+
+                // 5. 填充訂單表格
+                const ordersBody = document.getElementById("orders-table-body");
+                ordersBody.innerHTML = "";
+
+                if (data.orders.length === 0) {
+                    ordersBody.innerHTML = `
+                        <tr>
+                            <td colspan="8" class="empty-state">
+                                <div>暫無歷史交易紀錄</div>
+                            </td>
+                        </tr>
+                    `;
+                } else {
+                    data.orders.forEach(o => {
+                        const row = document.createElement("tr");
+                        const actionClass = o.action === "BUY" ? "positive" : "negative";
+                        const actionLabel = o.action === "BUY" ? "買入" : "賣出";
+                        const formattedTime = new Date(o.executed_at).toLocaleString('zh-TW', { hour12: false });
+                        const pnlVal = parseFloat(o.realized_pnl) || 0;
+                        const pnlDisplay = pnlVal !== 0 ? `${pnlVal > 0 ? "+" : ""}${formatCurrency(pnlVal)}` : "-";
+                        const pnlClass = pnlVal > 0 ? "positive" : (pnlVal < 0 ? "negative" : "");
+
+                        row.innerHTML = `
+                            <td style="font-size:12px; color:var(--text-secondary);">${formattedTime}</td>
+                            <td class="stock-tag-td"><span>${o.stock_code}</span></td>
+                            <td><span class="pnl-badge ${actionClass}">${actionLabel}</span></td>
+                            <td class="price-td">${formatCurrency(o.price)}</td>
+                            <td class="price-td">${parseInt(o.quantity).toLocaleString()} 股</td>
+                            <td class="price-td" style="color:var(--text-muted);">${formatCurrency(o.fee)}</td>
+                            <td class="price-td" style="font-weight:600;">${formatCurrency(o.total_amount)}</td>
+                            <td style="text-align: right;" class="price-td ${pnlClass}">${pnlDisplay}</td>
+                        `;
+                        ordersBody.appendChild(row);
+                    });
+                }
+
+            } catch (err) {
+                console.error("更新儀表板狀態失敗:", err);
+            }
+        }
+
+        // 獲取自選股
+        async function fetchWatchlist() {
+            try {
+                const response = await fetch(`${API_BASE}/api/watchlist`);
+                const data = await response.json();
+                currentWatchlist = data.watchlist || [];
+                
+                const tagsEl = document.getElementById("watchlist-tags");
+                tagsEl.innerHTML = "";
+                
+                currentWatchlist.forEach(code => {
+                    const tag = document.createElement("div");
+                    tag.className = "watchlist-tag";
+                    tag.innerHTML = `
+                        ${code}
+                        <svg onclick="removeWatchlist('${code}')" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                        </svg>
+                    `;
+                    tagsEl.appendChild(tag);
+                });
+            } catch (err) {
+                console.error("載入自選股失敗:", err);
+            }
+        }
+
+
+        let presets = {};
+
+        // 從 API 載入預設股群
+        async function fetchPresets() {
+            try {
+                const response = await fetch(`${API_BASE}/api/presets`);
+                presets = await response.json();
+                
+                const container = document.getElementById("preset-buttons-container");
+                if (!container) return;
+                container.innerHTML = "";
+                
+                Object.keys(presets).forEach(key => {
+                    const preset = presets[key];
+                    const button = document.createElement("button");
+                    button.className = "btn btn-secondary";
+                    button.style = "padding: 4px 8px; font-size: 11px; border-radius: 6px;";
+                    button.title = `${preset.name} (${preset.desc}): ${preset.codes.join(", ")}`;
+                    button.textContent = preset.name;
+                    button.onclick = () => applyPreset(key);
+                    container.appendChild(button);
+                });
+            } catch (err) {
+                console.error("載入預設組合失敗:", err);
+            }
+        }
+
+        // 套用推薦股群預設值（永遠追加，不覆蓋現有自選股）
+        async function applyPreset(key) {
+            const preset = presets[key];
+            if (!preset) return;
+            const codes = preset.codes;
+            const name = preset.name;
+
+            // 只追加尚未在自選股中的標的，不覆蓋現有清單
+            const toAdd = codes.filter(c => !currentWatchlist.includes(c));
+
+            if (toAdd.length === 0) {
+                showToast(`「${name}」的所有個股已在自選股清單中`, "info");
+                return;
+            }
+
+            try {
+                for (const newCode of toAdd) {
+                    await fetch(`${API_BASE}/api/watchlist`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ stock_code: newCode })
+                    });
+                }
+                showToast(`已追加「${name}」：新增 ${toAdd.join("、")} 共 ${toAdd.length} 支`, "success");
+                fetchWatchlist();
+                fetchStatus();
+            } catch (err) {
+                console.error("套用預設股群失敗:", err);
+                showToast("套用預設股群時發生錯誤", "error");
+            }
+        }
+
+        // 新增自選股
+        async function addWatchlist() {
+            const input = document.getElementById("input-stock");
+            const code = input.value.trim();
+            if (!code) return;
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/watchlist`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ stock_code: code })
+                });
+                
+                if (response.ok) {
+                    input.value = "";
+                    fetchWatchlist();
+                    fetchStatus();
+                } else {
+                    const err = await response.json();
+                    showToast(err.detail || "無法新增股票", "error");
+                }
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        // 刪除自選股
+        async function removeWatchlist(code) {
+            if (!confirm(`確定要將 ${code} 自自選股清單移除嗎？`)) return;
+            try {
+                const response = await fetch(`${API_BASE}/api/watchlist/${code}`, {
+                    method: "DELETE"
+                });
+                if (response.ok) {
+                    fetchWatchlist();
+                    fetchStatus();
+                }
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        // 清除全部自選股
+        async function clearWatchlist() {
+            if (currentWatchlist.length === 0) {
+                showToast("自選股清單已經是空的", "info");
+                return;
+            }
+            if (!confirm(`確定要清除全部 ${currentWatchlist.length} 支自選股嗎？\n（持股不受影響，AI 仍會透過持倉確保能執行賣出）`)) return;
+
+            const btn = document.getElementById("btn-clear-watchlist");
+            if (btn) { btn.disabled = true; btn.textContent = "清除中..."; }
+
+            let removed = 0, failed = 0;
+            for (const code of [...currentWatchlist]) {
+                try {
+                    const res = await fetch(`${API_BASE}/api/watchlist/${code}`, { method: "DELETE" });
+                    if (res.ok) removed++;
+                    else failed++;
+                } catch { failed++; }
+            }
+
+            if (btn) { btn.disabled = false; btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:3px"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4h6v2"></path></svg>全部清除`; }
+
+            if (failed === 0) {
+                showToast(`已清除全部 ${removed} 支自選股`, "success");
+            } else {
+                showToast(`已移除 ${removed} 支，${failed} 支移除失敗`, "error");
+            }
+            fetchWatchlist();
+        }
+
+        // 讀取設定值
+        async function fetchConfig() {
+            try {
+                const response = await fetch(`${API_BASE}/api/config`);
+                const data = await response.json();
+                
+                document.getElementById("cfg-initial-cash").value = data.INITIAL_CASH;
+                document.getElementById("cfg-single-pct").value = data.TRADING_LIMIT_SINGLE_STOCK_PCT;
+                document.getElementById("cfg-daily-pct").value = data.TRADING_LIMIT_DAILY_TOTAL_PCT;
+                document.getElementById("cfg-paper").value = data.PAPER_TRADING_MODE;
+                document.getElementById("cfg-model").value = data.GEMINI_MODEL;
+                document.getElementById("cfg-timezone").value = data.TAIWAN_STOCK_TIMEZONE;
+                document.getElementById("cfg-sandbox-start").value = data.SANDBOX_START_DATE;
+                document.getElementById("cfg-sandbox-end").value = data.SANDBOX_END_DATE;
+            } catch (err) {
+                console.error("讀取系統設定失敗:", err);
+            }
+        }
+
+        // 儲存設定值
+        async function saveConfig() {
+            const initialCash = document.getElementById("cfg-initial-cash").value;
+            const singlePct = document.getElementById("cfg-single-pct").value;
+            const dailyPct = document.getElementById("cfg-daily-pct").value;
+            const paper = document.getElementById("cfg-paper").value;
+            const model = document.getElementById("cfg-model").value;
+            const sandboxStart = document.getElementById("cfg-sandbox-start").value;
+            const sandboxEnd = document.getElementById("cfg-sandbox-end").value;
+
+            try {
+                const response = await fetch(`${API_BASE}/api/config`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        settings: {
+                            INITIAL_CASH: initialCash,
+                            TRADING_LIMIT_SINGLE_STOCK_PCT: singlePct,
+                            TRADING_LIMIT_DAILY_TOTAL_PCT: dailyPct,
+                            PAPER_TRADING_MODE: paper,
+                            GEMINI_MODEL: model,
+                            SANDBOX_START_DATE: sandboxStart,
+                            SANDBOX_END_DATE: sandboxEnd
+                        }
+                    })
+                });
+
+                if (response.ok) {
+                    showToast("動態設定參數儲存成功！將即時套用於下一輪交易決策。", "success");
+                    fetchConfig();
+                    fetchStatus();
+                } else {
+                    const err = await response.json();
+                    showToast("儲存失敗: " + err.detail, "error");
+                }
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        // 載入系統日誌
+        async function loadLogs() {
+            try {
+                const response = await fetch(`${API_BASE}/api/logs`);
+                const logs = await response.json();
+                
+                const consoleEl = document.getElementById("log-console");
+                // 記錄目前是否滾動到底部
+                const isAtBottom = consoleEl.scrollHeight - consoleEl.clientHeight <= consoleEl.scrollTop + 50;
+
+                consoleEl.innerHTML = "";
+                
+                logs.forEach(log => {
+                    const line = document.createElement("div");
+                    line.className = "log-line";
+                    
+                    const timeStr = new Date(log.created_at).toLocaleString('zh-TW', { hour12: false });
+                    const levelClass = log.level || "INFO";
+                    
+                    line.innerHTML = `
+                        <span class="log-time">[${timeStr}]</span>
+                        <span class="log-level ${levelClass}">${levelClass}</span>
+                        <span>${log.message}</span>
+                    `;
+                    consoleEl.appendChild(line);
+                });
+
+                // 如果原本在底部，則自動保持在底部
+                if (isAtBottom) {
+                    consoleEl.scrollTop = consoleEl.scrollHeight;
+                }
+            } catch (err) {
+                console.error("載入日誌失敗:", err);
+            }
+        }
+
+        // 觸發交易任務
+        async function triggerTradingJob() {
+            if (!confirm("確定要現在立即觸發一輪全自動交易決策嗎？\n(將會透過 Gemini LLM 進行選股配比並嘗試進行下單模擬/真實交易)")) return;
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/trigger`, {
+                    method: "POST"
+                });
+                const data = await response.json();
+                
+                if (data.status === "ok") {
+                    showToast(data.message, "success");
+                    fetchStatus();
+                    loadLogs();
+                } else {
+                    showToast("觸發失敗: " + data.message, "error");
+                }
+            } catch (err) {
+                console.error(err);
+                showToast("連線後端伺服器時發生錯誤。", "error");
+            }
+        }
+
+        // 清除模擬交易與持股庫存
+        async function clearSandboxData() {
+            if (!confirm("確定要【清除所有模擬交易紀錄與持股庫存】嗎？\n清除後，可用現金餘額將會恢復為初始本金。此操作無法復原！")) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/sandbox/clear`, {
+                    method: "POST"
+                });
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showToast(data.message || "清除成功！", "success");
+                    // 重新載入狀態以同步更新可用現金、資產淨值、持股與歷史訂單
+                    fetchStatus();
+                    loadLogs();
+                } else {
+                    showToast(data.detail || "清除失敗", "error");
+                }
+            } catch (err) {
+                console.error("清除模擬交易失敗:", err);
+                showToast("連線伺服器時發生錯誤。", "error");
+            }
+        }
+    </script>
+</body>
+</html>

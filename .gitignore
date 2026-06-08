@@ -33,3 +33,5 @@ order_execution.log
 *.njsproj
 *.sln
 *.swp
+
+*.sql

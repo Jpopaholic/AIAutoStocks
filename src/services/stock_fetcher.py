@@ -85,45 +85,71 @@ def fetch_stock_klines(stock_code: str, date_str: str = None) -> List[Dict[str, 
         print(f" [數據擷取器] 擷取 K 線數據時發生異常: {str(e)}")
         return []
 
-def fetch_realtime_quote(stock_code: str) -> Dict[str, Any]:
+_QUOTE_CACHE = {}  # maps stock_code -> (quote_dict, timestamp)
+QUOTE_CACHE_TTL = 60.0  # cache for 60 seconds
+
+def fetch_realtime_quotes_batch(stock_codes: List[str]) -> Dict[str, Dict[str, Any]]:
     """
-    自證交所/櫃買中心盤中即時資訊 API 取得個股即時買賣報價與盤口資訊
-    :param stock_code: 股票代號 (如 "2330")
-    :returns: 清理後的即時股票報價結構
+    批次獲取多檔股票的即時報價，大幅減少網路請求次數，避免觸發頻率限制。
     """
+    if not stock_codes:
+        return {}
+
+    global _QUOTE_CACHE
+    now = time.time()
+    results = {}
+    missing_codes = []
+
+    for code in stock_codes:
+        if code in _QUOTE_CACHE:
+            cached_val, timestamp = _QUOTE_CACHE[code]
+            if now - timestamp < QUOTE_CACHE_TTL:
+                results[code] = cached_val
+                continue
+        missing_codes.append(code)
+
+    if not missing_codes:
+        return results
+
+    # Apply rate limit for the network request
     _apply_rate_limit()
 
-    # 同時支援上市 (tse) 與上櫃 (otc) 股票的即時查詢
-    for market in ["tse", "otc"]:
-        url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch={market}_{stock_code}.tw"
-        try:
-            response = requests.get(url, timeout=10, headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            })
-            response.raise_for_status()
-            data = response.json()
+    # Build the ex_ch parameter containing both tse and otc for all missing stocks
+    ex_ch_list = []
+    for code in missing_codes:
+        ex_ch_list.append(f"tse_{code}.tw")
+        ex_ch_list.append(f"otc_{code}.tw")
+    
+    ex_ch_str = "|".join(ex_ch_list)
+    url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch={ex_ch_str}"
 
-            if "msgArray" in data and len(data["msgArray"]) > 0:
-                info = data["msgArray"][0]
-                # z: 最近成交價 (即時價), o: 開盤價, h: 最高價, l: 最低價, v: 累積成交張數
-                # b: 委買價 (以底線分隔), a: 委賣價 (以底線分隔)
+    try:
+        response = requests.get(url, timeout=10, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        })
+        response.raise_for_status()
+        data = response.json()
+
+        if "msgArray" in data and len(data["msgArray"]) > 0:
+            for info in data["msgArray"]:
+                code = info.get("c")
+                if not code:
+                    continue
                 try:
-                    price = float(info.get("z", info.get("y", 0.0)))  # 若無當日成交價則以昨收代替
+                    price = float(info.get("z", info.get("y", 0.0)))
                     open_val = float(info.get("o", 0.0))
                     high_val = float(info.get("h", 0.0))
                     low_val = float(info.get("l", 0.0))
-                    volume = int(info.get("v", 0)) * 1000  # 證交所即時張數轉成股數
+                    volume = int(info.get("v", 0)) * 1000
 
-                    # 擷取五檔委買委賣價格
                     bids = [float(x) for x in info.get("b", "").split("_") if x]
                     asks = [float(x) for x in info.get("a", "").split("_") if x]
 
-                    # 資料完整性校驗
                     if price <= 0.0:
                         continue
 
-                    return {
-                        "stockCode": stock_code,
+                    quote = {
+                        "stockCode": code,
                         "price": price,
                         "open": open_val,
                         "high": high_val,
@@ -133,10 +159,26 @@ def fetch_realtime_quote(stock_code: str) -> Dict[str, Any]:
                         "asks": asks[:5],
                         "timestamp": datetime.now().isoformat() + "Z"
                     }
+                    _QUOTE_CACHE[code] = (quote, now)
+                    results[code] = quote
                 except (ValueError, TypeError):
                     continue
-        except Exception:
-            continue
+    except Exception as e:
+        print(f" [數據擷取器] 批次獲取即時報價失敗: {str(e)}")
 
-    print(f" [數據擷取器] 無法取得 {stock_code} 的即時報價與買賣報價數據結構")
-    return {}
+    # For any stock that failed to fetch, cache empty result for 10 seconds to avoid spamming
+    for code in missing_codes:
+        if code not in results:
+            _QUOTE_CACHE[code] = ({}, now - QUOTE_CACHE_TTL + 10.0)
+            results[code] = {}
+
+    return results
+
+def fetch_realtime_quote(stock_code: str) -> Dict[str, Any]:
+    """
+    自證交所/櫃買中心盤中即時資訊 API 取得個股即時買賣報價與盤口資訊
+    :param stock_code: 股票代號 (如 "2330")
+    :returns: 清理後的即時股票報價結構
+    """
+    batch_res = fetch_realtime_quotes_batch([stock_code])
+    return batch_res.get(stock_code, {})

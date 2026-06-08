@@ -7,8 +7,8 @@ from src.services import stock_fetcher
 
 # 沙盒演練與歷史數據模擬器 狀態變數
 _simulation_active: bool = False
-_current_sim_date: str = "2026-06-01"  # 格式為 YYYY-MM-DD
-_sim_start_date: str = "2026-06-01"
+_current_sim_date: str = "2026-05-01"  # 格式為 YYYY-MM-DD
+_sim_start_date: str = "2026-05-01"
 _sim_end_date: str = "2026-06-08"
 _trading_days: List[str] = []
 _current_day_idx: int = 0

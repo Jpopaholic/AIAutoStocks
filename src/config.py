@@ -16,6 +16,17 @@ STOCK_PRESETS = {
     "small": ["2303", "2618", "2324", "2883", "3481", "2353"]   # 中低價位/小資首選股 (與 penny 相同)
 }
 
+STOCK_PRESETS_INFO = {
+    "top5": {"name": "市值前五大", "desc": "台積電、鴻海、聯發科、台達電、富邦金"},
+    "semiconductor": {"name": "半導體概念", "desc": "台積電、聯發科、聯電、日月光、瑞昱"},
+    "finance": {"name": "金融特選股", "desc": "富邦金、國泰金、中信金、兆豐金、玉山金"},
+    "apple": {"name": "蘋果/AI鏈", "desc": "鴻海、台積電、廣達、緯創、華碩"},
+    "highdividend": {"name": "高股息概念", "desc": "聯詠、光寶科、英業達、京元電、台灣大"},
+    "penny": {"name": "銅板題材股", "desc": "聯電、長榮航、仁寶、開發金、群創、宏碁"},
+    "small": {"name": "小資首選股", "desc": "中低價位/小資首選股"}
+}
+
+
 def resolve_stock_codes(stocks_arg: str) -> List[str]:
     """
     將使用者傳入的股票代號字串解析為獨立的 4 碼股票代號列表，支援 preset 套餐名稱。
@@ -45,6 +56,23 @@ load_dotenv(dotenv_path=ENV_PATH)
 # 載入外部配置參數。優先從 Fly.io 的環境變數祕密 (CONFIG_JSON) 載入，次之從本機 config.json 檔案載入
 json_config = {}
 env_config_json = os.getenv("CONFIG_JSON")
+_last_config_load_time = 0.0
+
+def _reload_config_json_if_needed():
+    global json_config, _last_config_load_time
+    if os.getenv("CONFIG_JSON"):
+        return
+    CONFIG_JSON_PATH = Path(os.getcwd()) / 'config.json'
+    if CONFIG_JSON_PATH.exists():
+        try:
+            mtime = CONFIG_JSON_PATH.stat().st_mtime
+            if mtime > _last_config_load_time:
+                with open(CONFIG_JSON_PATH, 'r', encoding='utf-8') as f:
+                    json_config = json.load(f)
+                    _last_config_load_time = mtime
+                    print(" [配置管理器] 已成功自 config.json 動態重新載入外部配置參數。")
+        except Exception as e:
+            print(f" [配置管理器] 警告: 動態載入 config.json 失敗: {e}")
 
 if env_config_json:
     try:
@@ -58,6 +86,7 @@ else:
         try:
             with open(CONFIG_JSON_PATH, 'r', encoding='utf-8') as f:
                 json_config = json.load(f)
+                _last_config_load_time = CONFIG_JSON_PATH.stat().st_mtime
                 print(" [配置管理器] 已成功自 config.json 本機檔案載入外部配置參數。")
         except Exception as e:
             print(f" [配置管理器] 警告: 讀取 config.json 失敗: {e}")
@@ -66,6 +95,7 @@ def get_config_val(key: str, default: str = None) -> Optional[str]:
     """
     獲取配置值。優先自載入的 json_config 讀取，其次從環境變數讀取。
     """
+    _reload_config_json_if_needed()
     val = json_config.get(key)
     if val is not None:
         return str(val)
@@ -125,6 +155,28 @@ elif isinstance(_raw_gemini_keys, str):
 else:
     gemini_api_keys = []
 
+import time
+
+_db_config_cache = None
+_db_config_cache_time = 0.0
+CACHE_TTL = 5.0  # cache for 5 seconds
+
+def _get_db_config_cached() -> dict:
+    global _db_config_cache, _db_config_cache_time
+    now = time.time()
+    if _db_config_cache is not None and (now - _db_config_cache_time) < CACHE_TTL:
+        return _db_config_cache
+    try:
+        from src.services.supabase_client import get_db_config
+        _db_config_cache = get_db_config()
+        _db_config_cache_time = now
+        return _db_config_cache
+    except Exception:
+        # cache empty dict on failure to avoid spamming database
+        _db_config_cache = {}
+        _db_config_cache_time = now
+        return _db_config_cache
+
 @dataclass(frozen=True)
 class SupabaseConfig:
     url: str
@@ -141,26 +193,151 @@ class GmailConfig:
     app_password: str
     to_addr: str
 
-@dataclass(frozen=True)
 class LimitsConfig:
-    single_stock: float
-    daily_total: float
-    is_paper_trading: bool
-    single_stock_pct: Optional[float]
-    daily_total_pct: Optional[float]
-    initial_cash: float
+    def __init__(self, single_stock: float, daily_total: float, is_paper_trading: bool,
+                 single_stock_pct: Optional[float], daily_total_pct: Optional[float], initial_cash: float):
+        self._single_stock = single_stock
+        self._daily_total = daily_total
+        self._is_paper_trading = is_paper_trading
+        self._single_stock_pct = single_stock_pct
+        self._daily_total_pct = daily_total_pct
+        self._initial_cash = initial_cash
 
-@dataclass(frozen=True)
+    @property
+    def single_stock(self) -> float:
+        db_cfg = _get_db_config_cached()
+        if "TRADING_LIMIT_SINGLE_STOCK" in db_cfg:
+            try:
+                return float(db_cfg["TRADING_LIMIT_SINGLE_STOCK"])
+            except ValueError:
+                pass
+        val = get_config_val("TRADING_LIMIT_SINGLE_STOCK")
+        if val is not None:
+            try:
+                return float(val)
+            except ValueError:
+                pass
+        return self._single_stock
+
+    @property
+    def daily_total(self) -> float:
+        db_cfg = _get_db_config_cached()
+        if "TRADING_LIMIT_DAILY_TOTAL" in db_cfg:
+            try:
+                return float(db_cfg["TRADING_LIMIT_DAILY_TOTAL"])
+            except ValueError:
+                pass
+        val = get_config_val("TRADING_LIMIT_DAILY_TOTAL")
+        if val is not None:
+            try:
+                return float(val)
+            except ValueError:
+                pass
+        return self._daily_total
+
+    @property
+    def is_paper_trading(self) -> bool:
+        db_cfg = _get_db_config_cached()
+        if "PAPER_TRADING_MODE" in db_cfg:
+            return db_cfg["PAPER_TRADING_MODE"].lower() != "false"
+        val = get_config_val("PAPER_TRADING_MODE")
+        if val is not None:
+            return val.lower() != "false"
+        return self._is_paper_trading
+
+    @property
+    def single_stock_pct(self) -> Optional[float]:
+        db_cfg = _get_db_config_cached()
+        if "TRADING_LIMIT_SINGLE_STOCK_PCT" in db_cfg:
+            try:
+                val = db_cfg["TRADING_LIMIT_SINGLE_STOCK_PCT"]
+                return float(val) if val is not None and str(val).strip() != "" else None
+            except ValueError:
+                pass
+        val = get_config_val("TRADING_LIMIT_SINGLE_STOCK_PCT")
+        return _parse_float_opt(val) if val is not None else self._single_stock_pct
+
+    @property
+    def daily_total_pct(self) -> Optional[float]:
+        db_cfg = _get_db_config_cached()
+        if "TRADING_LIMIT_DAILY_TOTAL_PCT" in db_cfg:
+            try:
+                val = db_cfg["TRADING_LIMIT_DAILY_TOTAL_PCT"]
+                return float(val) if val is not None and str(val).strip() != "" else None
+            except ValueError:
+                pass
+        val = get_config_val("TRADING_LIMIT_DAILY_TOTAL_PCT")
+        return _parse_float_opt(val) if val is not None else self._daily_total_pct
+
+    @property
+    def initial_cash(self) -> float:
+        db_cfg = _get_db_config_cached()
+        if "INITIAL_CASH" in db_cfg:
+            try:
+                return float(db_cfg["INITIAL_CASH"])
+            except ValueError:
+                pass
+        val = get_config_val("INITIAL_CASH")
+        if val is not None:
+            try:
+                return float(val)
+            except ValueError:
+                pass
+        return self._initial_cash
+
 class AppConfig:
-    env: str
-    port: int
-    timezone: str
-    supabase: SupabaseConfig
-    credentials: CredentialsConfig
-    gmail: GmailConfig
-    limits: LimitsConfig
-    gemini_api_keys: List[str]
-    gemini_model: str
+    def __init__(self, env: str, port: int, timezone: str, supabase: SupabaseConfig,
+                 credentials: CredentialsConfig, gmail: GmailConfig, limits: LimitsConfig,
+                 gemini_api_keys: List[str], gemini_model: str):
+        self._env = env
+        self._port = port
+        self._timezone = timezone
+        self.supabase = supabase
+        self.credentials = credentials
+        self.gmail = gmail
+        self.limits = limits
+        self.gemini_api_keys = gemini_api_keys
+        self._gemini_model = gemini_model
+
+    @property
+    def env(self) -> str:
+        return self._env
+
+    @property
+    def port(self) -> int:
+        return self._port
+
+    @property
+    def timezone(self) -> str:
+        db_cfg = _get_db_config_cached()
+        if "TAIWAN_STOCK_TIMEZONE" in db_cfg:
+            return db_cfg["TAIWAN_STOCK_TIMEZONE"]
+        val = get_config_val("TAIWAN_STOCK_TIMEZONE")
+        return val if val is not None else self._timezone
+
+    @property
+    def gemini_model(self) -> str:
+        db_cfg = _get_db_config_cached()
+        if "GEMINI_MODEL" in db_cfg:
+            return db_cfg["GEMINI_MODEL"]
+        val = get_config_val("GEMINI_MODEL")
+        return val if val is not None else self._gemini_model
+
+    @property
+    def sandbox_start_date(self) -> str:
+        db_cfg = _get_db_config_cached()
+        if "SANDBOX_START_DATE" in db_cfg:
+            return db_cfg["SANDBOX_START_DATE"]
+        val = get_config_val("SANDBOX_START_DATE")
+        return val if val is not None else "2026-05-01"
+
+    @property
+    def sandbox_end_date(self) -> str:
+        db_cfg = _get_db_config_cached()
+        if "SANDBOX_END_DATE" in db_cfg:
+            return db_cfg["SANDBOX_END_DATE"]
+        val = get_config_val("SANDBOX_END_DATE")
+        return val if val is not None else "2026-06-08"
 
 # 載入數值型參數並設定安全的預設值 (交易限額防呆機制)
 _env = get_config_val("NODE_ENV") or get_config_val("PYTHON_ENV") or "development"

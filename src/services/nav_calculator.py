@@ -17,16 +17,26 @@ def calculate_nav() -> Tuple[float, float, float]:
         holdings = []
 
     holdings_value = 0.0
-    for h in holdings:
-        stock_code = h["stock_code"]
-        qty = float(h["quantity"])
-        
-        # 依據目前是沙盒還是真實模式，動態讀取即時報價/模擬報價
-        quote = sandbox_simulator.fetch_realtime_quote(stock_code)
-        current_price = float(quote.get("price") or h["average_price"])
-        
-        market_value = qty * current_price
-        holdings_value += market_value
+    if holdings:
+        if sandbox_simulator.is_simulation_active():
+            # 沙盒演練歷史回測：保持逐檔查詢以避免時間軸干擾
+            for h in holdings:
+                stock_code = h["stock_code"]
+                qty = float(h["quantity"])
+                quote = sandbox_simulator.fetch_realtime_quote(stock_code)
+                current_price = float(quote.get("price") or h["average_price"])
+                holdings_value += qty * current_price
+        else:
+            # 即時/手動實時交易：使用批次查詢加速
+            from src.services.stock_fetcher import fetch_realtime_quotes_batch
+            stock_codes = [h["stock_code"] for h in holdings]
+            quotes_map = fetch_realtime_quotes_batch(stock_codes)
+            for h in holdings:
+                stock_code = h["stock_code"]
+                qty = float(h["quantity"])
+                quote = quotes_map.get(stock_code, {})
+                current_price = float(quote.get("price") or h["average_price"])
+                holdings_value += qty * current_price
 
     # 2. 計算剩餘現金：
     # 買入時 Cash 扣除 total_amount (含手續費)；賣出時 Cash 增加 total_amount (扣除手續費/稅金)

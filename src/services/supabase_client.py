@@ -20,7 +20,7 @@ def _get_current_time_iso() -> str:
 
 def execute_with_retry(query_fn: Callable[[], Any], retries: int = 3, delay: float = 1.0) -> Any:
     """
-    通用的資料庫操作重試包裝器（支援指數退避）
+    通用的資料庫操作重試包裝器（支援指數退避，若資料表不存在則立即中斷重試）
     """
     for attempt in range(1, retries + 1):
         try:
@@ -28,6 +28,12 @@ def execute_with_retry(query_fn: Callable[[], Any], retries: int = 3, delay: flo
             # supabase-py 回傳的 response 物件包含 .data
             return response.data
         except Exception as error:
+            error_str = str(error)
+            # 判斷是否為資料表不存在的錯誤 (PGRST205 或 relation does not exist)
+            if "Could not find the table" in error_str or "does not exist" in error_str or "PGRST205" in error_str or "42P01" in error_str:
+                print(f" [Supabase 錯誤] 偵測到資料表不存在，拒絕重試並立即回退: {error_str}")
+                raise error
+                
             if attempt == retries:
                 print(f" [Supabase 錯誤] 經過 {retries} 次重試後仍失敗: {str(error)}")
                 raise error
@@ -256,3 +262,100 @@ def log_system_event(level: str, message: str, details: Optional[Dict[str, Any]]
         }).execute()
     except Exception as err:
         print(f"[Supabase Log Error] 無法寫入日誌到資料庫: {str(err)}")
+
+# ==========================================================================
+# 5. 自選股與動態配置 相關資料庫操作 (Web 控制台專用)
+# ==========================================================================
+
+def get_db_watchlist() -> List[str]:
+    """
+    獲取 Supabase 資料表中已儲存的自選股代號列表。
+    若資料表不存在則拋出例外，以便調用端執行本機回退。
+    """
+    res = execute_with_retry(
+        lambda: supabase.table("watchlist")
+        .select("stock_code")
+        .execute()
+    )
+    return [r["stock_code"] for r in res]
+
+def add_to_db_watchlist(stock_code: str) -> None:
+    """
+    新增股票代號至資料庫自選股列表。
+    """
+    execute_with_retry(
+        lambda: supabase.table("watchlist")
+        .upsert({"stock_code": stock_code}, on_conflict="stock_code")
+        .execute()
+    )
+
+def delete_from_db_watchlist(stock_code: str) -> None:
+    """
+    從資料庫自選股列表中刪除股票代號。
+    """
+    execute_with_retry(
+        lambda: supabase.table("watchlist")
+        .delete()
+        .eq("stock_code", stock_code)
+        .execute()
+    )
+
+def get_db_config() -> Dict[str, str]:
+    """
+    獲取 Supabase 資料表中已儲存的動態系統設定字典。
+    若資料表不存在則拋出例外，以便調用端執行本機回退。
+    """
+    res = execute_with_retry(
+        lambda: supabase.table("system_config")
+        .select("key, value")
+        .execute()
+    )
+    return {r["key"]: r["value"] for r in res}
+
+def set_db_config(key: str, value: str) -> None:
+    """
+    新增或更新資料庫中的系統設定參數。
+    """
+    execute_with_retry(
+        lambda: supabase.table("system_config")
+        .upsert({"key": key, "value": str(value)}, on_conflict="key")
+        .execute()
+    )
+
+def clear_db_sandbox_data() -> None:
+    """
+    清除資料庫中的沙盒模擬交易資料（包含 holdings 與 trade_orders 中的 is_paper=True 紀錄）。
+    """
+    execute_with_retry(
+        lambda: supabase.table("holdings")
+        .delete()
+        .eq("is_paper", True)
+        .execute()
+    )
+    execute_with_retry(
+        lambda: supabase.table("trade_orders")
+        .delete()
+        .eq("is_paper", True)
+        .execute()
+    )
+    log_system_event("INFO", "已手動清除所有沙盒模擬交易與持股紀錄")
+
+def prune_old_db_logs(days: int = 7) -> None:
+    """
+    自動清理過於久遠的系統日誌，防止資料庫容量爆滿。
+    預設只保留最近 7 天的日誌。
+    """
+    from datetime import datetime, timedelta
+    cutoff_time = (datetime.utcnow() - timedelta(days=days)).isoformat() + "Z"
+    try:
+        execute_with_retry(
+            lambda: supabase.table("system_logs")
+            .delete()
+            .lt("created_at", cutoff_time)
+            .execute()
+        )
+        print(f" [日誌管理器] 已成功清理 {cutoff_time} 之前的舊系統日誌（保留最近 {days} 天）。")
+    except Exception as err:
+        print(f" [日誌管理器] 警告: 清理舊日誌失敗: {str(err)}")
+
+

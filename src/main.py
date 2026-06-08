@@ -21,6 +21,12 @@ def run_live_trading_job(stock_codes: List[str]) -> None:
     """
     tw_now = get_taiwan_time()
     
+    # 自動清理 7 天前的舊日誌
+    try:
+        supabase_client.prune_old_db_logs(days=7)
+    except Exception as prune_err:
+        print(f" [排程引擎] 警告: 自動清理舊日誌失敗: {prune_err}")
+        
     # 1. 跳過週末非交易日
     if tw_now.weekday() in (5, 6):
         msg = f"今日 {tw_now.strftime('%Y-%m-%d')} 為週末非交易日，主動跳過排程任務。"
@@ -44,6 +50,17 @@ def run_live_trading_job(stock_codes: List[str]) -> None:
         broker_connector.check_and_execute_hard_stop_losses()
     except Exception as stop_err:
         print(f" [排程引擎] 警告: 執行硬體停損防線檢驗時發生異常: {str(stop_err)}")
+
+    # A-pre. 合併目前的持股標的（確保持有中的個股也會進入 AI 決策範疇，可執行賣出）
+    try:
+        existing_holdings = supabase_client.get_holdings()
+        held_codes = [h["stock_code"] for h in existing_holdings if h.get("stock_code")]
+        added_from_holdings = [c for c in held_codes if c not in stock_codes]
+        if added_from_holdings:
+            stock_codes = stock_codes + added_from_holdings
+            supabase_client.log_system_event("INFO", f"已將目前持股合併至分析標的: {added_from_holdings} → 總標的: {stock_codes}")
+    except Exception as h_err:
+        print(f" [排程引擎] 警告: 獲取目前持股以合併分析標的時發生異常: {str(h_err)}")
 
     klines_map = {}
     
@@ -138,6 +155,17 @@ def run_sandbox_simulation(stock_codes: List[str], start_date: str, end_date: st
     # 延遲載入
     from src.services import sandbox_simulator, broker_connector, email_notifier
     from src.agents import trading_agent
+
+    # 0. 合併目前的持股標的（確保持有中的個股也會進入沙盒 AI 決策範疇，可執行賣出）
+    try:
+        existing_holdings = supabase_client.get_holdings()
+        held_codes = [h["stock_code"] for h in existing_holdings if h.get("stock_code")]
+        added_from_holdings = [c for c in held_codes if c not in stock_codes]
+        if added_from_holdings:
+            stock_codes = stock_codes + added_from_holdings
+            print(f" [排程引擎] 已將目前持股合併至沙盒分析標的: {added_from_holdings} → 總標的: {stock_codes}")
+    except Exception as h_err:
+        print(f" [排程引擎] 警告: 獲取目前持股以合併沙盒分析標的時發生異常: {str(h_err)}")
 
     # 1. 從 Supabase 中獲取基礎股票的交易日作為模擬時間軸基準
     db_klines = supabase_client.get_stock_klines(stock_codes[0], limit=500)
@@ -259,7 +287,7 @@ def main():
     )
     parser.add_argument(
         "--start-date", 
-        default="2026-06-01", 
+        default="2026-05-01", 
         help="沙盒演練起始日期 (YYYY-MM-DD)"
     )
     parser.add_argument(
@@ -269,7 +297,38 @@ def main():
     )
 
     args = parser.parse_args()
-    stock_codes = resolve_stock_codes(args.stocks)
+    
+    # 檢查使用者是否在命令列中明確傳入 --stocks
+    stocks_arg_passed = any(arg.startswith("--stocks") for arg in sys.argv)
+    stock_codes = []
+
+    if not stocks_arg_passed:
+        try:
+            from src.services.supabase_client import get_db_watchlist
+            db_watchlist = get_db_watchlist()
+            if db_watchlist:
+                stock_codes = db_watchlist
+                print(f" [排程引擎] 自 Supabase 載入動態自選股: {stock_codes}")
+        except Exception as e:
+            # 回退嘗試自本機 watchlist.json 讀取
+            import os
+            import json
+            watchlist_path = os.path.join(os.getcwd(), "watchlist.json")
+            if os.path.exists(watchlist_path):
+                try:
+                    with open(watchlist_path, "r", encoding="utf-8") as f:
+                        local_list = json.load(f)
+                        if isinstance(local_list, list) and local_list:
+                            stock_codes = local_list
+                            print(f" [排程引擎] 自本機 watchlist.json 載入動態自選股: {stock_codes}")
+                except Exception:
+                    pass
+            if not stock_codes:
+                print(f" [排程引擎] 嘗試載入 Supabase 自選股失敗 (將使用預設/參數值): {str(e)}")
+
+    if not stock_codes:
+        stock_codes = resolve_stock_codes(args.stocks)
+        print(f" [排程引擎] 使用參數解析自選股: {stock_codes}")
 
     # 捕捉全局未處理的例外，防止 Fly.io 容器無端崩潰
     try:

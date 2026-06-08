@@ -33,11 +33,24 @@ def calculate_fees(action: str, price: float, quantity: float) -> Dict[str, floa
 
 def _validate_trading_limits(action: str, price: float, quantity: float) -> None:
     """
-    檢查單筆交易金額及今日累計交易總額是否超出動態計算的防呆限額
+    檢查單筆交易金額、今日累計交易總額與帳戶現金餘額是否超出限制或不足
     """
     order_amount = price * quantity
     
-    # 1. 檢查單筆限額 (僅在買入時限制，賣出平倉時不限制以確保能順利停損停利)
+    # 1. 檢查可用現金餘額是否充足 (僅在買入時限制)
+    if action == "BUY":
+        from src.services.nav_calculator import calculate_nav
+        try:
+            cash_balance, _, _ = calculate_nav()
+        except Exception:
+            cash_balance = config.limits.initial_cash
+            
+        if order_amount > cash_balance:
+            raise ValueError(
+                f"可用現金餘額不足！欲委託買入金額為 {order_amount:,.0f} 元，而當前帳戶可用現金僅剩 {cash_balance:,.0f} 元。"
+            )
+            
+    # 2. 檢查單筆限額 (僅在買入時限制，賣出平倉時不限制以確保能順利停損停利)
     if action == "BUY":
         from src.services.nav_calculator import get_dynamic_limits
         single_limit, daily_limit = get_dynamic_limits()

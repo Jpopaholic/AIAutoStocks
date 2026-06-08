@@ -72,9 +72,16 @@ def generate_portfolio_decisions(
     
     skills_text = "\n".join([f"- {s}" for s in skills])
 
-    # 2. 獲取限額設定 (動態計算)
-    from src.services.nav_calculator import get_dynamic_limits
+    # 2. 獲取限額設定 (動態計算) 與帳戶資金狀況
+    from src.services.nav_calculator import get_dynamic_limits, calculate_nav
     single_limit, daily_limit = get_dynamic_limits()
+    
+    try:
+        cash_balance, holdings_value, net_asset_value = calculate_nav()
+    except Exception:
+        cash_balance = config.limits.initial_cash
+        holdings_value = 0.0
+        net_asset_value = cash_balance
 
     # 3. 構建 System Instruction (系統提示詞)
     system_instruction = f"""
@@ -93,10 +100,19 @@ def generate_portfolio_decisions(
    - 本帳戶單筆交易最大金額上限為：{single_limit:,.0f} 元新台幣。
    - 本帳戶每日累計交易最大金額上限為：{daily_limit:,.0f} 元新台幣。
    - 若你決定對某些股票進行買入 (BUY)，該筆買入委託金額（建議價格 * 建議股數）絕對不可超過單筆上限（{single_limit:,.0f} 元）。
+   - 本次交易的所有買入委託總金額，絕對不可超出可用現金餘額。
    - 請根據目前多檔股票的走勢，綜合評估相對強弱，合理分配買入額度，以實現資產分散配置（不要把雞蛋放在同一個籃子裡），同時總額不能超出每日限制。
 """
 
     # 4. 準備 User Prompt 變數
+    # 格式化帳戶資金狀況
+    funds_info = (
+        "【當前帳戶資金現況】:\n"
+        f"- 可用現金餘額 (Cash): {cash_balance:,.0f} 元新台幣\n"
+        f"- 持股總市值 (Portfolio Value): {holdings_value:,.0f} 元新台幣\n"
+        f"- 總資產淨值 (NAV): {net_asset_value:,.0f} 元新台幣"
+    )
+
     # 格式化所有持股現況
     holdings_lines = []
     for h in current_holdings:
@@ -156,6 +172,8 @@ def generate_portfolio_decisions(
 
     user_prompt = f"""
 請針對股票列表 {stock_codes} 進行多股投資組合分析與配置決策。
+
+{funds_info}
 
 {holdings_info}
 
