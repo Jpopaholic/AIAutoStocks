@@ -5,13 +5,20 @@ __pycache__/
 *.pyo
 *.pyd
 .pytest_cache/
+# Environments
 .env
-config.json
-credentials.enc
-order_execution.log
-*.enc
-.idea/
-.vscode/
 venv/
 .venv/
 env/
+
+# 明文敏感憑證絕不能打包進 Docker 映像檔
+credentials.json
+
+# Local Logs & database files
+*.log
+order_execution.log
+
+# IDEs and editors
+.idea/
+.vscode/
+

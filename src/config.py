@@ -58,6 +58,35 @@ json_config = {}
 env_config_json = os.getenv("CONFIG_JSON")
 _last_config_load_time = 0.0
 
+def _merge_decrypted_credentials(cfg: dict):
+    try:
+        from src.services.credential_manager import load_credentials
+        decrypted_creds = load_credentials()
+        
+        # 1. 整合 Supabase URL & Key
+        if "supabase" in decrypted_creds:
+            s_creds = decrypted_creds["supabase"]
+            if s_creds.get("url"):
+                cfg["SUPABASE_URL"] = s_creds["url"]
+            if s_creds.get("key"):
+                cfg["SUPABASE_KEY"] = s_creds["key"]
+                
+        # 2. 整合 Gmail 設定
+        if "gmail" in decrypted_creds:
+            g_creds = decrypted_creds["gmail"]
+            if g_creds.get("user"):
+                cfg["GMAIL_USER"] = g_creds["user"]
+            if g_creds.get("appPassword"):
+                cfg["GMAIL_APP_PASSWORD"] = g_creds["appPassword"]
+            if g_creds.get("to"):
+                cfg["EMAIL_TO"] = g_creds["to"]
+                
+        # 3. 整合 Gemini 金鑰列表
+        if "geminiApiKeys" in decrypted_creds and decrypted_creds["geminiApiKeys"]:
+            cfg["GEMINI_API_KEYS"] = ",".join(decrypted_creds["geminiApiKeys"])
+    except Exception:
+        pass
+
 def _reload_config_json_if_needed():
     global json_config, _last_config_load_time
     if os.getenv("CONFIG_JSON"):
@@ -71,6 +100,12 @@ def _reload_config_json_if_needed():
                     json_config = json.load(f)
                     _last_config_load_time = mtime
                     print(" [配置管理器] 已成功自 config.json 動態重新載入外部配置參數。")
+                    try:
+                        from src.services.credential_manager import clear_cache
+                        clear_cache()
+                    except Exception:
+                        pass
+                    _merge_decrypted_credentials(json_config)
         except Exception as e:
             print(f" [配置管理器] 警告: 動態載入 config.json 失敗: {e}")
 
@@ -90,6 +125,9 @@ else:
                 print(" [配置管理器] 已成功自 config.json 本機檔案載入外部配置參數。")
         except Exception as e:
             print(f" [配置管理器] 警告: 讀取 config.json 失敗: {e}")
+
+_merge_decrypted_credentials(json_config)
+
 
 def get_config_val(key: str, default: str = None) -> Optional[str]:
     """

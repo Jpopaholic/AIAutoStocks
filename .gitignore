@@ -19,6 +19,7 @@ ENV/
 # Sensitive Configuration & Credentials
 config.json
 credentials.enc
+credentials.json
 *.enc
 
 # Local Logs & database files

@@ -9,3 +9,4 @@ typing-extensions>=4.10.0
 pytest>=8.1.1
 fastapi>=0.110.0
 uvicorn>=0.28.0
+shioaji>=1.1.0

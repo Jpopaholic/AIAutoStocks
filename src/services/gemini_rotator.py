@@ -52,7 +52,19 @@ def _get_available_key(retry_count: int = 0, max_retries: int = 5) -> str:
     獲取目前最佳可用（未冷卻且未達 RPD 限制，且調用次數最少）的 Gemini API 金鑰。
     若所有金鑰皆處於冷卻狀態，將等待最短冷卻時間後重新獲取。
     """
-    keys = config.gemini_api_keys
+    keys = list(config.gemini_api_keys)
+    
+    # 嘗試從安全憑證管理器載入加密的金鑰，並與 config.json 的金鑰進行合併與去重
+    try:
+        from src.services.credential_manager import load_credentials
+        credentials = load_credentials()
+        encrypted_keys = credentials.get("geminiApiKeys", [])
+        for k in encrypted_keys:
+            if k and k not in keys:
+                keys.append(k)
+    except Exception:
+        pass
+
     if not keys:
         raise RuntimeError("安全憑證中未包含任何 Gemini API 金鑰")
 

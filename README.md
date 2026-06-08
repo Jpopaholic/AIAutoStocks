@@ -106,7 +106,29 @@ pip install -r requirements.txt
 > - `GEMINI_API_KEYS` 可輸入多個金鑰，請以英文逗號 `,` 隔開。
 > - `GMAIL_APP_PASSWORD` 為 Gmail 的「應用程式密碼」（需先開啟 Google 帳號的雙重驗證）。
 
-### 3. Supabase 資料庫建置
+### 3. 配置安全憑證與加密檔案 (`credentials.enc`)
+為了避免將敏感帳密（如永豐證券 Shioaji API Key、身分證字號、CA 憑證密碼等）以明文形式暴露或提交至 Git 倉庫，本專案提供了一個憑證加密工具。
+
+#### 步驟：
+1. **複製憑證範本**：
+   將專案根目錄的 `credentials.example.json` 複製並命名為 `credentials.json`：
+   ```bash
+   cp credentials.example.json credentials.json
+   ```
+2. **填寫真實憑證**：
+   開啟 `credentials.json`，填入您的真實 `geminiApiKeys` 與 `brokerCredentials` (Shioaji API Key、金鑰、憑證密碼及身分證字號等)。
+3. **執行加密工具**：
+   執行加密腳本，將 `credentials.json` 使用 `config.json` 中的 `MASTER_KEY` 加密為安全憑證檔 `credentials.enc`：
+   ```bash
+   python encrypt_credentials.py
+   ```
+   加密完畢後，腳本會詢問您是否要刪除明文的 `credentials.json`，請輸入 `y` 確認刪除以策安全。
+
+> [!WARNING]
+> - `credentials.json` 含有敏感帳密，已被設定在 `.gitignore` 中以防止意外提交，請勿將其公開或上傳。
+> - 在 Fly.io 等雲端部署時，若要使用安全憑證，需將 `credentials.enc` 檔案放進部署目錄中，並將 `MASTER_KEY` 環境變數配置妥當，系統便會於啟動時自動解密載入。
+
+### 4. Supabase 資料庫建置
 請在您的 Supabase 專案中，前往 **SQL Editor** 執行以下 SQL 語法以建立所需的資料表：
 <details>
 <summary>點擊展開 SQL 建表語法</summary>

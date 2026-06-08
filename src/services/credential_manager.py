@@ -4,10 +4,31 @@ import os
 import hashlib
 from typing import Dict, Any, Optional
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from src.config import config
 
 # 記憶體內的私有快取，嚴禁寫入本機暫存檔或輸出至日誌
 _cached_credentials: Optional[Dict[str, Any]] = None
+
+def _get_master_key_and_file_path() -> tuple:
+    master_key = os.getenv("MASTER_KEY")
+    file_path = os.getenv("CREDENTIALS_FILE_PATH")
+    
+    if not master_key or not file_path:
+        config_path = os.path.join(os.getcwd(), "config.json")
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if not master_key:
+                        master_key = data.get("MASTER_KEY")
+                    if not file_path:
+                        file_path = data.get("CREDENTIALS_FILE_PATH")
+            except Exception:
+                pass
+                
+    if not file_path:
+        file_path = os.path.join(os.getcwd(), "credentials.enc")
+    return master_key or "", file_path
+
 
 def _derive_key(master_key: str) -> bytes:
     """
@@ -72,8 +93,7 @@ def load_credentials() -> Dict[str, Any]:
     if _cached_credentials is not None:
         return _cached_credentials
 
-    file_path = config.credentials.file_path
-    master_key = config.credentials.master_key
+    master_key, file_path = _get_master_key_and_file_path()
 
     # 1. 檢查是否有外部加密檔案
     if os.path.exists(file_path):
@@ -88,8 +108,8 @@ def load_credentials() -> Dict[str, Any]:
             decrypted = decrypt_data(encrypted_payload, master_key)
 
             # 驗證解密後的核心資料欄位
-            if "geminiApiKeys" not in decrypted or not isinstance(decrypted["geminiApiKeys"], list):
-                raise ValueError("解密後的憑證格式不正確，缺少 geminiApiKeys 陣列")
+            if "geminiApiKeys" in decrypted and not isinstance(decrypted["geminiApiKeys"], list):
+                raise ValueError("解密後的憑證格式不正確，geminiApiKeys 必須為陣列")
 
             _cached_credentials = decrypted
             print(" [安全憑證管理器] 已成功載入並解密外部加密憑證檔案。")
@@ -99,35 +119,53 @@ def load_credentials() -> Dict[str, Any]:
             raise
 
     # 2. 外部檔案不存在，嘗試退路（環境變數），僅在 Paper Trading 或開發模式下允許
-    if config.limits.is_paper_trading or config.env == "development":
+    try:
+        from src.config import config
+        is_paper = config.limits.is_paper_trading
+        is_dev = config.env == "development"
+    except Exception:
+        is_paper = os.getenv("PAPER_TRADING_MODE", "true").lower() != "false"
+        is_dev = os.getenv("NODE_ENV", "development") == "development" or os.getenv("PYTHON_ENV", "development") == "development"
+
+    if is_paper or is_dev:
         print(" [安全憑證管理器] 未找到外部加密金鑰檔案，正在嘗試從環境變數載入暫時金鑰（僅限沙盒/開發模式）...")
 
         env_gemini_keys = os.getenv("GEMINI_API_KEYS")
-        if not env_gemini_keys:
-            raise RuntimeError(f"未找到加密憑證檔案 ({file_path})，且環境變數中亦無 GEMINI_API_KEYS 配置")
+        gemini_api_keys = [key.strip() for key in env_gemini_keys.split(",") if key.strip()] if env_gemini_keys else []
 
-        gemini_api_keys = [key.strip() for key in env_gemini_keys.split(",") if key.strip()]
-        if not gemini_api_keys:
-            raise RuntimeError("環境變數 GEMINI_API_KEYS 為空，無法載入任何金鑰")
+        # 模擬的 Supabase, Gmail 結構
+        supabase = {
+            "url": os.getenv("SUPABASE_URL") or "https://mock.supabase.co",
+            "key": os.getenv("SUPABASE_KEY") or "MOCK_KEY"
+        }
 
-        # 模擬的證券商憑證結構
+        gmail = {
+            "user": os.getenv("GMAIL_USER") or "mock@gmail.com",
+            "appPassword": os.getenv("GMAIL_APP_PASSWORD") or "mock_app_pass",
+            "to": os.getenv("EMAIL_TO") or os.getenv("GMAIL_USER") or "mock@gmail.com"
+        }
+
         broker_credentials = {
             "apiId": os.getenv("BROKER_API_ID") or "MOCK_API_ID",
             "apiSecret": os.getenv("BROKER_API_SECRET") or "MOCK_API_SECRET",
             "password": os.getenv("BROKER_PASSWORD") or "MOCK_PASSWORD",
-            "certificatePath": os.getenv("BROKER_CERT_PATH") or "MOCK_CERT_PATH"
+            "certificatePath": os.getenv("BROKER_CERT_PATH") or "MOCK_CERT_PATH",
+            "personId": os.getenv("BROKER_PERSON_ID") or "MOCK_PERSON_ID"
         }
 
         _cached_credentials = {
             "geminiApiKeys": gemini_api_keys,
+            "supabase": supabase,
+            "gmail": gmail,
             "brokerCredentials": broker_credentials
         }
 
-        print(f" [安全憑證管理器] 已自環境變數載入 {len(gemini_api_keys)} 組 Gemini API 金鑰（模擬帳戶模式）。")
+        print(f" [安全憑證管理器] 已自環境變數載入暫時金鑰。")
         return _cached_credentials
 
     # 生產/真實下單環境下，若缺少外部安全檔案則必須強制拋錯中斷
     raise RuntimeError(f"真實交易環境下必須提供外部加密金鑰檔案: {file_path}")
+
 
 def clear_cache() -> None:
     """

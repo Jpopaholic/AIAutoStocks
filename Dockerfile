@@ -22,6 +22,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 複製系統實體程式碼
 COPY src/ ./src/
 
+# 複製配置檔與加密憑證檔（若存在的話，採 Docker 條件複製語法避免建置失敗）
+COPY config.jso[n] ./
+COPY credentials.en[c] ./
+
+
 EXPOSE 8080
 
 # 預設執行指令：運行網頁後端伺服器 (提供前端 API)

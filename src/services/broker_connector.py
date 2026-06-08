@@ -90,6 +90,65 @@ def _validate_trading_limits(action: str, price: float, quantity: float) -> None
                 f" [防呆攔截] 加上本筆訂單後，今日累計買入金額 {today_buy_sum + order_amount:,.0f} 元將超出每日上限 {daily_limit:,.0f} 元 (目前已用: {today_buy_sum:,.0f} 元)"
             )
 
+_shioaji_api = None
+_shioaji_lock = threading.Lock()
+
+def _get_shioaji_api():
+    """
+    延遲載入並登入永豐證券 Shioaji SDK 實體
+    """
+    global _shioaji_api
+    with _shioaji_lock:
+        if _shioaji_api is None:
+            log_system_event("INFO", "正在初始化永豐證券 Shioaji SDK...")
+            try:
+                import shioaji as sj
+            except ImportError as err:
+                log_system_event("ERROR", "安裝依賴失敗，缺少 shioaji 套件")
+                raise RuntimeError("請確保已在環境中安裝 shioaji") from err
+            except Exception as import_err:
+                log_system_event("ERROR", f"載入 shioaji 模組時發生未知錯誤: {str(import_err)}")
+                raise
+
+            try:
+                import os
+                credentials = load_credentials()
+                broker_creds = credentials.get("brokerCredentials", {})
+                
+                api_key = broker_creds.get("apiId")
+                secret_key = broker_creds.get("apiSecret")
+                password = broker_creds.get("password")
+                cert_path = broker_creds.get("certificatePath")
+                person_id = broker_creds.get("personId")
+                
+                if not api_key or not secret_key:
+                    raise ValueError("安全憑證中缺少 apiId 或 apiSecret，無法登入永豐證券")
+                
+                # 初始化 API (實盤下單模式使用 simulation=False)
+                api = sj.Shioaji(simulation=False)
+                api.login(api_key=api_key, secret_key=secret_key)
+                log_system_event("INFO", "永豐證券 API 帳號登入成功。")
+                
+                # 啟用 CA 憑證
+                if cert_path and password and person_id:
+                    if os.path.exists(cert_path):
+                        api.activate_ca(
+                            ca_path=cert_path,
+                            ca_passwd=password,
+                            person_id=person_id
+                        )
+                        log_system_event("INFO", "CA 下單安全憑證啟用成功，實盤交易功能已解鎖。")
+                    else:
+                        log_system_event("WARN", f"CA 憑證檔案不存在 ({cert_path})，可能只能進行查詢而無法下單")
+                else:
+                    log_system_event("WARN", "憑證路徑 (certificatePath)、密碼或身分證字號不足，下單委託可能會被拒絕")
+                
+                _shioaji_api = api
+            except Exception as e:
+                log_system_event("ERROR", f"初始化 Shioaji API 發生異常: {str(e)}")
+                raise
+        return _shioaji_api
+
 def place_order(stock_code: str, action: str, price: float, quantity: float) -> Dict[str, Any]:
     """
     執行證券交易下單委託，並返回成交狀態與訂單明細。
@@ -109,12 +168,12 @@ def place_order(stock_code: str, action: str, price: float, quantity: float) -> 
         except ValueError as limit_err:
             log_system_event("WARN", f"下單限額驗證攔截: {str(limit_err)}")
             raise
-
+ 
         # 2. 計算相關交易規費
         costs = calculate_fees(action, price, quantity)
         fee = costs["fee"]
         total_amount = costs["net_amount"]
-
+ 
         # 3. 判斷交易模式並執行
         is_paper = config.limits.is_paper_trading
         
@@ -135,7 +194,7 @@ def place_order(stock_code: str, action: str, price: float, quantity: float) -> 
                 except Exception as e:
                     log_system_event("ERROR", f"模擬平倉帳務計算失敗: {str(e)}")
                     raise
-
+ 
             order_detail = {
                 "stockCode": stock_code,
                 "action": action,
@@ -145,7 +204,7 @@ def place_order(stock_code: str, action: str, price: float, quantity: float) -> 
                 "totalAmount": total_amount,
                 "realizedPnl": realized_pnl
             }
-
+ 
             try:
                 # 寫入模擬平倉帳務與交易訂單
                 db_result = execute_trade_transaction(order_detail)
@@ -164,58 +223,100 @@ def place_order(stock_code: str, action: str, price: float, quantity: float) -> 
                 raise
         else:
             # ================= 真實交易模式 (Real Trading) =================
-            # 1. 載入安全憑證
             try:
-                credentials = load_credentials()
-                broker_creds = credentials.get("brokerCredentials", {})
-            except Exception as e:
-                log_system_event("ERROR", f"真實交易啟動失敗，載入安全憑證異常: {str(e)}")
-                raise RuntimeError("真實交易環境下必須提供外部解密金鑰與真實交易錢包帳密")
-
-            # 2. 模擬/串接 Shioaji SDK 委託邏輯
-            # 此處為證券商 SDK 的實作插槽
-            api_id = broker_creds.get("apiId")
-            password = broker_creds.get("password")
-            
-            log_system_event(
-                "INFO", 
-                f"【真實下單】使用金鑰 [{api_id[:4]}...] 發送委託至真實證券商中..."
-            )
-
-            # 實際部署時引入 Shioaji：
-            # import shioaji as sj
-            # api = sj.Shioaji()
-            # api.login(api_id, password)
-            # contract = api.Contracts.Stocks[stock_code]
-            # order = api.Order(action=sj.constant.Action.Buy if action == 'BUY' else sj.constant.Action.Sell, ...)
-            # trade = api.place_order(contract, order)
-            
-            # 以下為真實下單之模擬回報 Stub
-            realized_pnl = 0.0
-            order_detail = {
-                "stockCode": stock_code,
-                "action": action,
-                "price": price,
-                "quantity": quantity,
-                "fee": fee,
-                "totalAmount": total_amount,
-                "realizedPnl": realized_pnl
-            }
-
-            try:
-                # 仍須同步寫入 Supabase 資料庫以追蹤實際損益
+                # 1. 取得登入的 Shioaji API 實例
+                api = _get_shioaji_api()
+                
+                account = api.stock_account
+                if not account:
+                    if api.stock_accounts:
+                        account = api.stock_accounts[0]
+                    else:
+                        raise RuntimeError("Shioaji 登入成功，但未找到任何可用證券帳戶")
+                
+                # 動態導入 Shioaji 常數，確保模擬交易模式在不安裝 Shioaji 時亦能順暢加載運行
+                from shioaji.constant import Action as SjAction, StockPriceType, OrderType, StockOrderLot
+                
+                # 2. 獲取股票合約 (Contract)
+                contract = api.Contracts.Stocks[stock_code]
+                if not contract:
+                    raise ValueError(f"無法在 Shioaji 中找到股票代號 {stock_code} 的合約資訊，委託終止")
+                
+                # 3. 判斷交易單位與數量換算
+                # 買賣類別 (Action)
+                sj_action = SjAction.Buy if action == "BUY" else SjAction.Sell
+                
+                # 台灣市場：整股為 1000 股的整數倍，不足 1000 股需走盤中零股 (IntradayOdd)
+                if quantity % 1000 == 0 and quantity >= 1000:
+                    order_lot = StockOrderLot.Common
+                    order_qty = int(quantity / 1000)  # Common 委託數量為張數 (張)
+                else:
+                    order_lot = StockOrderLot.IntradayOdd
+                    order_qty = int(quantity)          # 零股委託數量為股數 (股)
+                
+                # 4. 建立委託物件 (預設使用限價 LMT 與當日有效單 ROD)
+                order = api.Order(
+                    action=sj_action,
+                    price=price,
+                    quantity=order_qty,
+                    price_type=StockPriceType.LMT,
+                    order_type=OrderType.ROD,
+                    order_lot=order_lot,
+                    account=account
+                )
+                
+                # 5. 送出委託下單
+                log_system_event(
+                    "INFO",
+                    f"【真實交易】向永豐發送委託: {action} {stock_code} | 價格: {price} | 數量: {order_qty} {order_lot.name}"
+                )
+                
+                trade = api.place_order(contract, order)
+                
+                # 6. 處理與記錄成交資訊
+                realized_pnl = 0.0
+                if action == "SELL":
+                    try:
+                        current_holdings = get_holdings()
+                        matching_holding = next((h for h in current_holdings if h["stock_code"] == stock_code), None)
+                        if matching_holding:
+                            avg_cost = float(matching_holding["average_price"])
+                            # 實現損益 = (賣出價 - 買入均價) * 股數 - 規費
+                            realized_pnl = (price - avg_cost) * quantity - fee
+                    except Exception as he:
+                        print(f" [下單連接器] 實盤計算平倉損益失敗: {str(he)}")
+                
+                order_detail = {
+                    "stockCode": stock_code,
+                    "action": action,
+                    "price": price,
+                    "quantity": quantity,
+                    "fee": fee,
+                    "totalAmount": total_amount,
+                    "realizedPnl": realized_pnl
+                }
+                
+                # 寫入 Supabase 訂單與持股明細
                 db_result = execute_trade_transaction(order_detail)
                 
                 log_system_event(
-                    "INFO", 
-                    f"【真實交易成功】已成功送出委託: {action} {stock_code} | 成交價: {price} | 股數: {quantity}"
+                    "INFO",
+                    f"【真實交易成功】永豐委託建立完成！單號: {trade.status.id} | 狀態: {trade.status.status}"
                 )
                 
-                _write_raw_order_log(order_detail, {"status": "SUCCESS", "mode": "REAL", "db_id": db_result.get("id"), "api_id": api_id})
+                # 記錄 Raw Log
+                _write_raw_order_log(order_detail, {
+                    "status": "SUCCESS", 
+                    "mode": "REAL", 
+                    "db_id": db_result.get("id"),
+                    "trade_id": trade.status.id,
+                    "trade_status": str(trade.status.status),
+                    "api_id": account.person_id
+                })
                 
                 return db_result
             except Exception as e:
-                log_system_event("ERROR", f"真實交易同步本地資料庫時發生異常: {str(e)}")
+                log_system_event("ERROR", f"真實下單委託異常失敗: {str(e)}")
                 raise
 
 def _write_raw_order_log(order_detail: Dict[str, Any], response: Dict[str, Any]) -> None:
