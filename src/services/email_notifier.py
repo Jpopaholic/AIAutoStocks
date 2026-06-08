@@ -110,23 +110,10 @@ def send_daily_report(ai_outlook: str) -> None:
             </tr>
         """)
 
-    # 3. 計算模擬帳戶資產淨值 (以 1,000,000 為起點模擬計數)
-    initial_cash = 1000000.0
-    try:
-        all_orders = get_orders()
-        # 累加所有交易後的剩餘現金：
-        # 買入時 Cash 扣除 total_amount (含手續費)；賣出時 Cash 增加 total_amount (扣除手續費/稅金)
-        cash_balance = initial_cash
-        for o in all_orders:
-            amt = float(o["total_amount"])
-            if o["action"] == "BUY":
-                cash_balance -= amt
-            elif o["action"] == "SELL":
-                cash_balance += amt
-    except Exception:
-        cash_balance = initial_cash
-
-    net_asset_value = cash_balance + holdings_value
+    # 3. 透過中央計算器計算帳戶資產淨值 (NAV)
+    from src.services.nav_calculator import calculate_nav
+    cash_balance, _, net_asset_value = calculate_nav()
+    initial_cash = config.limits.initial_cash
     net_asset_roi = ((net_asset_value - initial_cash) / initial_cash * 100)
 
     # 4. 建立交易記錄表格 HTML

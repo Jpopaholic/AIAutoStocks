@@ -33,21 +33,31 @@ def calculate_fees(action: str, price: float, quantity: float) -> Dict[str, floa
 
 def _validate_trading_limits(action: str, price: float, quantity: float) -> None:
     """
-    檢查單筆交易金額及今日累計交易總額是否超出 config 設定的防呆限額
+    檢查單筆交易金額及今日累計交易總額是否超出動態計算的防呆限額
     """
     order_amount = price * quantity
     
-    # 1. 檢查單筆限額
-    single_limit = config.limits.single_stock
-    if order_amount > single_limit:
-        raise ValueError(
-            f" [防呆攔截] 單筆交易金額 {order_amount:,.0f} 元超出上限 {single_limit:,.0f} 元"
-        )
+    # 1. 檢查單筆限額 (僅在買入時限制，賣出平倉時不限制以確保能順利停損停利)
+    if action == "BUY":
+        from src.services.nav_calculator import get_dynamic_limits
+        single_limit, daily_limit = get_dynamic_limits()
+        
+        if order_amount > single_limit:
+            raise ValueError(
+                f" [防呆攔截] 單筆交易金額 {order_amount:,.0f} 元超出上限 {single_limit:,.0f} 元"
+            )
         
     # 2. 檢查每日累計交易限額 (僅統計買入金額以防範資金超限風險)
     if action == "BUY":
-        daily_limit = config.limits.daily_total
-        today_iso = date.today().isoformat()
+        from src.services.nav_calculator import get_dynamic_limits
+        single_limit, daily_limit = get_dynamic_limits()
+        
+        # 判斷是否為沙盒模擬模式，若是則使用模擬日期
+        from src.services.sandbox_simulator import is_simulation_active, get_current_sim_date
+        if is_simulation_active():
+            today_iso = get_current_sim_date()
+        else:
+            today_iso = date.today().isoformat()
         
         # 撈取今日所有的委託訂單
         try:

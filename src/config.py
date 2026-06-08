@@ -3,8 +3,40 @@ import os
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from dotenv import load_dotenv
+
+STOCK_PRESETS = {
+    "top5": ["2330", "2317", "2454", "2308", "2881"],  # 市值前五大 (台積電、鴻海、聯發科、台達電、富邦金)
+    "semiconductor": ["2330", "2454", "2303", "3711", "2379"],  # 半導體概念 (台積電、聯發科、聯電、日月光、瑞昱)
+    "finance": ["2881", "2882", "2891", "2886", "2884"],  # 穩健金融股 (富邦金、國泰金、中信金、兆豐金、玉山金)
+    "apple": ["2317", "2330", "2382", "3231", "2357"],  # 蘋果/AI代工供應鏈 (鴻海、台積電、廣達、緯創、華碩)
+    "highdividend": ["3034", "2301", "2356", "2449", "3045"],  # 常見高股息 (聯詠、光寶科、英業達、京元電、台灣大)
+    "penny": ["2303", "2618", "2324", "2883", "3481", "2353"],  # 熱門銅板股/低價股 (聯電、長榮航、仁寶、開發金、群創、宏碁)
+    "small": ["2303", "2618", "2324", "2883", "3481", "2353"]   # 中低價位/小資首選股 (與 penny 相同)
+}
+
+def resolve_stock_codes(stocks_arg: str) -> List[str]:
+    """
+    將使用者傳入的股票代號字串解析為獨立的 4 碼股票代號列表，支援 preset 套餐名稱。
+    """
+    preset_key = stocks_arg.strip().lower()
+    if preset_key in STOCK_PRESETS:
+        return STOCK_PRESETS[preset_key]
+        
+    codes = []
+    for s in stocks_arg.split(","):
+        s = s.strip()
+        if not s:
+            continue
+        if s.lower() in STOCK_PRESETS:
+            codes.extend(STOCK_PRESETS[s.lower()])
+        else:
+            codes.append(s)
+            
+    seen = set()
+    return [c for c in codes if not (c in seen or seen.add(c))]
+
 
 # 載入專案根目錄的 .env 檔案
 ENV_PATH = Path(__file__).resolve().parent.parent / '.env'
@@ -30,7 +62,7 @@ else:
         except Exception as e:
             print(f" [配置管理器] 警告: 讀取 config.json 失敗: {e}")
 
-def get_config_val(key: str, default: str = None) -> str | None:
+def get_config_val(key: str, default: str = None) -> Optional[str]:
     """
     獲取配置值。優先自載入的 json_config 讀取，其次從環境變數讀取。
     """
@@ -114,6 +146,9 @@ class LimitsConfig:
     single_stock: float
     daily_total: float
     is_paper_trading: bool
+    single_stock_pct: Optional[float]
+    daily_total_pct: Optional[float]
+    initial_cash: float
 
 @dataclass(frozen=True)
 class AppConfig:
@@ -125,6 +160,7 @@ class AppConfig:
     gmail: GmailConfig
     limits: LimitsConfig
     gemini_api_keys: List[str]
+    gemini_model: str
 
 # 載入數值型參數並設定安全的預設值 (交易限額防呆機制)
 _env = get_config_val("NODE_ENV") or get_config_val("PYTHON_ENV") or "development"
@@ -147,6 +183,22 @@ except ValueError:
 
 _is_paper = (get_config_val("PAPER_TRADING_MODE") or "true").lower() != "false"
 
+def _parse_float_opt(val: Optional[str]) -> Optional[float]:
+    if val is None or val.strip() == "":
+        return None
+    try:
+        return float(val)
+    except ValueError:
+        return None
+
+_limit_single_pct = _parse_float_opt(get_config_val("TRADING_LIMIT_SINGLE_STOCK_PCT"))
+_limit_daily_pct = _parse_float_opt(get_config_val("TRADING_LIMIT_DAILY_TOTAL_PCT"))
+
+try:
+    _initial_cash = float(get_config_val("INITIAL_CASH") or "1000000.0")
+except ValueError:
+    _initial_cash = 1000000.0
+
 # 建立密鑰解密路徑
 _credentials_file = get_config_val("CREDENTIALS_FILE_PATH") or str(Path(os.getcwd()) / "credentials.enc")
 
@@ -154,6 +206,8 @@ _credentials_file = get_config_val("CREDENTIALS_FILE_PATH") or str(Path(os.getcw
 _gmail_user = get_config_val("GMAIL_USER") or ""
 _gmail_app_pass = get_config_val("GMAIL_APP_PASSWORD") or ""
 _gmail_to = get_config_val("EMAIL_TO") or _gmail_user  # 若未特別設定接收信箱，預設寄給自己
+
+_gemini_model = get_config_val("GEMINI_MODEL") or "gemini-1.5-flash"
 
 # 導出防凍結的唯讀配置物件
 config = AppConfig(
@@ -176,7 +230,11 @@ config = AppConfig(
     limits=LimitsConfig(
         single_stock=_limit_single,
         daily_total=_limit_daily,
-        is_paper_trading=_is_paper
+        is_paper_trading=_is_paper,
+        single_stock_pct=_limit_single_pct,
+        daily_total_pct=_limit_daily_pct,
+        initial_cash=_initial_cash
     ),
-    gemini_api_keys=gemini_api_keys
+    gemini_api_keys=gemini_api_keys,
+    gemini_model=_gemini_model
 )

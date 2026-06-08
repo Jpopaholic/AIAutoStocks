@@ -5,7 +5,7 @@ import pytz
 from datetime import datetime
 from typing import List
 
-from src.config import config
+from src.config import config, resolve_stock_codes
 from src.services import supabase_client
 
 def get_taiwan_time() -> datetime:
@@ -39,11 +39,11 @@ def run_live_trading_job(stock_codes: List[str]) -> None:
     # 確保關閉模擬時間軸模式，使用即時數據窗口
     sandbox_simulator.set_simulation_mode(False)
 
-    ai_outlook_details = []
-
+    klines_map = {}
+    
+    # A. 抓取所有股票的最新日 K 線數據
     for stock_code in stock_codes:
         try:
-            # A. 抓取最新的日 K 線數據
             print(f" [排程引擎] 正在獲取 {stock_code} 的最新 K 線歷史數據...")
             klines = stock_fetcher.fetch_stock_klines(stock_code)
             if not klines:
@@ -52,36 +52,68 @@ def run_live_trading_job(stock_codes: List[str]) -> None:
 
             # 將最新 K 線儲存至 Supabase 作為歷史備份
             supabase_client.save_stock_klines(klines)
-
-            # B. 取得目前的持股明細
-            holdings = supabase_client.get_holdings()
-            holding = next((h for h in holdings if h["stock_code"] == stock_code), None)
-
-            # C. 呼叫 AI 交易決策代理生成交易訊號
-            print(f" [排程引擎] 呼叫 AI 決策代理分析 {stock_code}...")
-            decision = trading_agent.generate_trading_decision(stock_code, klines, holding)
-            
-            print(f"   - AI 決策: {decision['action']} | 價格: {decision['price']} | 數量: {decision['quantity']}")
-            print(f"   - 決策理由: {decision['reason']}")
-
-            ai_outlook_details.append(
-                f"股票代號 {stock_code}: AI 決策為 {decision['action']}，"
-                f"委託價格 {decision['price']} 元，數量 {decision['quantity']:.0f} 股。\n"
-                f"決策依據: {decision['reason']}"
-            )
-
-            # D. 執行模擬或真實證券下單 (由 PAPER_TRADING_MODE 決定)
-            if decision["action"] in ("BUY", "SELL") and float(decision["quantity"]) > 0:
-                broker_connector.place_order(
-                    stock_code=stock_code,
-                    action=decision["action"],
-                    price=decision["price"],
-                    quantity=float(decision["quantity"])
-                )
+            klines_map[stock_code] = klines
         except Exception as e:
-            err_msg = f"處理 {stock_code} 的自動化交易時發生未預期錯誤: {str(e)}"
+            err_msg = f"獲取 {stock_code} 的 K 線數據時發生錯誤: {str(e)}"
             print(f" [排程引擎] {err_msg}")
             supabase_client.log_system_event("ERROR", err_msg)
+
+    if not klines_map:
+        print(" [排程引擎] 錯誤: 未能獲取任何股票的 K 線數據，結束排程任務。")
+        return
+
+    # B. 取得目前的持股明細
+    try:
+        holdings = supabase_client.get_holdings()
+    except Exception as e:
+        print(f" [排程引擎] 獲取持股明細失敗: {str(e)}")
+        holdings = []
+
+    # C. 呼叫 AI 交易決策代理生成多股聯合配置決策
+    ai_outlook_details = []
+    try:
+        print(f" [排程引擎] 呼叫 AI 決策代理分析投資組合 {list(klines_map.keys())}...")
+        portfolio_decision = trading_agent.generate_portfolio_decisions(
+            stock_codes=list(klines_map.keys()),
+            klines_map=klines_map,
+            current_holdings=holdings
+        )
+        decisions = portfolio_decision.get("decisions", [])
+    except Exception as e:
+        err_msg = f"呼叫 AI 決策代理時發生異常: {str(e)}"
+        print(f" [排程引擎] {err_msg}")
+        supabase_client.log_system_event("ERROR", err_msg)
+        return
+
+    # D. 執行模擬或真實證券下單 (由 PAPER_TRADING_MODE 決定)
+    for d in decisions:
+        stock_code = (d.get("stock_code") or d.get("stockCode")) if isinstance(d, dict) else getattr(d, "stock_code", getattr(d, "stockCode", None))
+        action = d.get("action") if isinstance(d, dict) else d.action
+        price = d.get("price") if isinstance(d, dict) else d.price
+        quantity = float(d.get("quantity") if isinstance(d, dict) else d.quantity)
+        reason = d.get("reason") if isinstance(d, dict) else d.reason
+
+        print(f"   - AI 決策 [{stock_code}]: {action} | 價格: {price} | 數量: {quantity}")
+        print(f"   - 決策理由: {reason}")
+
+        ai_outlook_details.append(
+            f"股票代號 {stock_code}: AI 決策為 {action}，"
+            f"委託價格 {price} 元，數量 {quantity:.0f} 股。\n"
+            f"決策依據: {reason}"
+        )
+
+        if action in ("BUY", "SELL") and quantity > 0:
+            try:
+                broker_connector.place_order(
+                    stock_code=stock_code,
+                    action=action,
+                    price=price,
+                    quantity=quantity
+                )
+            except Exception as e:
+                err_msg = f"執行 {stock_code} 的自動化交易下單時發生錯誤: {str(e)}"
+                print(f" [排程引擎] {err_msg}")
+                supabase_client.log_system_event("ERROR", err_msg)
 
     # E. 彙整今日交易損益與持股，發送每日 HTML 電子郵件報告信
     ai_outlook_str = "\n\n".join(ai_outlook_details)
@@ -126,36 +158,59 @@ def run_sandbox_simulation(stock_codes: List[str], start_date: str, end_date: st
         print(f"\n=================== 模擬交易日: {sim_date} ===================")
         
         ai_outlook_details = []
+        klines_map = {}
 
-        # 對各個股票執行當日 AI 分析與模擬交易
+        # 獲取各個股票模擬時間軸的 K 線數據
         for stock_code in stock_codes:
-            # 獲取模擬時間軸的 K 線數據 (過濾掉未來資訊以防未來函數污染)
             klines = sandbox_simulator.fetch_stock_klines(stock_code)
-            if not klines:
-                continue
+            if klines:
+                klines_map[stock_code] = klines
 
-            # 取得目前的模擬持股
-            holdings = supabase_client.get_holdings()
-            holding = next((h for h in holdings if h["stock_code"] == stock_code), None)
+        if not klines_map:
+            # 時間軸推進
+            next_day = sandbox_simulator.advance_simulation_step()
+            if not next_day:
+                break
+            continue
 
-            # 生成交易決策
-            decision = trading_agent.generate_trading_decision(stock_code, klines, holding)
-            print(f"  AI 決策 [{stock_code}]: {decision['action']} | 價格: {decision['price']} | 數量: {decision['quantity']}")
-            print(f"  原因: {decision['reason']}")
+        # 取得目前的模擬持股
+        holdings = supabase_client.get_holdings()
+
+        # 生成交易決策
+        try:
+            portfolio_decision = trading_agent.generate_portfolio_decisions(
+                stock_codes=list(klines_map.keys()),
+                klines_map=klines_map,
+                current_holdings=holdings
+            )
+            decisions = portfolio_decision.get("decisions", [])
+        except Exception as e:
+            print(f"   [沙盒決策失敗]: {str(e)}")
+            decisions = []
+
+        # 執行模擬下單
+        for d in decisions:
+            stock_code = (d.get("stock_code") or d.get("stockCode")) if isinstance(d, dict) else getattr(d, "stock_code", getattr(d, "stockCode", None))
+            action = d.get("action") if isinstance(d, dict) else d.action
+            price = d.get("price") if isinstance(d, dict) else d.price
+            quantity = float(d.get("quantity") if isinstance(d, dict) else d.quantity)
+            reason = d.get("reason") if isinstance(d, dict) else d.reason
+
+            print(f"  AI 決策 [{stock_code}]: {action} | 價格: {price} | 數量: {quantity}")
+            print(f"  原因: {reason}")
 
             ai_outlook_details.append(
-                f"股票 {stock_code}: AI 決策 {decision['action']} (價格 {decision['price']}, 股數 {decision['quantity']})。\n"
-                f"理由: {decision['reason']}"
+                f"股票 {stock_code}: AI 決策 {action} (價格 {price}, 股數 {quantity})。\n"
+                f"理由: {reason}"
             )
 
-            # 執行模擬下單
-            if decision["action"] in ("BUY", "SELL") and float(decision["quantity"]) > 0:
+            if action in ("BUY", "SELL") and quantity > 0:
                 try:
                     broker_connector.place_order(
                         stock_code=stock_code,
-                        action=decision["action"],
-                        price=decision["price"],
-                        quantity=float(decision["quantity"])
+                        action=action,
+                        price=price,
+                        quantity=quantity
                     )
                 except Exception as e:
                     print(f"   [模擬下單失敗]: {str(e)}")
@@ -202,7 +257,7 @@ def main():
     )
 
     args = parser.parse_args()
-    stock_codes = [s.strip() for s in args.stocks.split(",") if s.strip()]
+    stock_codes = resolve_stock_codes(args.stocks)
 
     # 捕捉全局未處理的例外，防止 Fly.io 容器無端崩潰
     try:
