@@ -1,0 +1,9 @@
+supabase>=2.3.0
+google-generativeai>=0.8.0
+python-dotenv>=1.0.1
+pytz>=2024.1
+requests>=2.31.0
+cryptography>=42.0.5
+pydantic>=2.6.4
+typing-extensions>=4.10.0
+pytest>=8.1.1

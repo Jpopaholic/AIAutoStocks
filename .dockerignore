@@ -1,0 +1,17 @@
+.git
+.gitignore
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.env
+config.json
+credentials.enc
+order_execution.log
+*.enc
+.idea/
+.vscode/
+venv/
+.venv/
+env/
