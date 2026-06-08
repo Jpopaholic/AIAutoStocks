@@ -481,4 +481,5 @@ app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("src.web_server:app", host="0.0.0.0", port=3000, reload=True)
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run("src.web_server:app", host="0.0.0.0", port=port, reload=True)
