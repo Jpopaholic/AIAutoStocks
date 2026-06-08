@@ -10,7 +10,10 @@
     "沙盒演練數據": "儲存在 Supabase 或外部檔案中的台股歷史股價、委買委賣及成交量等數據，用於重播歷史行情與評估 AI 交易策略成效。",
     "數據模擬窗口": "一個統一的抽象介面，能根據系統設定動態切換為「即時數據源」或「歷史重播數據源」，使交易決策引擎無需修改程式碼即可在真實與沙盒環境間切換。",
     "交易記憶與經驗": "儲存在資料庫中、經由收益率評估標記為成功或失敗的歷史交易紀錄與當時決策脈絡，用於增強 AI 的 Few-shot 學習背景。",
-    "經驗上下文": "由交易記憶管理器格式化後的結構化文本，包含過去決策的成敗原因，可直接作為 Prompts 的一部分輸入給 Gemini API。"
+    "經驗上下文": "由交易記憶管理器格式化後的結構化文本，包含過去決策的成敗原因，可直接作為 Prompts 的一部分輸入給 Gemini API。",
+    "資產淨值 (NAV)": "結合當前可用現金與持有股票之即時/模擬市值計算出的帳戶總價值，作為動態風險限額的基準基準。",
+    "停止執行旗標 (Stop Flag)": "由網頁端發送的訊號（stop_requested），用於通知背景運行中的模擬回測在下一個交易日推進前安全終止。",
+    "自選監控標的 (Watchlist)": "使用者設定之自選股清單，與當前持股合併後構成 AI 交易代理每輪決策與分析的股票範疇。"
   },
   "globalConstraints": [
     "系統核心技術棧必須為 Python 3.10+, Supabase Python SDK (supabase-py), Gemini API Python SDK (google-generativeai) 及 smtplib 或 Resend Python SDK。",
@@ -57,7 +60,7 @@
         "extractedConstraints": [
           "嚴禁將任何未加密的 API 金鑰與錢包憑證提交至 Git 版本控制系統",
           "解密金鑰（Master Key）需透過環境變數動態傳入",
-          "解密後的明文憑證嚴禁以任何形式寫入日誌或暫存檔中"
+          "解密後的明文憑證嚴禁以任何形式寫入日誌 or 暫存檔中"
         ]
       },
       "trace": {
@@ -117,7 +120,8 @@
       "produce": "從外部台股 API 獲取指定股票的歷史 K 線與盤中即時報價",
       "vibeNotes": "提供 AI 決策所需的基礎市場數據，需做好異常處理以防外部服務斷線",
       "dependencies": [
-        "config-manager"
+        "config-manager",
+        "supabase-client"
       ],
       "synthesis": {
         "filePath": "src/services/stock_fetcher.py",
@@ -172,7 +176,7 @@
         "intentSignal": "從 Supabase 讀取過往訂單損益，依回報率標記成敗案例，格式化為 AI Prompt 的經驗上下文",
         "extractedConstraints": [
           "需定義明確的成敗收益率臨界值",
-          "限制注入 Prompt 的記憶體樣本數量，防止超過 Gemini API 的 Context Window"
+          "限制注入 Prompt 的經驗樣本數量，防止超過 Gemini API 的 Context Window"
         ]
       },
       "trace": {
@@ -256,6 +260,31 @@
       }
     },
     {
+      "id": "nav-calculator",
+      "name": "淨值與資產計算器",
+      "produce": "動態計算現金餘額、持股總市值與總資產淨值（NAV），並依比例動態計算交易與每日累計限額",
+      "vibeNotes": "整合歷史訂單與即時/沙盒報價來計算最新 NAV，提供動態風險限額計算以進行交易安全防禦",
+      "dependencies": [
+        "config-manager",
+        "supabase-client",
+        "sandbox-simulator",
+        "stock-data-fetcher"
+      ],
+      "synthesis": {
+        "filePath": "src/services/nav_calculator.py",
+        "status": "completed",
+        "intentSignal": "計算當前帳戶淨值 (NAV)，依據歷史買賣訂單的加總計算剩餘現金餘額，並動態獲取最新持股價格加總為市值。提供基於 NAV 百分比的動態交易防呆上限計算。",
+        "extractedConstraints": [
+          "沙盒模式下計算市值必須使用 sandbox_simulator 獲取行情以防時間軸錯亂，實盤模式則使用 stock_fetcher 的批次報價加速",
+          "若未設定比例或比例無效，限額應自動退回設定檔的絕對數值上限"
+        ]
+      },
+      "trace": {
+        "stale": false,
+        "lastImplementedPrompt": ""
+      }
+    },
+    {
       "id": "scheduler-engine",
       "name": "定時任務排程引擎",
       "produce": "作為系統的總入口點與定時觸發核心，在台股交易日的開盤前、盤中與收盤後，協調各個節點完成自動化流程",
@@ -275,6 +304,33 @@
         "extractedConstraints": [
           "需包含非交易日（假日、颱風假）的主動跳過邏輯",
           "捕捉全局未處理的 Exception，防止執行器崩潰導致整個容器停止"
+        ]
+      },
+      "trace": {
+        "stale": false,
+        "lastImplementedPrompt": ""
+      }
+    },
+    {
+      "id": "web-server",
+      "name": "網頁儀表板伺服器",
+      "produce": "提供儀表板 API 與前端靜態檔案託管，支援觸發與停止交易任務、查詢庫存、交易訂單、自選股設定與系統日誌",
+      "vibeNotes": "提供網頁儀表板控制台與 API 服務，支援手動觸發、即時停止交易任務，重開或重整前端時仍能維持執行狀態顯示",
+      "dependencies": [
+        "config-manager",
+        "supabase-client",
+        "nav-calculator",
+        "sandbox-simulator",
+        "scheduler-engine"
+      ],
+      "synthesis": {
+        "filePath": "src/web_server.py",
+        "status": "completed",
+        "intentSignal": "使用 FastAPI 與 BackgroundTasks 在背景異步啟動交易與沙盒演練任務，支援透過 API 設定與清除庫存狀態、動態配置參數及即時停止執行中任務，並整合 uvicorn 提供網頁儀表板控制介面。",
+        "extractedConstraints": [
+          "任務在背景執行時，必須確保 API 可查詢 is_running 與 stop_requested 狀態，以便前端重整時狀態同步",
+          "提供 API 接口供前端讀寫自選股（Watchlist）、參數配置及清除模擬交易資料",
+          "停止執行時需安全地將 stop_requested 設為 True，使背景循環任務在下個決策日推進前主動終止"
         ]
       },
       "trace": {

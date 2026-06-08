@@ -22,5 +22,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 複製系統實體程式碼
 COPY src/ ./src/
 
-# 預設執行指令：以實時交易模式運行台股自動交易 (可於 Fly.io 或 docker run 中覆寫此指令)
-CMD ["python", "-m", "src.main", "--mode", "live", "--stocks", "2330,2454"]
+# 預設執行指令：運行網頁後端伺服器 (提供前端 API)
+CMD ["python", "-m", "src.web_server"]

@@ -145,7 +145,7 @@ def run_live_trading_job(stock_codes: List[str]) -> None:
     except Exception as e:
         print(f" [排程引擎] 郵件發送失敗: {str(e)}")
 
-def run_sandbox_simulation(stock_codes: List[str], start_date: str, end_date: str) -> None:
+def run_sandbox_simulation(stock_codes: List[str], start_date: str, end_date: str, should_stop=None) -> None:
     """
     執行沙盒演練回測模擬。
     利用 Supabase 中的歷史 K 線重播行情，測試 AI 決策表現並模擬交易帳務與每日報告發送。
@@ -188,6 +188,14 @@ def run_sandbox_simulation(stock_codes: List[str], start_date: str, end_date: st
 
     # 3. 模擬時間軸推進循環
     while True:
+        if should_stop and should_stop():
+            msg = "偵測到手動停止指令，安全終止沙盒模擬循環。"
+            print(f" [排程引擎] {msg}")
+            try:
+                supabase_client.log_system_event("INFO", msg)
+            except Exception:
+                pass
+            break
         sim_date = sandbox_simulator.get_current_sim_date()
         print(f"\n=================== 模擬交易日: {sim_date} ===================")
         

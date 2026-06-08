@@ -295,6 +295,21 @@
             transform: translateY(-1px);
         }
 
+        .btn-danger {
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            color: #ffffff;
+            box-shadow: 0 4px 16px rgba(239, 68, 68, 0.25);
+        }
+
+        .btn-danger:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(239, 68, 68, 0.4);
+        }
+
+        .btn-danger:active {
+            transform: translateY(0);
+        }
+
         .btn:disabled {
             opacity: 0.6;
             cursor: not-allowed;
@@ -758,6 +773,10 @@
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
                     立即執行自動交易
                 </button>
+                <button class="btn btn-danger" id="btn-stop" onclick="stopTradingJob()" style="display: none;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect></svg>
+                    停止執行
+                </button>
             </div>
         </header>
 
@@ -1085,12 +1104,26 @@
                 const sysDot = document.getElementById("sys-dot");
                 const sysText = document.getElementById("sys-text");
                 const btnTrigger = document.getElementById("btn-trigger");
+                const btnStop = document.getElementById("btn-stop");
 
                 if (data.is_running) {
                     sysDot.className = "status-dot active";
                     sysText.textContent = "系統狀態: 交易執行中...";
                     btnTrigger.disabled = true;
                     btnTrigger.innerHTML = `<span class="loading-spinner"></span> 交易進行中...`;
+                    if (btnStop) {
+                        btnStop.style.display = "inline-flex";
+                        if (data.stop_requested) {
+                            btnStop.disabled = true;
+                            btnStop.innerHTML = `<span class="loading-spinner"></span> 正在停止...`;
+                        } else {
+                            btnStop.disabled = false;
+                            btnStop.innerHTML = `
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect></svg>
+                                停止執行
+                            `;
+                        }
+                    }
                 } else {
                     sysDot.className = "status-dot idle";
                     sysText.textContent = `系統狀態: 空閒 (${data.last_run_status})`;
@@ -1099,6 +1132,9 @@
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
                         立即執行自動交易
                     `;
+                    if (btnStop) {
+                        btnStop.style.display = "none";
+                    }
                 }
 
                 // 4. 填充持股表格
@@ -1451,6 +1487,49 @@
             } catch (err) {
                 console.error(err);
                 showToast("連線後端伺服器時發生錯誤。", "error");
+            }
+        }
+
+        // 停止交易任務
+        async function stopTradingJob() {
+            if (!confirm("確定要停止正在執行的交易任務嗎？\n(任務將在完成當前個股/交易日的決策後安全停止)")) return;
+            
+            const btnStop = document.getElementById("btn-stop");
+            if (btnStop) {
+                btnStop.disabled = true;
+                btnStop.innerHTML = `<span class="loading-spinner"></span> 正在停止...`;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/stop`, {
+                    method: "POST"
+                });
+                const data = await response.json();
+                
+                if (data.status === "ok") {
+                    showToast(data.message, "success");
+                    fetchStatus();
+                    loadLogs();
+                } else {
+                    showToast("停止失敗: " + data.message, "error");
+                    if (btnStop) {
+                        btnStop.disabled = false;
+                        btnStop.innerHTML = `
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect></svg>
+                            停止執行
+                        `;
+                    }
+                }
+            } catch (err) {
+                console.error(err);
+                showToast("連線後端伺服器時發生錯誤。", "error");
+                if (btnStop) {
+                    btnStop.disabled = false;
+                    btnStop.innerHTML = `
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect></svg>
+                        停止執行
+                    `;
+                }
             }
         }
 

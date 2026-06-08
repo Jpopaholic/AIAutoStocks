@@ -158,7 +158,7 @@ def read_index():
 
 @app.get("/api/status")
 def get_status():
-    global is_running, last_run_status, last_run_time
+    global is_running, last_run_status, last_run_time, stop_requested
     try:
         cash_balance, holdings_value, net_asset_value = calculate_nav()
         
@@ -205,6 +205,7 @@ def get_status():
             "orders": orders,
             "is_paper": config.limits.is_paper_trading,
             "is_running": is_running,
+            "stop_requested": stop_requested,
             "last_run_status": last_run_status,
             "last_run_time": last_run_time
         }
