@@ -39,6 +39,12 @@ def run_live_trading_job(stock_codes: List[str]) -> None:
     # 確保關閉模擬時間軸模式，使用即時數據窗口
     sandbox_simulator.set_simulation_mode(False)
 
+    # 執行硬體止損防線檢查 (AI 決策前)
+    try:
+        broker_connector.check_and_execute_hard_stop_losses()
+    except Exception as stop_err:
+        print(f" [排程引擎] 警告: 執行硬體停損防線檢驗時發生異常: {str(stop_err)}")
+
     klines_map = {}
     
     # A. 抓取所有股票的最新日 K 線數據
@@ -172,6 +178,12 @@ def run_sandbox_simulation(stock_codes: List[str], start_date: str, end_date: st
             if not next_day:
                 break
             continue
+
+        # 執行硬體止損防線檢查 (在獲取持股與 AI 決策前)
+        try:
+            broker_connector.check_and_execute_hard_stop_losses()
+        except Exception as stop_err:
+            print(f"   [硬體停損防線異常]: {str(stop_err)}")
 
         # 取得目前的模擬持股
         holdings = supabase_client.get_holdings()

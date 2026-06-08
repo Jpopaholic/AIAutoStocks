@@ -4,8 +4,9 @@ from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 
 from src.config import config
-from src.services.gemini_rotator import call_gemini_with_rotation
+from src.services.gemini_rotator import call_gemini_with_rotation, DailyRateLimitExceeded
 from src.services.trading_memory import get_experience_context
+from src.services.supabase_client import get_orders
 
 # 1. 定義單股交易決策模型
 class StockDecision(BaseModel):
@@ -46,7 +47,8 @@ DEFAULT_TRADING_SKILLS = [
     "均線交叉策略 (Moving Average Cross): 當短線均線 (MA5) 向上突破長線均線 (MA20) 且有量能配合時，視為潛在黃金交叉買點；反之，跌破時視為死亡交叉賣點。",
     "相對強弱指標 (RSI): 評估短期超買與超賣狀態。RSI > 70 視為超買過熱（注意賣出/拉回），RSI < 30 視為超賣超跌（注意買入分批佈局）。",
     "嚴格風險控制與止損停利: 當帳戶目前持股之跌幅大於 5% 時，必須無條件發送 SELL 決策以停損；當持股獲利達 15% 時，考慮分批停利入袋為安。",
-    "資金配置策略: 進行多股投資組合分析時，將資金分配給多個標的以分散風險（不要把雞蛋放在同一個籃子裡）。單筆買入之委託總額限制在可用資金之 20% 以內，遵守全局交易防呆上限，禁止單筆重倉孤注一擲。"
+    "資金配置策略: 進行多股投資組合分析時，將資金分配給多個標的以分散風險（不要把雞蛋放在同一個籃子裡）。單筆買入之委託總額限制在可用資金之 20% 以內，遵守全局交易防呆上限，禁止單筆重倉孤注一擲。",
+    "【停損買回冷卻】：若在「近期帳戶交易歷史」中，某檔股票在當天剛剛執行過賣出 (SELL) 且為虧損平倉（即停損），則今日絕對禁止再次對該檔股票發送買入 (BUY) 決策，避免陷入重複追高殺低。"
 ]
 
 def generate_portfolio_decisions(
@@ -111,6 +113,30 @@ def generate_portfolio_decisions(
     # 取得交易經驗 Few-shot 上下文
     experience_context = get_experience_context(limit=3)
 
+    # 取得近期交易歷史 (最新 10 筆)
+    recent_orders_lines = []
+    try:
+        all_orders = get_orders()
+        recent_orders = all_orders[:10]  # get_orders 預設已依 executed_at 降序排序
+        for o in recent_orders:
+            exec_time = o.get("executed_at", "")
+            time_label = exec_time.replace("T", " ").replace("Z", "")[:19]
+            action_label = "買入 (BUY)" if o.get("action") == "BUY" else "賣出 (SELL)"
+            pnl_val = float(o.get("realized_pnl") or 0.0)
+            pnl_label = f" | 實現損益: {pnl_val:+,.0f} 元" if o.get("action") == "SELL" else ""
+            recent_orders_lines.append(
+                f"  - {time_label} | {action_label} {o.get('stock_code')} | "
+                f"價格: {float(o.get('price') or 0):,.2f} 元 | 股數: {float(o.get('quantity') or 0):,.0f} 股 | "
+                f"總金額: {float(o.get('total_amount') or 0):,.0f} 元{pnl_label}"
+            )
+    except Exception as e:
+        print(f" [AI交易代理] 警告: 無法獲取近期委託歷史: {str(e)}")
+        
+    if recent_orders_lines:
+        recent_orders_info = "【近期帳戶交易歷史 (最新 10 筆)】:\n" + "\n".join(recent_orders_lines)
+    else:
+        recent_orders_info = "【近期帳戶交易歷史 (最新 10 筆)】: 尚無近期交易歷史紀錄。"
+
     # 格式化各股票最近 30 天日 K 線數據
     klines_sections = []
     for code in stock_codes:
@@ -133,12 +159,14 @@ def generate_portfolio_decisions(
 
 {holdings_info}
 
+{recent_orders_info}
+
 【過往平倉交易記憶】:
 {experience_context}
 
 {all_klines_text}
 
-請結合上述多檔股票之 K 線、持股成本與歷史交易教訓，基於多股資產分散原則與限額規定，發布本次投資組合決策。
+請結合上述多檔股票之 K 線、持股成本、近期交易動作與歷史交易教訓，基於多股資產分散原則與限額規定，發布本次投資組合決策。
 """
 
     # 5. 調用 Gemini 金鑰輪替調用器，強制使用 Structured Outputs (PortfolioDecision)
@@ -193,6 +221,20 @@ def generate_portfolio_decisions(
                     d["quantity"] = 0
                     
         return decision_data
+    except DailyRateLimitExceeded as rpd_err:
+        print(f" [AI交易代理] 警報: Gemini API 每日額度 (RPD) 已達上限，鎖定交易: {str(rpd_err)}")
+        fallback_decisions = []
+        for code in stock_codes:
+            klines = klines_map.get(code, [])
+            fallback_decisions.append({
+                "stock_code": code,
+                "action": "HOLD",
+                "price": klines[-1]["close"] if klines else 10.0,
+                "quantity": 0,
+                "confidence": 0.0,
+                "reason": f"Gemini API 每日額度 (RPD) 已用盡。啟動安全鎖定，今日不進行任何交易。"
+            })
+        return {"decisions": fallback_decisions}
     except Exception as e:
         print(f" [AI交易代理] 投資組合決策生成失敗: {str(e)}")
         # 回退至安全觀望決策 (所有股票皆 HOLD)

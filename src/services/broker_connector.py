@@ -218,3 +218,41 @@ def _write_raw_order_log(order_detail: Dict[str, Any], response: Dict[str, Any])
             f.write(log_line)
     except Exception as e:
         print(f" [下單連接器] 警告: 無法寫入本地 Raw Audit Log: {str(e)}")
+
+def check_and_execute_hard_stop_losses() -> None:
+    """
+    掃描目前所有持股倉位，若有持股虧損達到或超過 5% (-5%)，
+    則不經過 AI 直接觸發硬體強制平倉（SELL），自動全數賣出以控制下檔風險。
+    """
+    log_system_event("INFO", "啟動持股硬體停損防線掃描...")
+    try:
+        holdings = get_holdings()
+    except Exception as e:
+        log_system_event("ERROR", f"[硬體停損防線] 無法取得持股資料進行停損掃描: {str(e)}")
+        return
+
+    for h in holdings:
+        stock_code = h["stock_code"]
+        qty = float(h["quantity"])
+        avg_price = float(h["average_price"])
+        
+        if qty <= 0:
+            continue
+            
+        # 取得模擬或真實盤中報價
+        from src.services import sandbox_simulator
+        quote = sandbox_simulator.fetch_realtime_quote(stock_code)
+        current_price = float(quote.get("price") or avg_price)
+        
+        roi = (current_price - avg_price) / avg_price if avg_price > 0 else 0.0
+        
+        # 虧損達 5% 或以上觸發停損
+        if roi <= -0.05:
+            msg = f"【硬體停損觸發】偵測到 {stock_code} 虧損達 {roi*100:.2f}% (成本: {avg_price} | 現價: {current_price})，執行強制平倉！"
+            log_system_event("WARN", msg)
+            try:
+                # 執行下單賣出全部股數
+                place_order(stock_code=stock_code, action="SELL", price=current_price, quantity=qty)
+                log_system_event("INFO", f"[硬體停損成功] 已強行賣出 {stock_code} 全數共 {qty:,.0f} 股。")
+            except Exception as order_err:
+                log_system_event("ERROR", f"[硬體停損失敗] 無法自動賣出 {stock_code}: {str(order_err)}")
