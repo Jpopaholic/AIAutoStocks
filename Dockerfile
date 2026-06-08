@@ -22,5 +22,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 複製系統實體程式碼
 COPY src/ ./src/
 
+EXPOSE 3000
+
 # 預設執行指令：運行網頁後端伺服器 (提供前端 API)
 CMD ["python", "-m", "src.web_server"]
