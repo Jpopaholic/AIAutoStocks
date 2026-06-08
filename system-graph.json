@@ -1,0 +1,286 @@
+{
+  "glossary": {
+    "Gemini API 金鑰輪替與冷卻狀態": "管理多個 Gemini API 金鑰的調用計數、每分鐘請求限制 (RPM)、每日限制 (RPD) 及冷卻時間戳，以平均分攤免費額度的資料模型。",
+    "台股 K 線與即時數據": "儲存於 Supabase 或從第三方 API 獲取的股票開盤價、收盤價、最高價、最低價、成交量以及即時買賣報價數據結構。",
+    "交易訂單與持股明細": "Supabase 資料庫中的交易紀錄與目前倉位明細，包含股票代號、買賣價格、股數、手續費、交易時間及已實現/未實現損益之資料欄位。",
+    "AI 決策結果": "由 Gemini API 分析股票數據後輸出的 JSON 格式決策報告，包含推薦操作（買入/賣出/觀望）、建議價格與數量、AI 分析理由、置信度等欄位。",
+    "每日交易與狀態報告信": "於每日收盤並完成帳務整理後，發送至用戶信箱的精簡 HTML 報告，包含當日帳戶淨值、持股狀態、今日交易紀錄與 AI 明日分析預測。",
+    "安全憑證與金鑰管理器": "負責載入與解密真實交易錢包與 Gemini API 金鑰的安全模組，其資料結構包含金鑰名稱、加密文字、雜湊校驗值及解密後的記憶體內金鑰對象。",
+    "外部加密金鑰檔案": "儲存於專案外部或特定安全目錄的加密檔案（例如 credentials.enc），內含真實證券商憑證路徑、帳號密碼、API 金鑰等敏感資訊的 JSON 結構。",
+    "沙盒演練數據": "儲存在 Supabase 或外部檔案中的台股歷史股價、委買委賣及成交量等數據，用於重播歷史行情與評估 AI 交易策略成效。",
+    "數據模擬窗口": "一個統一的抽象介面，能根據系統設定動態切換為「即時數據源」或「歷史重播數據源」，使交易決策引擎無需修改程式碼即可在真實與沙盒環境間切換。",
+    "交易記憶與經驗": "儲存在資料庫中、經由收益率評估標記為成功或失敗的歷史交易紀錄與當時決策脈絡，用於增強 AI 的 Few-shot 學習背景。",
+    "經驗上下文": "由交易記憶管理器格式化後的結構化文本，包含過去決策的成敗原因，可直接作為 Prompts 的一部分輸入給 Gemini API。"
+  },
+  "globalConstraints": [
+    "系統核心技術棧必須為 Python 3.10+, Supabase Python SDK (supabase-py), Gemini API Python SDK (google-generativeai) 及 smtplib 或 Resend Python SDK。",
+    "必須嚴格實作多組 Gemini API Key 輪替與冷卻重試機制，以防止觸發免費版 Rate Limit 導致決策中斷。",
+    "雲端運行平台為 Fly.io，必須處理好時區問題（台灣時區 UTC+8），確保 K 線數據與交易排程在台股交易日與非交易日裝載與執行運作。",
+    "所有敏感憑證（如 Supabase URL/Key、Gemini Keys、證券商帳密、Email SMTP 密碼）均須由環境變數或安全憑證管理器載入，不可硬編碼於代碼中。",
+    "交易執行端必須有防呆限額機制（如單筆交易上限、每日交易總額上限、禁止短時間重複下單機制），防止程式異常造成資金重大損失。",
+    "需要有Log Log可以是中文，支援控制台輸出與資料庫記錄",
+    "需要有unit test，並採用 pytest 框架進行測試"
+  ],
+  "nodes": [
+    {
+      "id": "config-manager",
+      "name": "配置與環境變數管理器",
+      "produce": "載入並驗證系統運行的環境變數與靜態配置，提供統一的安全配置物件給其他模組",
+      "vibeNotes": "負責檢查 Supabase、Gemini、Email 等必要金鑰是否存在，並載入交易限額等參數",
+      "dependencies": [],
+      "synthesis": {
+        "filePath": "src/config.py",
+        "status": "completed",
+        "intentSignal": "使用 python-dotenv 讀取環境變數，進行必要性驗證與預設值填充，導出為 Python 唯讀/凍結的配置類別或字典",
+        "extractedConstraints": [
+          "不得包含任何寫死的金鑰",
+          "必須在啟動時進行嚴格的 schema 驗證，若缺少關鍵變數則主動拋出例外中斷執行"
+        ]
+      },
+      "trace": {
+        "stale": false,
+        "lastImplementedPrompt": ""
+      }
+    },
+    {
+      "id": "credential-manager",
+      "name": "安全憑證與金鑰管理器",
+      "produce": "從外部安全檔案或雲端 Secret 服務載入、解密並提供 Gemini API 金鑰以及真實證券帳戶憑證",
+      "vibeNotes": "避免將真實交易錢包與 API 金鑰寫死在程式碼或一般環境變數中，支援本地加密檔案（如 credentials.enc）使用 AES-256-GCM 解密",
+      "dependencies": [
+        "config-manager"
+      ],
+      "synthesis": {
+        "filePath": "src/services/credential_manager.py",
+        "status": "completed",
+        "intentSignal": "使用 cryptography 庫之 AES-GCM 模組實作外部金鑰檔案解密，並只在記憶體中快取解密後的帳密與 API 金鑰",
+        "extractedConstraints": [
+          "嚴禁將任何未加密的 API 金鑰與錢包憑證提交至 Git 版本控制系統",
+          "解密金鑰（Master Key）需透過環境變數動態傳入",
+          "解密後的明文憑證嚴禁以任何形式寫入日誌或暫存檔中"
+        ]
+      },
+      "trace": {
+        "stale": false,
+        "lastImplementedPrompt": ""
+      }
+    },
+    {
+      "id": "supabase-client",
+      "name": "Supabase 資料庫用戶端",
+      "produce": "初始化 Supabase 連線，並封裝資料庫讀寫函式（金鑰輪替狀態、個股歷史數據、交易訂單、持股明細、系統日誌）",
+      "vibeNotes": "作為系統唯一的狀態儲存中心，所有節點的狀態持久化都依賴此組件",
+      "dependencies": [
+        "config-manager"
+      ],
+      "synthesis": {
+        "filePath": "src/services/supabase_client.py",
+        "status": "completed",
+        "intentSignal": "使用 supabase-py 初始化用戶端，為歷史 K 線、持股、訂單及日誌提供統一的 Python CRUD API",
+        "extractedConstraints": [
+          "需包含連線與資料操作異常之重試與指數退避機制",
+          "不得將資料庫結構與 SQL 細節暴露給其他業務組件"
+        ]
+      },
+      "trace": {
+        "stale": false,
+        "lastImplementedPrompt": ""
+      }
+    },
+    {
+      "id": "gemini-rotator",
+      "name": "Gemini API 金鑰輪替與調用器",
+      "produce": "管理多個 Gemini API 金鑰的狀態，自動輪替並執行帶有速率限制與冷卻時間保護的 AI 調用",
+      "vibeNotes": "這是分散免費用量、避免 Rate Limit 的核心模組，金鑰由安全憑證管理器載入",
+      "dependencies": [
+        "config-manager",
+        "supabase-client",
+        "credential-manager"
+      ],
+      "synthesis": {
+        "filePath": "src/services/gemini_rotator.py",
+        "status": "completed",
+        "intentSignal": "包裝 google-generativeai 調用，實作多 Key 輪替與 429 速率限制攔截，自動標記冷卻並執行指數退避重試",
+        "extractedConstraints": [
+          "必須支援動態載入多個 API 金鑰",
+          "必須妥善處理當所有金鑰皆在冷卻時之等待重試邏輯"
+        ]
+      },
+      "trace": {
+        "stale": false,
+        "lastImplementedPrompt": ""
+      }
+    },
+    {
+      "id": "stock-data-fetcher",
+      "name": "台股數據擷取器",
+      "produce": "從外部台股 API 獲取指定股票的歷史 K 線與盤中即時報價",
+      "vibeNotes": "提供 AI 決策所需的基礎市場數據，需做好異常處理以防外部服務斷線",
+      "dependencies": [
+        "config-manager"
+      ],
+      "synthesis": {
+        "filePath": "src/services/stock_fetcher.py",
+        "status": "completed",
+        "intentSignal": "使用 requests 或 aiohttp 擷取台股 API 數據，清理並格式化返回的價格與成交量資料",
+        "extractedConstraints": [
+          "必須做資料完整性校驗，避免傳入空值或格式錯誤的 K 線至 AI 決策引擎",
+          "需遵守外部 API 的呼叫頻率限制"
+        ]
+      },
+      "trace": {
+        "stale": false,
+        "lastImplementedPrompt": ""
+      }
+    },
+    {
+      "id": "sandbox-simulator",
+      "name": "沙盒演練與歷史數據模擬器",
+      "produce": "載入台股歷史數據，模擬時間推進與歷史市場情境，為交易決策引擎與下單系統提供虛擬的即時數據窗口",
+      "vibeNotes": "供沙盒演練使用，載入指定歷史區間之 K 線與報價，模擬盤中交易與資產變動，成功後可作為通用數據接口",
+      "dependencies": [
+        "config-manager",
+        "supabase-client",
+        "stock-data-fetcher"
+      ],
+      "synthesis": {
+        "filePath": "src/services/sandbox_simulator.py",
+        "status": "completed",
+        "intentSignal": "模擬台股盤中時間軸與行情變化，暴露與 stock_fetcher 一致的 API，支援回放歷史數據以測試 AI 策略",
+        "extractedConstraints": [
+          "必須與 stock_fetcher 具備相同的輸出介面，以實現數據源無縫切換",
+          "模擬時必須凍結真實帳戶與資金操作，所有資產變動僅在 Supabase 沙盒專屬資料表中進行"
+        ]
+      },
+      "trace": {
+        "stale": false,
+        "lastImplementedPrompt": ""
+      }
+    },
+    {
+      "id": "trading-memory-manager",
+      "name": "交易記憶與經驗管理器",
+      "produce": "檢索並整理過去的成功與失敗交易紀錄，轉換為結構化的經驗上下文餵給 AI 決策引擎",
+      "vibeNotes": "實現類似 Few-Shot Learning 的機制，讓 AI 能從過去成功或失敗的案例中學習",
+      "dependencies": [
+        "config-manager",
+        "supabase-client"
+      ],
+      "synthesis": {
+        "filePath": "src/services/trading_memory.py",
+        "status": "completed",
+        "intentSignal": "從 Supabase 讀取過往訂單損益，依回報率標記成敗案例，格式化為 AI Prompt 的經驗上下文",
+        "extractedConstraints": [
+          "需定義明確的成敗收益率臨界值",
+          "限制注入 Prompt 的記憶體樣本數量，防止超過 Gemini API 的 Context Window"
+        ]
+      },
+      "trace": {
+        "stale": false,
+        "lastImplementedPrompt": ""
+      }
+    },
+    {
+      "id": "trading-agent",
+      "name": "AI 交易決策代理",
+      "produce": "整合股票歷史數據與持股狀態，調用 Gemini API 進行多指標量化分析，產出買入、賣出或觀望的具體交易決策與理由",
+      "vibeNotes": "藉由 Prompt Engineering 讓 Gemini 輸出標準 JSON，格式包含：action、price、quantity、reason 等",
+      "dependencies": [
+        "gemini-rotator",
+        "stock-data-fetcher",
+        "supabase-client",
+        "trading-memory-manager"
+      ],
+      "synthesis": {
+        "filePath": "src/agents/trading_agent.py",
+        "status": "completed",
+        "intentSignal": "利用 google-generativeai API 搭配 System/User Prompts 傳入股票資訊與交易經驗，並使用 Structured Outputs (Pydantic / JSON Schema) 強制產出可解析之 JSON 決策結果",
+        "extractedConstraints": [
+          "必須使用 Pydantic BaseModel 或 Strict JSON Schema 強制 AI 輸出標準 JSON",
+          "Prompt 應包含風險控制與止損停利邏輯",
+          "需要有基礎金融交易skills",
+          "可以讓使用者多載入一些金融交易skills"
+        ],
+        "userOverridden": true
+      },
+      "trace": {
+        "stale": false,
+        "lastImplementedPrompt": ""
+      }
+    },
+    {
+      "id": "broker-connector",
+      "name": "證券商下單連接器",
+      "produce": "執行模擬交易（Paper Trading）或透過證券商 API 送出下單委託，並追蹤成交回報",
+      "vibeNotes": "初期為模擬下單，真實下單時需使用由 credential-manager 解密的證券帳戶金鑰與簽章憑證進行委託",
+      "dependencies": [
+        "config-manager",
+        "supabase-client",
+        "credential-manager"
+      ],
+      "synthesis": {
+        "filePath": "src/services/broker_connector.py",
+        "status": "completed",
+        "intentSignal": "串接台股證券商 API 或執行沙盒模擬交易，提供統一的下單與成交回報接口",
+        "extractedConstraints": [
+          "必須實作單筆/每日交易總額之防呆防超限限制，以及重複下單鎖定機制",
+          "詳細記錄下單委託及響應的 Raw Log 以供查核"
+        ]
+      },
+      "trace": {
+        "stale": false,
+        "lastImplementedPrompt": ""
+      }
+    },
+    {
+      "id": "email-notifier",
+      "name": "每日報告電子郵件發送器",
+      "produce": "彙整當日交易明細、目前投資組合淨值、AI 決策歷程與系統日誌，發送精簡且視覺美觀的 HTML 電子郵件報告給使用者",
+      "vibeNotes": "每日報告使用 html 格式，必須包含每筆交易明細與損益比例，便於移動端閱讀",
+      "dependencies": [
+        "config-manager",
+        "supabase-client"
+      ],
+      "synthesis": {
+        "filePath": "src/services/email_notifier.py",
+        "status": "completed",
+        "intentSignal": "利用 smtplib 或 Resend Python SDK 發送 HTML 電子郵件。整合當日交易成果與 AI 明日行情分析為簡潔響應式報告",
+        "extractedConstraints": [
+          "HTML 樣式必須為 Inline CSS 以免郵件用戶端排版異常",
+          "必須有發送失敗的重試機制與錯誤記錄"
+        ]
+      },
+      "trace": {
+        "stale": false,
+        "lastImplementedPrompt": ""
+      }
+    },
+    {
+      "id": "scheduler-engine",
+      "name": "定時任務排程引擎",
+      "produce": "作為系統的總入口點與定時觸發核心，在台股交易日的開盤前、盤中與收盤後，協調各個節點完成自動化流程",
+      "vibeNotes": "部署於 Fly.io 時可做為定時調度指令或配合 APScheduler 執行任務調度",
+      "dependencies": [
+        "config-manager",
+        "supabase-client",
+        "trading-agent",
+        "broker-connector",
+        "email-notifier",
+        "sandbox-simulator"
+      ],
+      "synthesis": {
+        "filePath": "src/main.py",
+        "status": "completed",
+        "intentSignal": "系統總入口點。定義排程與指令模式，執行台股開收盤邏輯、AI 分析與下單，並在收盤後自動觸發郵件報告發送",
+        "extractedConstraints": [
+          "需包含非交易日（假日、颱風假）的主動跳過邏輯",
+          "捕捉全局未處理的 Exception，防止執行器崩潰導致整個容器停止"
+        ]
+      },
+      "trace": {
+        "stale": false,
+        "lastImplementedPrompt": ""
+      }
+    }
+  ]
+}
