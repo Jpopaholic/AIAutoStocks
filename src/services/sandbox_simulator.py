@@ -103,7 +103,7 @@ def fetch_stock_klines(stock_code: str, date_str: Optional[str] = None) -> List[
             })
             
         # 核心約束：過濾掉晚於模擬日期的資料
-        filtered = [k for k in formatted_klines if k["date"] <= _current_sim_date]
+        filtered = [k for k in formatted_klines if k["date"] < _current_sim_date]
         # 回傳按日期升序或降序？TWSE 返回是升序（時間由舊到新），故我們保持與真實介面一致
         # 證交所 API 一般是一整個月份由舊到新
         filtered.sort(key=lambda x: x["date"])
