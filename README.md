@@ -84,30 +84,28 @@ cd AIAutoStocks
 pip install -r requirements.txt
 ```
 
-### 2. 配置設定檔 (`config.json`)
-將根目錄下的 `config.example.json` 複製並命名為 `config.json`，然後填入您的設定：
+### 2. 配置系統設定檔 (`config.json`)
+將根目錄下的 `config.example.json` 複製並命名為 `config.json`，然後填入您的網頁 UI 與系統參數設定：
 ```json
 {
-  "SUPABASE_URL": "https://your-project-id.supabase.co",
-  "SUPABASE_KEY": "your-supabase-anon-or-service-role-key",
-  "GEMINI_API_KEYS": "KEY_1,KEY_2,KEY_3",
-  "MASTER_KEY": "your-decryption-master-key",
-  "GMAIL_USER": "your-email@gmail.com",
-  "GMAIL_APP_PASSWORD": "your-gmail-app-password",
-  "EMAIL_TO": "receiver-email@gmail.com",
-  "TRADING_LIMIT_SINGLE_STOCK": 50000.0,
-  "TRADING_LIMIT_DAILY_TOTAL": 150000.0,
+  "GEMINI_MODEL": "gemini-1.5-flash",
+  "MASTER_KEY": "your-secure-passphrase-to-decrypt-credentials-file",
+  "TRADING_LIMIT_SINGLE_STOCK_PCT": 0.05,
+  "TRADING_LIMIT_DAILY_TOTAL_PCT": 0.15,
+  "INITIAL_CASH": 1000000.0,
   "PAPER_TRADING_MODE": "true",
   "TAIWAN_STOCK_TIMEZONE": "Asia/Taipei",
-  "CREDENTIALS_FILE_PATH": "credentials.enc"
+  "CREDENTIALS_FILE_PATH": "credentials.enc",
+  "SANDBOX_START_DATE": "2026-05-01",
+  "SANDBOX_END_DATE": "2026-06-08"
 }
 ```
 > [!IMPORTANT]
-> - `GEMINI_API_KEYS` 可輸入多個金鑰，請以英文逗號 `,` 隔開。
-> - `GMAIL_APP_PASSWORD` 為 Gmail 的「應用程式密碼」（需先開啟 Google 帳號的雙重驗證）。
+> - `config.json` 只保留供前端網頁 UI 調整的安全防呆與模擬參數，敏感的資安金鑰已徹底抽離至加密憑證檔。
+> - `MASTER_KEY` 為您自訂的解密主密鑰，用於在系統啟動時解密您的敏感憑證。
 
 ### 3. 配置安全憑證與加密檔案 (`credentials.enc`)
-為了避免將敏感帳密（如永豐證券 Shioaji API Key、身分證字號、CA 憑證密碼等）以明文形式暴露或提交至 Git 倉庫，本專案提供了一個憑證加密工具。
+為了確保真實帳密（如 Supabase 金鑰、Gmail 密碼、Gemini 多組 API Key、永豐證券 Shioaji API Key、身分證字號、CA 憑證密碼等）不外洩或被意外提交至 Git 倉庫，本系統提供憑證加密機制。
 
 #### 步驟：
 1. **複製憑證範本**：
@@ -116,7 +114,31 @@ pip install -r requirements.txt
    cp credentials.example.json credentials.json
    ```
 2. **填寫真實憑證**：
-   開啟 `credentials.json`，填入您的真實 `geminiApiKeys` 與 `brokerCredentials` (Shioaji API Key、金鑰、憑證密碼及身分證字號等)。
+   開啟 `credentials.json`，填入您的真實敏感設定：
+   ```json
+   {
+     "geminiApiKeys": [
+       "your-gemini-api-key-1",
+       "your-gemini-api-key-2"
+     ],
+     "supabase": {
+       "url": "https://your-project-id.supabase.co",
+       "key": "your-supabase-anon-or-service-role-key"
+     },
+     "gmail": {
+       "user": "your-email@gmail.com",
+       "appPassword": "your-gmail-app-password",
+       "to": "receiver-email@gmail.com"
+     },
+     "brokerCredentials": {
+       "apiId": "your-sinopac-api-id",
+       "apiSecret": "your-sinopac-api-secret",
+       "password": "your-ca-certificate-password",
+       "certificatePath": "path/to/your/sinopac_ca_cert.pfx",
+       "personId": "your-taiwan-id"
+     }
+   }
+   ```
 3. **執行加密工具**：
    執行加密腳本，將 `credentials.json` 使用 `config.json` 中的 `MASTER_KEY` 加密為安全憑證檔 `credentials.enc`：
    ```bash
@@ -125,71 +147,187 @@ pip install -r requirements.txt
    加密完畢後，腳本會詢問您是否要刪除明文的 `credentials.json`，請輸入 `y` 確認刪除以策安全。
 
 > [!WARNING]
-> - `credentials.json` 含有敏感帳密，已被設定在 `.gitignore` 中以防止意外提交，請勿將其公開或上傳。
-> - 在 Fly.io 等雲端部署時，若要使用安全憑證，需將 `credentials.enc` 檔案放進部署目錄中，並將 `MASTER_KEY` 環境變數配置妥當，系統便會於啟動時自動解密載入。
+> - 明文的 `credentials.json` 含有敏感帳密，已自動被加入 `.gitignore` 與 `.dockerignore`，**請絕對不要將其公開或上傳**。
+> - 加密後的 `credentials.enc` 可安全地伴隨代碼上傳或部署。系統啟動時會讀取配置並動態解密合併至記憶體中。
+
 
 ### 4. Supabase 資料庫建置
 請在您的 Supabase 專案中，前往 **SQL Editor** 執行以下 SQL 語法以建立所需的資料表：
+請在您的 Supabase 專案中，前往 **SQL Editor** 執行專案根目錄下 [supabase_schema.sql](file:///Users/jpopaholic/Documents/AIAutoStocks/supabase_schema.sql) 的全部內容，以建立以下 7 張資料表、對應的加速查詢索引與初始設定值：
+
+1. `watchlist` — 自選監控股票清單（支援 Upsert）
+2. `holdings` — 目前持股明細（支援 Paper Trading / 實盤劃分）
+3. `trade_orders` — 交易訂單歷史紀錄
+4. `stock_klines` — 股票歷史日 K 線數據
+5. `system_logs` — 系統運行日誌
+6. `system_config` — 動態系統配置參數（提供網頁前端進行動態覆蓋）
+7. `gemini_keys_state` — Gemini API 金鑰輪替與冷卻狀態
+
 <details>
-<summary>點擊展開 SQL 建表語法</summary>
+<summary>點擊展開完整的 SQL 建表與初始化語法</summary>
 
 ```sql
--- 1. Gemini API 金鑰狀態表
-CREATE TABLE IF NOT EXISTS gemini_keys_state (
-    key_hash TEXT PRIMARY KEY,
-    use_count INTEGER DEFAULT 0,
-    rpm_limit INTEGER DEFAULT 15,
-    rpd_limit INTEGER DEFAULT 1500,
-    last_used_at TIMESTAMP WITH TIME ZONE,
-    cooled_until TIMESTAMP WITH TIME ZONE
+-- =============================================================================
+-- AIAutoStocks — Supabase 完整資料庫 Schema
+-- 請在 Supabase 後台 → SQL Editor 中執行此檔案
+-- =============================================================================
+
+-- -----------------------------------------------------------------------------
+-- 1. watchlist — 自選監控股票清單
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS watchlist (
+    id          BIGSERIAL PRIMARY KEY,
+    stock_code  TEXT NOT NULL UNIQUE,   -- 4 碼股票代號，唯一鍵（支援 upsert）
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 2. 台股 K 線數據表
-CREATE TABLE IF NOT EXISTS stock_klines (
-    stock_code TEXT NOT NULL,
-    date TEXT NOT NULL,
-    open NUMERIC NOT NULL,
-    high NUMERIC NOT NULL,
-    low NUMERIC NOT NULL,
-    close NUMERIC NOT NULL,
-    volume BIGINT NOT NULL,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()),
-    PRIMARY KEY (stock_code, date)
-);
+-- 加速查詢索引
+CREATE INDEX IF NOT EXISTS idx_watchlist_stock_code ON watchlist (stock_code);
 
--- 3. 持股明細表
+-- 啟用 Row Level Security（建議，但 service role key 可繞過）
+ALTER TABLE watchlist ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service role full access" ON watchlist
+    USING (true) WITH CHECK (true);
+
+-- 初始測試資料（可選，執行後可從前端刪除）
+-- INSERT INTO watchlist (stock_code) VALUES ('2330'), ('2454') ON CONFLICT DO NOTHING;
+
+
+-- -----------------------------------------------------------------------------
+-- 2. holdings — 目前持股明細
+-- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS holdings (
-    id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
-    stock_code TEXT NOT NULL,
-    quantity NUMERIC NOT NULL DEFAULT 0,
-    average_price NUMERIC NOT NULL DEFAULT 0,
-    is_paper BOOLEAN NOT NULL DEFAULT TRUE,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()),
-    CONSTRAINT holdings_stock_paper_unique UNIQUE (stock_code, is_paper)
+    id            BIGSERIAL PRIMARY KEY,
+    stock_code    TEXT NOT NULL,
+    quantity      NUMERIC(18, 4) NOT NULL DEFAULT 0,
+    average_price NUMERIC(18, 4) NOT NULL DEFAULT 0,
+    is_paper      BOOLEAN NOT NULL DEFAULT TRUE,   -- TRUE=沙盒模擬, FALSE=實盤
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (stock_code, is_paper)                  -- 支援 upsert on_conflict
 );
 
--- 4. 交易訂單表
+CREATE INDEX IF NOT EXISTS idx_holdings_stock_code ON holdings (stock_code);
+CREATE INDEX IF NOT EXISTS idx_holdings_is_paper   ON holdings (is_paper);
+
+ALTER TABLE holdings ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service role full access" ON holdings
+    USING (true) WITH CHECK (true);
+
+
+-- -----------------------------------------------------------------------------
+-- 3. trade_orders — 交易訂單歷史紀錄
+-- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS trade_orders (
-    id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
-    stock_code TEXT NOT NULL,
-    action TEXT NOT NULL, -- 'BUY' 或 'SELL'
-    price NUMERIC NOT NULL,
-    quantity NUMERIC NOT NULL,
-    fee NUMERIC NOT NULL DEFAULT 0,
-    total_amount NUMERIC NOT NULL,
-    realized_pnl NUMERIC NOT NULL DEFAULT 0,
-    is_paper BOOLEAN NOT NULL DEFAULT TRUE,
-    executed_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now())
+    id            BIGSERIAL PRIMARY KEY,
+    stock_code    TEXT NOT NULL,
+    action        TEXT NOT NULL CHECK (action IN ('BUY', 'SELL')),
+    price         NUMERIC(18, 4) NOT NULL,
+    quantity      NUMERIC(18, 4) NOT NULL,
+    fee           NUMERIC(18, 4) NOT NULL DEFAULT 0,
+    total_amount  NUMERIC(18, 4) NOT NULL,
+    realized_pnl  NUMERIC(18, 4) NOT NULL DEFAULT 0,
+    is_paper      BOOLEAN NOT NULL DEFAULT TRUE,
+    executed_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 5. 系統運行日誌表
-CREATE TABLE IF NOT EXISTS system_logs (
-    id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
-    level TEXT NOT NULL, -- 'INFO', 'WARN', 'ERROR'
-    message TEXT NOT NULL,
-    details JSONB DEFAULT '{}'::jsonb,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now())
+CREATE INDEX IF NOT EXISTS idx_trade_orders_stock_code   ON trade_orders (stock_code);
+CREATE INDEX IF NOT EXISTS idx_trade_orders_executed_at  ON trade_orders (executed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_trade_orders_is_paper     ON trade_orders (is_paper);
+
+ALTER TABLE trade_orders ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service role full access" ON trade_orders
+    USING (true) WITH CHECK (true);
+
+
+-- -----------------------------------------------------------------------------
+-- 4. stock_klines — 股票歷史 K 線數據
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS stock_klines (
+    id          BIGSERIAL PRIMARY KEY,
+    stock_code  TEXT NOT NULL,
+    date        DATE NOT NULL,
+    open        NUMERIC(18, 4),
+    high        NUMERIC(18, 4),
+    low         NUMERIC(18, 4),
+    close       NUMERIC(18, 4),
+    volume      BIGINT,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (stock_code, date)                     -- 支援 upsert on_conflict
 );
+
+CREATE INDEX IF NOT EXISTS idx_stock_klines_stock_date ON stock_klines (stock_code, date DESC);
+
+ALTER TABLE stock_klines ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service role full access" ON stock_klines
+    USING (true) WITH CHECK (true);
+
+
+-- -----------------------------------------------------------------------------
+-- 5. system_logs — 系統執行日誌（自動 TTL 清理 7 天）
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS system_logs (
+    id         BIGSERIAL PRIMARY KEY,
+    level      TEXT NOT NULL DEFAULT 'INFO',   -- INFO / WARN / ERROR
+    message    TEXT NOT NULL,
+    details    JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_system_logs_created_at ON system_logs (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_system_logs_level      ON system_logs (level);
+
+ALTER TABLE system_logs ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service role full access" ON system_logs
+    USING (true) WITH CHECK (true);
+
+
+-- -----------------------------------------------------------------------------
+-- 6. system_config — 動態系統配置參數（key-value 形式）
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS system_config (
+    id         BIGSERIAL PRIMARY KEY,
+    key        TEXT NOT NULL UNIQUE,
+    value      TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_system_config_key ON system_config (key);
+
+ALTER TABLE system_config ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service role full access" ON system_config
+    USING (true) WITH CHECK (true);
+
+-- 預設動態配置初始值（可從前端覆蓋）
+INSERT INTO system_config (key, value) VALUES
+    ('PAPER_TRADING_MODE',           'true'),
+    ('INITIAL_CASH',                 '1000000'),
+    ('TRADING_LIMIT_SINGLE_STOCK_PCT', '0.1'),
+    ('TRADING_LIMIT_DAILY_TOTAL_PCT',  '0.3'),
+    ('SANDBOX_START_DATE',           '2026-05-01'),
+    ('SANDBOX_END_DATE',             '2026-06-09'),
+    ('GEMINI_MODEL',                 'gemini-1.5-flash'),
+    ('TAIWAN_STOCK_TIMEZONE',        'Asia/Taipei')
+ON CONFLICT (key) DO NOTHING;
+
+
+-- -----------------------------------------------------------------------------
+-- 7. gemini_keys_state — Gemini API 金鑰輪替狀態
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS gemini_keys_state (
+    id           BIGSERIAL PRIMARY KEY,
+    key_hash     TEXT NOT NULL UNIQUE,   -- API key 的 SHA256 雜湊（不儲存明文）
+    use_count    INTEGER NOT NULL DEFAULT 0,
+    rpm_limit    INTEGER NOT NULL DEFAULT 15,
+    rpd_limit    INTEGER NOT NULL DEFAULT 1500,
+    last_used_at TIMESTAMPTZ,
+    cooled_until TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_gemini_keys_key_hash ON gemini_keys_state (key_hash);
+
+ALTER TABLE gemini_keys_state ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service role full access" ON gemini_keys_state
+    USING (true) WITH CHECK (true);
 ```
 </details>
 
@@ -234,8 +372,12 @@ pytest
    ```bash
    fly launch
    ```
-2. 將 `config.json` 的全部內容作為 Secret 環境變數傳入：
+2. 將包含解密主金鑰 `MASTER_KEY` 的 `config.json` 的全部內容作為 Secret 環境變數傳入：
    ```bash
    fly secrets set CONFIG_JSON="$(cat config.json)"
    ```
+   > [!IMPORTANT]
+   > - 由於 `credentials.enc` 檔案為安全加密格式，它已在 `Dockerfile` 中設定隨代碼一同打包部署至容器中。
+   > - 容器啟動時，系統會自動使用從 Secrets 傳入的 `MASTER_KEY` 對容器內的 `credentials.enc` 進行解密，並載入 Supabase、Gmail 及永豐證券等連線帳密，無須額外設定明文變數。
 3. 設定每日盤後定時執行排程任務。
+
