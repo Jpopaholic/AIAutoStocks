@@ -19,7 +19,14 @@ def run_live_trading_job(stock_codes: List[str]) -> None:
     """
     執行真實/模擬盤後自動化交易任務 (定時 Cron 觸發)
     """
+    if not config.is_auto_trading_active:
+        msg = "自動交易已被停用 (AUTO_TRADING_ACTIVE=false)，跳過本次自動交易排程委託。"
+        print(f" [排程引擎] {msg}")
+        supabase_client.log_system_event("INFO", msg)
+        return
+
     tw_now = get_taiwan_time()
+
     
     # 自動清理 7 天前的舊日誌
     try:
@@ -277,6 +284,104 @@ def run_sandbox_simulation(stock_codes: List[str], start_date: str, end_date: st
 
     print("\n [排程引擎] 沙盒演練歷史重播模擬結束。")
 
+def run_liquidate_job() -> None:
+    """
+    執行「下車」指令：立即賣出（清空）當前模式下的所有持股。
+    """
+    is_paper = config.limits.is_paper_trading
+    mode_name = "沙盒模擬" if is_paper else "真實實盤"
+    print(f" [下車引擎] 啟動下車程序（目前模式: {mode_name}）...")
+    supabase_client.log_system_event("INFO", f"啟動下車程序，準備清空所有{mode_name}持股")
+
+    # 1. 取得目前的所有持股明細
+    try:
+        holdings = supabase_client.get_holdings()
+    except Exception as e:
+        print(f" [下車引擎] 錯誤: 取得持股明細失敗: {e}")
+        return
+
+    if not holdings:
+        msg = f"目前沒有任何{mode_name}持股，無須進行下車動作。"
+        print(f" [下車引擎] {msg}")
+        supabase_client.log_system_event("INFO", msg)
+        return
+
+    # 2. 載入必要的服務模組
+    from src.services import stock_fetcher, broker_connector
+
+    success_count = 0
+    fail_count = 0
+    liquidated_orders = []
+
+    for h in holdings:
+        stock_code = h["stock_code"]
+        quantity = float(h["quantity"])
+        
+        if quantity <= 0:
+            continue
+
+        print(f"\n [下車引擎] 處理 {stock_code} | 持股數量: {quantity:.0f} 股")
+        
+        try:
+            # 優先嘗試取得盤中即時報價
+            quote = stock_fetcher.fetch_realtime_quote(stock_code)
+            latest_price = float(quote.get("price") or 0)
+            
+            # 若無即時報價（例如盤後非交易時段），則回退使用最新 K 線的收盤價
+            if latest_price <= 0:
+                klines = stock_fetcher.fetch_stock_klines(stock_code)
+                if klines:
+                    latest_price = float(klines[-1]["close"])
+            
+            # 若仍無價格，則回退使用持股之平均買入成本價
+            if latest_price <= 0:
+                latest_price = float(h.get("average_price") or 0)
+                if latest_price > 0:
+                    print(f" [下車引擎] 警告: 即時報價與 K 線皆無法獲取，回退使用平均買入成本價: {latest_price} 元")
+
+            if latest_price <= 0:
+                raise ValueError("無法獲取即時報價、歷史 K 線收盤價或持股平均成本，無參考成交價")
+
+            print(f" [下車引擎] 獲取最新參考價: {latest_price} 元")
+            
+            # 送出賣出委託
+            order_res = broker_connector.place_order(
+                stock_code=stock_code,
+                action="SELL",
+                price=latest_price,
+                quantity=quantity
+            )
+            if order_res:
+                liquidated_orders.append(order_res)
+            success_count += 1
+            print(f" 成功：已送出 {stock_code} 的賣出下單 (數量: {quantity:.0f} 股，價格: {latest_price} 元)")
+        except Exception as e:
+            fail_count += 1
+            err_msg = f"下車賣出 {stock_code} 失敗: {str(e)}"
+            print(f" [下車引擎] ❌ {err_msg}")
+            supabase_client.log_system_event("ERROR", err_msg)
+
+    # 3. 總結報告
+    summary_msg = f"下車程序執行完畢。成功賣出個股數: {success_count}，失敗個股數: {fail_count}。"
+    print(f"\n [下車引擎] {summary_msg}")
+    supabase_client.log_system_event("INFO", summary_msg)
+
+    # 4. 發送電子郵件報告 (下車也發送 Email 回報)
+    try:
+        from src.services import email_notifier
+        outlook_text = (
+            f"【手動下車平倉回報】\n\n"
+            f"使用者已手動觸發一鍵下車平倉指令（目前交易模式: {mode_name}）。\n"
+            f"下車執行結果：\n"
+            f" - 成功賣出平倉個股數: {success_count}\n"
+            f" - 失敗個股數: {fail_count}\n\n"
+            f"自動交易開關已同步關閉 (AUTO_TRADING_ACTIVE = false)，系統在手動重啟前不會再執行任何自動交易與買入分析。"
+        )
+        email_notifier.send_daily_report(outlook_text, override_orders=liquidated_orders)
+        print(" [下車引擎] 下車結算報告已成功發送電子郵件至信箱。")
+    except Exception as em_err:
+        print(f" [下車引擎] 警告: 發送下車電子郵件結算報告失敗: {str(em_err)}")
+
 def main():
     """
     命令列程式入口
@@ -284,9 +389,9 @@ def main():
     parser = argparse.ArgumentParser(description="AI 台股自動買賣排程主引擎")
     parser.add_argument(
         "--mode", 
-        choices=["live", "sandbox"], 
+        choices=["live", "sandbox", "liquidate"], 
         default="live",
-        help="執行模式。'live': 實時獲取數據並下單; 'sandbox': 進行歷史數據模擬演練"
+        help="執行模式。'live': 實時獲取數據並下單; 'sandbox': 進行歷史數據模擬演練; 'liquidate': 立即賣出清空所有持股 ('下車')"
     )
     parser.add_argument(
         "--stocks", 
@@ -348,6 +453,8 @@ def main():
                 start_date=args.start_date,
                 end_date=args.end_date
             )
+        elif args.mode == "liquidate":
+            run_liquidate_job()
     except Exception as e:
         import traceback
         err_msg = f"排程引擎遭遇致命異常崩潰: {str(e)}"

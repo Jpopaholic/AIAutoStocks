@@ -306,6 +306,7 @@ INSERT INTO system_config (key, value) VALUES
     ('SANDBOX_START_DATE',           '2026-05-01'),
     ('SANDBOX_END_DATE',             '2026-06-09'),
     ('GEMINI_MODEL',                 'gemini-1.5-flash'),
+    ('AUTO_TRADING_ACTIVE',          'true'),
     ('TAIWAN_STOCK_TIMEZONE',        'Asia/Taipei')
 ON CONFLICT (key) DO NOTHING;
 
@@ -353,6 +354,14 @@ python main.py --mode sandbox --stocks 2330,2454 --start-date 2026-06-01 --end-d
 ```
 > [!TIP]
 > 進行沙盒演練前，請確保 Supabase 中已存有該時段的 K 線數據（可在 `live` 模式下先執行過一次，系統會自動下載並儲存最新的日 K 線歷史）。
+
+### 3. 一鍵下車/清空持股模式 (Liquidate Mode)
+此模式會立即獲取當前帳戶模式下的所有持股倉位（若 `PAPER_TRADING_MODE` 為 `true` 則清空模擬持股；為 `false` 則清空真實實盤持股），並自動獲取最新盤中即時報價（若非交易時間則使用歷史最新收盤價），對每檔股票送出 `SELL` 委託進行平倉，實現一鍵下車防禦。
+
+```bash
+# 執行一鍵下車清空持股
+python main.py --mode liquidate
+```
 
 ---
 

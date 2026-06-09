@@ -137,6 +137,7 @@ INSERT INTO system_config (key, value) VALUES
     ('SANDBOX_START_DATE',           '2026-05-01'),
     ('SANDBOX_END_DATE',             '2026-06-09'),
     ('GEMINI_MODEL',                 'gemini-1.5-flash'),
+    ('AUTO_TRADING_ACTIVE',          'true'),
     ('TAIWAN_STOCK_TIMEZONE',        'Asia/Taipei')
 ON CONFLICT (key) DO NOTHING;
 

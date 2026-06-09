@@ -22,7 +22,8 @@ from src.services.supabase_client import (
     get_db_config,
     set_db_config,
     get_holdings,
-    get_orders
+    get_orders,
+    log_system_event
 )
 from src.services.nav_calculator import calculate_nav
 
@@ -416,10 +417,13 @@ def api_update_config(payload: ConfigUpdate):
                 else:
                     existing_config[k] = str(v)
             
-            with open(config_path, "w", encoding="utf-8") as f:
-                json.dump(existing_config, f, indent=2, ensure_ascii=False)
-                
-            return {"status": "ok", "message": "資料表未建立，已自動將設定寫入本機 config.json 檔案！"}
+            try:
+                with open(config_path, "w", encoding="utf-8") as f:
+                    json.dump(existing_config, f, indent=2, ensure_ascii=False)
+                return {"status": "ok", "message": "資料表未建立，已自動將設定寫入本機 config.json 檔案！"}
+            except Exception as io_err:
+                print(f"[Web API] 警告: 無法寫入 config.json (可能為唯讀檔案系統): {str(io_err)}")
+                return {"status": "ok", "message": "已成功更新記憶體設定（但本機唯讀檔案系統無法寫入 config.json）"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"更新動態配置失敗: {str(e)}")
 
@@ -464,8 +468,30 @@ def api_trigger_run(background_tasks: BackgroundTasks):
             return {"status": "error", "message": "交易任務正在執行中，請勿重複觸發。"}
         is_running = True
         
+    # 動態重啟自動交易開關 (AUTO_TRADING_ACTIVE = true)
+    try:
+        set_db_config("AUTO_TRADING_ACTIVE", "true")
+    except Exception as db_err:
+        # 回退寫入 config.json
+        import json
+        config_path = os.path.join(os.getcwd(), "config.json")
+        existing_config = {}
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    existing_config = json.load(f)
+            except Exception:
+                pass
+        existing_config["AUTO_TRADING_ACTIVE"] = "true"
+        try:
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(existing_config, f, indent=2, ensure_ascii=False)
+        except Exception as io_err:
+            print(f"[Web API] 警告: 無法寫入 config.json (可能為唯讀檔案系統): {str(io_err)}")
+
     background_tasks.add_task(run_trading_job_in_background)
-    return {"status": "ok", "message": "交易排程已成功在背景中啟動！"}
+    return {"status": "ok", "message": "自動交易排程已成功在背景啟動，且已重啟自動交易開關！"}
+
 
 @app.post("/api/stop")
 def api_stop_job():
@@ -474,6 +500,44 @@ def api_stop_job():
         return {"status": "error", "message": "目前沒有正在執行的交易任務。"}
     stop_requested = True
     return {"status": "ok", "message": "已發送停止訊號，任務將在完成當前模擬交易日後安全停止。"}
+
+@app.post("/api/liquidate")
+def api_liquidate(background_tasks: BackgroundTasks):
+    global stop_requested, is_running
+    try:
+        # 1. 停止目前正在執行的背景交易任務
+        if is_running:
+            stop_requested = True
+            log_system_event("WARN", "已手動發送停止自動交易任務訊號（準備執行下車清倉）")
+            
+        # 2. 自動關閉自動交易開關 (AUTO_TRADING_ACTIVE = false)
+        try:
+            set_db_config("AUTO_TRADING_ACTIVE", "false")
+        except Exception as db_err:
+            # 回退寫入 config.json
+            import json
+            config_path = os.path.join(os.getcwd(), "config.json")
+            existing_config = {}
+            if os.path.exists(config_path):
+                try:
+                    with open(config_path, "r", encoding="utf-8") as f:
+                        existing_config = json.load(f)
+                except Exception:
+                    pass
+            existing_config["AUTO_TRADING_ACTIVE"] = "false"
+            try:
+                with open(config_path, "w", encoding="utf-8") as f:
+                    json.dump(existing_config, f, indent=2, ensure_ascii=False)
+            except Exception as io_err:
+                print(f"[Web API] 警告: 無法寫入 config.json (可能為唯讀檔案系統): {str(io_err)}")
+        
+        # 3. 在背景非同步執行下車平倉任務
+        from src.main import run_liquidate_job
+        background_tasks.add_task(run_liquidate_job)
+        
+        return {"status": "ok", "message": "已成功停止自動交易並關閉開關，且已於背景啟動下車平倉流程！"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"下車平倉失敗: {str(e)}")
 
 # Serve static files directory
 os.makedirs(os.path.join(os.path.dirname(__file__), "static"), exist_ok=True)

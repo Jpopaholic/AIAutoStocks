@@ -777,7 +777,12 @@
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect></svg>
                     停止執行
                 </button>
+                <button class="btn btn-danger" id="btn-liquidate" onclick="triggerLiquidateJob()" style="background: linear-gradient(135deg, #ea580c 0%, #dc2626 100%); box-shadow: 0 4px 16px rgba(234, 88, 12, 0.25); border: none;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 22H5a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h5"></path><polyline points="17 16 21 12 17 8"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+                    立即下車平倉
+                </button>
             </div>
+
         </header>
 
         <!-- 模擬交易提示 -->
@@ -1482,7 +1487,7 @@
                     fetchStatus();
                     loadLogs();
                 } else {
-                    showToast("觸發失敗: " + data.message, "error");
+                    showToast("觸發失敗: " + (data.message || data.detail || "未知錯誤"), "error");
                 }
             } catch (err) {
                 console.error(err);
@@ -1511,7 +1516,7 @@
                     fetchStatus();
                     loadLogs();
                 } else {
-                    showToast("停止失敗: " + data.message, "error");
+                    showToast("停止失敗: " + (data.message || data.detail || "未知錯誤"), "error");
                     if (btnStop) {
                         btnStop.disabled = false;
                         btnStop.innerHTML = `
@@ -1528,6 +1533,48 @@
                     btnStop.innerHTML = `
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect></svg>
                         停止執行
+                    `;
+                }
+            }
+        }
+
+        // 立即下車平倉
+        async function triggerLiquidateJob() {
+            if (!confirm("確定要【立即下車清空持股】嗎？\n這將會：\n1. 停止目前正在背景執行的交易任務\n2. 關閉自動交易開關 (AUTO_TRADING_ACTIVE=false)\n3. 立即送出賣出委託清空當前模式下的所有持股！")) {
+                return;
+            }
+            
+            const btnLiq = document.getElementById("btn-liquidate");
+            if (btnLiq) {
+                btnLiq.disabled = true;
+                btnLiq.innerHTML = `<span class="loading-spinner"></span> 正在下車中...`;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/liquidate`, {
+                    method: "POST"
+                });
+                const data = await response.json();
+                
+                if (data.status === "ok") {
+                    showToast(data.message, "success");
+                    // 延遲 1 秒刷新
+                    setTimeout(() => {
+                        fetchStatus();
+                        loadLogs();
+                    }, 1000);
+                } else {
+                    showToast("下車失敗: " + (data.message || data.detail || "未知錯誤"), "error");
+                }
+            } catch (err) {
+                console.error(err);
+                showToast("連線後端伺服器時發生錯誤。", "error");
+            } finally {
+                if (btnLiq) {
+                    btnLiq.disabled = false;
+                    btnLiq.innerHTML = `
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 22H5a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h5"></path><polyline points="17 16 21 12 17 8"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+                        立即下車平倉
                     `;
                 }
             }

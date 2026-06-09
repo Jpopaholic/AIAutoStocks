@@ -377,6 +377,16 @@ class AppConfig:
         val = get_config_val("SANDBOX_END_DATE")
         return val if val is not None else "2026-06-08"
 
+    @property
+    def is_auto_trading_active(self) -> bool:
+        db_cfg = _get_db_config_cached()
+        if "AUTO_TRADING_ACTIVE" in db_cfg:
+            return db_cfg["AUTO_TRADING_ACTIVE"].lower() != "false"
+        val = get_config_val("AUTO_TRADING_ACTIVE")
+        if val is not None:
+            return val.lower() != "false"
+        return True
+
 # 載入數值型參數並設定安全的預設值 (交易限額防呆機制)
 _env = get_config_val("NODE_ENV") or get_config_val("PYTHON_ENV") or "development"
 try:

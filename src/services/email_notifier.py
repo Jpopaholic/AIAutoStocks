@@ -4,7 +4,7 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import date, datetime
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 from src.config import config
 from src.services.supabase_client import get_orders, get_holdings, log_system_event
@@ -46,26 +46,34 @@ def _send_email_via_gmail(subject: str, html_content: str, retries: int = 3, del
             delay *= 2
     return False
 
-def send_daily_report(ai_outlook: str) -> None:
+def send_daily_report(ai_outlook: str, override_orders: Optional[List[Dict[str, Any]]] = None) -> None:
     """
     彙整今日交易、持股現況、資產淨值與 AI 分析，產出 HTML 每日交易與狀態報告信並發送
     :param ai_outlook: AI 針對今日交易的反思或明日台股的分析預測
+    :param override_orders: 手動指定交易訂單列表（主要用於下車平倉報告，防止時區或沙盒時間軸不對而漏載）
     """
     today_str = date.today().isoformat()
     sim_active = sandbox_simulator.is_simulation_active()
     
-    # 若在模擬模式中，則報告標題與日期以模擬日期為準
-    current_date_label = sandbox_simulator.get_current_sim_date() if sim_active else today_str
+    is_liquidation = override_orders is not None
+    # 若為下車清倉模式，我們將日期標記顯示為真實系統當前時間
+    current_date_label = (
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S") if is_liquidation
+        else (sandbox_simulator.get_current_sim_date() if sim_active else today_str)
+    )
     
     # 1. 取得今日交易訂單
-    try:
-        # 開始日期設定為今日凌晨
-        orders = get_orders(start_date=f"{current_date_label}T00:00:00Z")
-        # 只保留今天執行的訂單 (比對日期前十碼 YYYY-MM-DD)
-        today_orders = [o for o in orders if o["executed_at"].startswith(current_date_label)]
-    except Exception as e:
-        print(f" [郵件通知器] 無法取得今日交易紀錄: {str(e)}")
-        today_orders = []
+    if override_orders is not None:
+        today_orders = override_orders
+    else:
+        try:
+            # 開始日期設定為今日凌晨
+            orders = get_orders(start_date=f"{current_date_label}T00:00:00Z")
+            # 只保留今天執行的訂單 (比對日期前十碼 YYYY-MM-DD)
+            today_orders = [o for o in orders if o["executed_at"].startswith(current_date_label)]
+        except Exception as e:
+            print(f" [郵件通知器] 無法取得今日交易紀錄: {str(e)}")
+            today_orders = []
 
     # 2. 取得目前持股明細，並動態查詢現價以估算市值
     try:
@@ -265,7 +273,10 @@ def send_daily_report(ai_outlook: str) -> None:
     """
 
     # 6. 送出郵件
-    subject = f"【AI交易報告】{current_date_label} 台股結算回報 {'[沙盒]' if sim_active else ''}"
+    if is_liquidation:
+        subject = f"【AI下車平倉報告】{current_date_label} 結算回報"
+    else:
+        subject = f"【AI交易報告】{current_date_label} 台股結算回報 {'[沙盒]' if sim_active else ''}"
     try:
         success = _send_email_via_gmail(subject, html_content)
         if success:
