@@ -23,7 +23,13 @@ from src.services.supabase_client import (
     set_db_config,
     get_holdings,
     get_orders,
-    log_system_event
+    log_system_event,
+    get_pending_liquidation_stocks,
+    remove_pending_liquidation_stock,
+    get_system_fault_status,
+    set_system_fault_status,
+    execute_with_retry,
+    supabase
 )
 from src.services.nav_calculator import calculate_nav
 
@@ -56,6 +62,9 @@ class VerifyOTPRequest(BaseModel):
 
 class SetupOTPRequest(BaseModel):
     master_key: str
+
+class StockCodeRequest(BaseModel):
+    stock_code: str
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
@@ -602,6 +611,51 @@ def api_liquidate(background_tasks: BackgroundTasks):
         return {"status": "ok", "message": "已成功停止自動交易並關閉開關，且已於背景啟動下車平倉流程！"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"下車平倉失敗: {str(e)}")
+
+@app.get("/api/auth/liquidation-status")
+def api_get_liquidation_status():
+    try:
+        stocks = get_pending_liquidation_stocks()
+        fault = get_system_fault_status()
+        return {
+            "pending_liquidation_stocks": stocks,
+            "system_fault_status": fault
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"獲取等候平倉狀態與系統故障狀態失敗: {str(e)}")
+
+@app.post("/api/auth/liquidation/clear")
+def api_clear_liquidation(payload: StockCodeRequest):
+    try:
+        remove_pending_liquidation_stock(payload.stock_code)
+        return {"status": "ok", "message": f"股票 {payload.stock_code} 已手動解鎖，從等候平倉清單中移除"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"手動解鎖股票失敗: {str(e)}")
+
+@app.post("/api/auth/liquidation/sync-sell")
+def api_sync_sell_liquidation(payload: StockCodeRequest):
+    try:
+        is_paper = config.limits.is_paper_trading
+        execute_with_retry(
+            lambda: supabase.table("holdings")
+            .delete()
+            .eq("stock_code", payload.stock_code)
+            .eq("is_paper", is_paper)
+            .execute()
+        )
+        remove_pending_liquidation_stock(payload.stock_code)
+        log_system_event("INFO", f"已成功手動同步庫存：刪除 {payload.stock_code} 的庫存，並將其自等候平倉清單解鎖")
+        return {"status": "ok", "message": f"已成功將 {payload.stock_code} 的庫存清除並解除平倉鎖定"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"手動同步庫存失敗: {str(e)}")
+
+@app.post("/api/auth/system-fault/clear")
+def api_clear_system_fault():
+    try:
+        set_system_fault_status("OK")
+        return {"status": "ok", "message": "已成功手動解除全局系統故障鎖，恢復自動交易"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"清除全局系統故障鎖失敗: {str(e)}")
 
 # Serve static files directory
 os.makedirs(os.path.join(os.path.dirname(__file__), "static"), exist_ok=True)

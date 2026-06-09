@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from src.config import config
 from src.services.gemini_rotator import call_gemini_with_rotation, DailyRateLimitExceeded
 from src.services.trading_memory import get_experience_context
-from src.services.supabase_client import get_orders
+from src.services.supabase_client import get_orders, get_system_fault_status, get_pending_liquidation_stocks
 
 # 1. 定義單股交易決策模型
 class StockDecision(BaseModel):
@@ -66,6 +66,26 @@ def generate_portfolio_decisions(
     :param extra_skills: 使用者自訂多載入的額外金融交易技能列表
     :returns: 解析後的 PortfolioDecision JSON 字典
     """
+    # 0. 系統性防禦故障阻斷
+    try:
+        fault_state = get_system_fault_status()
+        if fault_state.get("status") == "FAULT":
+            print(f" [AI交易代理] 警告: 系統目前處於全局故障鎖定狀態！原因: {fault_state.get('detail')}")
+            fallback_decisions = []
+            for code in stock_codes:
+                klines = klines_map.get(code, [])
+                fallback_decisions.append({
+                    "stock_code": code,
+                    "action": "HOLD",
+                    "price": klines[-1]["close"] if klines else 10.0,
+                    "quantity": 0.0,
+                    "confidence": 0.0,
+                    "reason": f"系統處於故障安全防禦鎖定狀態 (SYSTEM FAULT)，已暫停所有交易。故障原因: {fault_state.get('detail')}"
+                })
+            return {"decisions": fallback_decisions}
+    except Exception as e:
+        print(f" [AI交易代理] 讀取系統故障狀態失敗: {str(e)}")
+
     # 1. 處理並合併金融技能
     skills = list(DEFAULT_TRADING_SKILLS)
     if extra_skills:
@@ -83,6 +103,17 @@ def generate_portfolio_decisions(
         cash_balance = config.limits.initial_cash
         holdings_value = 0.0
         net_asset_value = cash_balance
+
+    # 2.1 獲取智慧等候平倉排隊中股票代號
+    try:
+        pending_stocks = get_pending_liquidation_stocks()
+    except Exception as e:
+        print(f" [AI交易代理] 獲取等候平倉股票失敗: {str(e)}")
+        pending_stocks = []
+
+    pending_instruction = ""
+    if pending_stocks:
+        pending_instruction = f"\n6. 【智慧平倉排隊】：當前股票 {', '.join(pending_stocks)} 處於等候平倉狀態（因先前停損委託未能成交或跌停鎖死）。對這些處於等候平倉狀態的股票，你「絕對禁止發出買入 (BUY)」決策。請合理評估當前 K 線與大盤買氣：若該股持續疲弱無買氣支撐，請給出 'SELL' 以便系統繼續掛單排隊平倉；若個股出現反彈信號或有暫緩賣出之需要，可給出 'HOLD' 以暫時停在持股中觀望。"
 
     # 3. 構建 System Instruction (系統提示詞)
     system_instruction = f"""
@@ -102,7 +133,7 @@ def generate_portfolio_decisions(
    - 本帳戶每日累計交易最大金額上限為：{daily_limit:,.0f} 元新台幣。
    - 若你決定對某些股票進行買入 (BUY)，該筆買入委託金額（建議價格 * 建議股數）絕對不可超過單筆上限（{single_limit:,.0f} 元）。
    - 本次交易的所有買入委託總金額，絕對不可超出可用現金餘額。
-   - 請根據目前多檔股票的走勢，綜合評估相對強弱，合理分配買入額度，以實現資產分散配置（不要把雞蛋放在同一個籃子裡），同時總額不能超出每日限制。
+   - 請根據目前多檔股票的走勢，綜合評估相對強弱，合理分配買入額度，以實現資產分散配置（不要把雞蛋放在同一個籃子裡），同時總額不能超出每日限制。{pending_instruction}
 """
 
     # 4. 準備 User Prompt 變數
@@ -118,8 +149,12 @@ def generate_portfolio_decisions(
     holdings_lines = []
     for h in current_holdings:
         if float(h.get("quantity", 0)) > 0:
+            stock_code = h["stock_code"]
+            status_tag = ""
+            if stock_code in pending_stocks:
+                status_tag = " [⚠️智慧等候平倉排隊中/跌停鎖死]"
             holdings_lines.append(
-                f"- 股票 {h['stock_code']}: 持有 {float(h['quantity']):,.0f} 股，買入均價 {float(h['average_price']):,.2f} 元"
+                f"- 股票 {stock_code}: 持有 {float(h['quantity']):,.0f} 股，買入均價 {float(h['average_price']):,.2f} 元{status_tag}"
             )
     
     if holdings_lines:
@@ -292,6 +327,12 @@ def generate_portfolio_decisions(
                     
         for d in decisions:
             code = d.get("stock_code")
+            # 如果是等候平倉的股票，安全防呆：禁止買入 (BUY)
+            if code in pending_stocks and d.get("action") == "BUY":
+                print(f" [AI交易代理] 警報: 股票 {code} 處於等候平倉排隊中，AI 給出買入(BUY)決策，強制校正為 HOLD。")
+                d["action"] = "HOLD"
+                d["quantity"] = 0.0
+
             if d.get("action") == "SELL":
                 matching_holding = next((h for h in current_holdings if h["stock_code"] == code), None)
                 holding_qty = float(matching_holding.get("quantity", 0)) if matching_holding else 0.0

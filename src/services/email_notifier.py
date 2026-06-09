@@ -299,3 +299,66 @@ def send_daily_report(ai_outlook: str, override_orders: Optional[List[Dict[str, 
             log_system_event("INFO", f"已成功發送 {current_date_label} 每日報告電子郵件至 {config.gmail.to_addr}")
     except Exception as e:
         log_system_event("ERROR", f"每日報告郵件發送中斷: {str(e)}")
+
+def send_emergency_email(subject: str, message: str) -> None:
+    """
+    發送緊急警報郵件 (使用醒目的紅色警報樣式)
+    :param subject: 郵件主旨
+    :param message: 警報詳細訊息 (支援 HTML 或純文字，純文字會被包裝入紅色警報 HTML 容器)
+    """
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>{subject}</title>
+    </head>
+    <body style="margin: 0; padding: 0; background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+        <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; background-color: #ffffff; border-radius: 8px; overflow: hidden; margin: 20px auto; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); border: 2px solid #ef4444;">
+            <!-- 標題欄 (紅色漸層警報) -->
+            <tr>
+                <td style="background: linear-gradient(135deg, #b91c1c, #ef4444); padding: 30px 20px; text-align: center; color: #ffffff;">
+                    <h1 style="margin: 0; font-size: 26px; font-weight: 800; letter-spacing: 1px;">⚠️ 緊急安全警報</h1>
+                    <p style="margin: 5px 0 0 0; opacity: 0.9; font-size: 14px;">發送時間: {get_local_taiwan_datetime_str()}</p>
+                </td>
+            </tr>
+
+            <!-- 內容區 -->
+            <tr>
+                <td style="padding: 30px 20px;">
+                    <div style="background-color: #fef2f2; border: 1px solid #fee2e2; border-radius: 6px; padding: 20px; border-left: 5px solid #ef4444;">
+                        <h3 style="margin: 0 0 10px 0; color: #991b1b; font-size: 18px;">異常事件摘要</h3>
+                        <p style="margin: 0; font-size: 15px; color: #7f1d1d; line-height: 1.6; white-space: pre-wrap;">{message}</p>
+                    </div>
+                    
+                    <div style="margin-top: 25px; padding: 15px; background-color: #f8fafc; border-radius: 6px; font-size: 14px; color: #475569;">
+                        <h4 style="margin: 0 0 8px 0; color: #1e293b;">📌 後續建議處置：</h4>
+                        <ol style="margin: 0; padding-left: 20px; line-height: 1.6;">
+                            <li>請立即登入 <b>AIAutoStocks Web 控制台</b> 查看詳細系統日誌。</li>
+                            <li>若為券商 API 連線失敗，請檢查 Fly.io 部署環境及憑證與密碼設定。</li>
+                            <li>若為個股交易失敗或跌停鎖死，請登入您個人的證券商官方 App 進行人工部位檢查與手動交易。</li>
+                            <li>手動處置完畢後，請於控制台進行「解鎖」或「手動同步庫存」以恢復自動交易流程。</li>
+                        </ol>
+                    </div>
+                </td>
+            </tr>
+
+            <!-- 頁尾 -->
+            <tr>
+                <td style="background-color: #f1f5f9; padding: 20px; text-align: center; color: #94a3b8; font-size: 11px;">
+                    <p style="margin: 0;">此郵件由 AI 台股自動交易系統之緊急防禦模組自動發送。</p>
+                    <p style="margin: 5px 0 0 0;">© 2026 AIAutoStocks. All rights reserved.</p>
+                </td>
+            </tr>
+        </table>
+    </body>
+    </html>
+    """
+    try:
+        success = _send_email_via_gmail(subject, html_content)
+        if success:
+            log_system_event("INFO", f"已成功發送緊急警報郵件: {subject}")
+    except Exception as e:
+        log_system_event("ERROR", f"發送緊急警報郵件失敗: {str(e)}")
+

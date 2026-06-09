@@ -788,6 +788,23 @@
             </div>
         </div>
     </div>
+
+    <!-- 智慧平倉處置 Modal -->
+    <div id="liquidation-modal" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(5, 8, 16, 0.85); backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px); z-index: 99998; display: none; align-items: center; justify-content: center;">
+        <div class="glass-card" style="width: 100%; max-width: 500px; padding: 30px; border-color: rgba(245, 158, 11, 0.25); box-shadow: 0 0 30px rgba(245, 158, 11, 0.15);">
+            <h3 style="font-family: var(--font-display); font-size: 20px; font-weight: 700; margin-bottom: 15px; color: #fde047;">處置等候平倉股票</h3>
+            <p style="color: var(--text-secondary); font-size: 13px; line-height: 1.6; margin-bottom: 20px;">
+                這些股票先前因為市場流動性枯竭、跌停鎖死等原因停損委託失敗。請選擇處置方式：
+            </p>
+            
+            <div id="liquidation-stocks-details" style="max-height: 250px; overflow-y: auto; margin-bottom: 25px; display: flex; flex-direction: column; gap: 12px;">
+                <!-- 動態填充待平倉股票及按鈕 -->
+            </div>
+            
+            <button class="btn btn-secondary" style="width: 100%;" onclick="closeLiquidationModal()">關閉視窗</button>
+        </div>
+    </div>
+
     <!-- 氛圍流光元素 -->
     <div class="ambient-glows">
         <div class="glow-sphere glow-sphere-1"></div>
@@ -836,6 +853,28 @@
             <button class="btn btn-danger-soft" style="padding: 4px 10px; font-size: 11px; border-radius: 6px;" onclick="clearSandboxData()">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 3px; vertical-align: middle;"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                 清除模擬交易與持股
+            </button>
+        </div>
+
+        <!-- 系統級故障警示條 -->
+        <div class="paper-notice" id="system-fault-alert" style="display: none; justify-content: space-between; align-items: center; background: linear-gradient(135deg, rgba(239, 68, 68, 0.2) 0%, rgba(220, 38, 38, 0.2) 100%); border: 1px solid rgba(239, 68, 68, 0.4); color: #fca5a5; margin-bottom: 24px;">
+            <div style="display: flex; align-items: center; gap: 12px;">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                <span><strong>⚠️ 系統警報：</strong>檢測到券商連線、憑證或交易模組系統級故障！自動交易已全面暫停鎖定。<span id="system-fault-detail" style="font-size: 12px; display: block; opacity: 0.8; margin-top: 4px;">錯誤詳情：-</span></span>
+            </div>
+            <button class="btn btn-danger-soft" style="padding: 4px 10px; font-size: 11px; border-radius: 6px; background: rgba(239, 68, 68, 0.2); border-color: rgba(239, 68, 68, 0.5); color: #fca5a5;" onclick="clearSystemFault()">
+                手動解除安全鎖
+            </button>
+        </div>
+
+        <!-- 等候平倉排隊中警示條 -->
+        <div class="paper-notice" id="pending-liquidation-alert" style="display: none; justify-content: space-between; align-items: center; background: linear-gradient(135deg, rgba(245, 158, 11, 0.15) 0%, rgba(234, 88, 12, 0.15) 100%); border: 1px solid rgba(245, 158, 11, 0.4); color: #fde047; margin-bottom: 24px;">
+            <div style="display: flex; align-items: center; gap: 12px;">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                <span><strong>⚠️ 智慧平倉排隊提示：</strong>股票 <span id="pending-liquidation-stocks-list" style="font-weight: bold;"></span> 處於停損失敗、等候智慧平倉排隊中。</span>
+            </div>
+            <button class="btn btn-secondary" style="padding: 4px 10px; font-size: 11px; border-radius: 6px; background: rgba(245, 158, 11, 0.1); border-color: rgba(245, 158, 11, 0.3); color: #fef08a;" onclick="showLiquidationModal()">
+                處置平倉股票
             </button>
         </div>
 
@@ -1169,6 +1208,7 @@
                     fetchWatchlist();
                     fetchConfig();
                     loadLogs();
+                    fetchLiquidationAndFaultStatus();
                     
                     codeInput.value = "";
                 } else {
@@ -1250,12 +1290,14 @@
                 fetchWatchlist();
                 fetchConfig();
                 loadLogs();
+                fetchLiquidationAndFaultStatus();
             }
 
             // 定時刷新：狀態 8 秒，日誌 10 秒
             setInterval(() => {
                 if (getSessionToken()) {
                     fetchStatus();
+                    fetchLiquidationAndFaultStatus();
                 }
             }, 8000);
             
@@ -1447,6 +1489,130 @@
 
             } catch (err) {
                 console.error("更新儀表板狀態失敗:", err);
+            }
+        }
+
+        // 獲取平倉與故障狀態
+        async function fetchLiquidationAndFaultStatus() {
+            try {
+                const response = await authFetch(`${API_BASE}/api/auth/liquidation-status`);
+                if (!response.ok) return;
+                const data = await response.json();
+                
+                // 1. 系統故障狀態處理
+                const faultAlert = document.getElementById("system-fault-alert");
+                const faultDetail = document.getElementById("system-fault-detail");
+                const faultState = data.system_fault_status;
+                if (faultState && faultState.status === "FAULT") {
+                    faultAlert.style.display = "flex";
+                    faultDetail.textContent = `錯誤詳情：${faultState.detail || "無詳細資訊"}`;
+                } else {
+                    faultAlert.style.display = "none";
+                }
+                
+                // 2. 等候平倉股票處理
+                const liqAlert = document.getElementById("pending-liquidation-alert");
+                const liqListSpan = document.getElementById("pending-liquidation-stocks-list");
+                const pendingStocks = data.pending_liquidation_stocks || [];
+                if (pendingStocks.length > 0) {
+                    liqAlert.style.display = "flex";
+                    liqListSpan.textContent = pendingStocks.map(code => `${code}${getStockName(code)}`).join("、");
+                    
+                    // 同步填寫 Modal 內列表
+                    const detailsContainer = document.getElementById("liquidation-stocks-details");
+                    detailsContainer.innerHTML = "";
+                    pendingStocks.forEach(code => {
+                        const row = document.createElement("div");
+                        row.style = "display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: rgba(255, 255, 255, 0.03); border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.05);";
+                        row.innerHTML = `
+                            <div style="font-family: var(--font-display); font-weight: 600;">
+                                ${code}<span style="color: var(--text-secondary); font-size: 12px; font-weight: normal; margin-left: 6px;">${getStockName(code)}</span>
+                            </div>
+                            <div style="display: flex; gap: 8px;">
+                                <button class="btn btn-secondary" style="padding: 4px 8px; font-size: 11px; white-space: nowrap;" onclick="clearStockLiquidationLock('${code}')">僅解除鎖定</button>
+                                <button class="btn btn-danger-soft" style="padding: 4px 8px; font-size: 11px; white-space: nowrap;" onclick="syncSellStock('${code}')">手動賣出，同步庫存</button>
+                            </div>
+                        `;
+                        detailsContainer.appendChild(row);
+                    });
+                } else {
+                    liqAlert.style.display = "none";
+                    closeLiquidationModal();
+                }
+            } catch (err) {
+                console.error("載入平倉與系統故障狀態失敗:", err);
+            }
+        }
+
+        async function clearSystemFault() {
+            if (!confirm("確定要手動清除全局系統故障鎖嗎？\n請確保您已解決相關的連線或帳密憑證問題。")) return;
+            try {
+                const response = await authFetch(`${API_BASE}/api/auth/system-fault/clear`, {
+                    method: "POST"
+                });
+                if (response.ok) {
+                    showToast("系統故障鎖已成功清除，自動交易流程已恢復", "success");
+                    fetchLiquidationAndFaultStatus();
+                    fetchStatus();
+                } else {
+                    const err = await response.json();
+                    showToast(err.detail || "清除失敗", "error");
+                }
+            } catch (err) {
+                console.error(err);
+                showToast("連線後端失敗", "error");
+            }
+        }
+
+        function showLiquidationModal() {
+            document.getElementById("liquidation-modal").style.display = "flex";
+        }
+
+        function closeLiquidationModal() {
+            document.getElementById("liquidation-modal").style.display = "none";
+        }
+
+        async function clearStockLiquidationLock(code) {
+            if (!confirm(`確定要將股票 ${code} 解除等候平倉狀態嗎？\n解除後 AI 將重新對其進行買賣判定。`)) return;
+            try {
+                const response = await authFetch(`${API_BASE}/api/auth/liquidation/clear`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ stock_code: code })
+                });
+                if (response.ok) {
+                    showToast(`股票 ${code} 等候平倉狀態已解除`, "success");
+                    fetchLiquidationAndFaultStatus();
+                    fetchStatus();
+                } else {
+                    const err = await response.json();
+                    showToast(err.detail || "處置失敗", "error");
+                }
+            } catch (err) {
+                console.error(err);
+                showToast("連線後端失敗", "error");
+            }
+        }
+
+        async function syncSellStock(code) {
+            if (!confirm(`確定已手動賣出 ${code} 嗎？\n此操作將刪除庫存中的 ${code} 持股，並解除其平倉鎖定，以與證券商真實部位同步。`)) return;
+            try {
+                const response = await authFetch(`${API_BASE}/api/auth/liquidation/sync-sell`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ stock_code: code })
+                });
+                if (response.ok) {
+                    showToast(`已成功同步賣出 ${code} 庫存，並解除平倉鎖定`, "success");
+                    fetchLiquidationAndFaultStatus();
+                    fetchStatus();
+                } else {
+                    const err = await response.json();
+                    showToast(err.detail || "處置失敗", "error");
+                }
+            } catch (err) {
+                console.error(err);
+                showToast("連線後端失敗", "error");
             }
         }
 

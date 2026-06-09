@@ -387,4 +387,74 @@ def prune_old_db_logs(days: int = 7) -> None:
     except Exception as err:
         print(f" [日誌管理器] 警告: 清理舊日誌失敗: {str(err)}")
 
+# ==========================================================================
+# 6. 等候平倉列表與全局系統故障 相關資料庫操作
+# ==========================================================================
+
+def get_pending_liquidation_stocks() -> List[str]:
+    """
+    獲取目前處於等候平倉（智慧排隊）狀態的股票代號列表。
+    """
+    try:
+        config_dict = get_db_config()
+        val = config_dict.get("PENDING_LIQUIDATION_STOCKS", "")
+        if not val:
+            return []
+        return [c.strip() for c in val.split(",") if c.strip()]
+    except Exception as e:
+        print(f" [Supabase] 讀取等候平倉股票失敗: {str(e)}")
+        return []
+
+def add_pending_liquidation_stock(stock_code: str) -> None:
+    """
+    將股票代號加入等候平倉列表。
+    """
+    try:
+        stocks = get_pending_liquidation_stocks()
+        if stock_code not in stocks:
+            stocks.append(stock_code)
+            set_db_config("PENDING_LIQUIDATION_STOCKS", ",".join(stocks))
+            log_system_event("INFO", f"股票 {stock_code} 已加入等候平倉(智慧排隊)列表")
+    except Exception as e:
+        print(f" [Supabase] 加入等候平倉列表失敗: {str(e)}")
+
+def remove_pending_liquidation_stock(stock_code: str) -> None:
+    """
+    從等候平倉列表中移除指定股票代號。
+    """
+    try:
+        stocks = get_pending_liquidation_stocks()
+        if stock_code in stocks:
+            stocks.remove(stock_code)
+            set_db_config("PENDING_LIQUIDATION_STOCKS", ",".join(stocks))
+            log_system_event("INFO", f"股票 {stock_code} 已從等候平倉列表移除(解鎖)")
+    except Exception as e:
+        print(f" [Supabase] 移除等候平倉列表失敗: {str(e)}")
+
+def get_system_fault_status() -> Dict[str, Any]:
+    """
+    獲取全局系統故障狀態，回傳格式例如: {"status": "OK", "detail": ""} 或 {"status": "FAULT", "detail": "error message"}
+    """
+    try:
+        config_dict = get_db_config()
+        val = config_dict.get("SYSTEM_FAULT_STATUS", "OK")
+        if val.startswith("FAULT:"):
+            return {"status": "FAULT", "detail": val[6:]}
+        return {"status": "OK", "detail": ""}
+    except Exception as e:
+        print(f" [Supabase] 獲取系統故障狀態失敗: {str(e)}")
+        return {"status": "OK", "detail": ""}
+
+def set_system_fault_status(status: str, detail: str = "") -> None:
+    """
+    設定全局系統故障狀態。
+    """
+    try:
+        val = "OK" if status == "OK" else f"FAULT:{detail}"
+        set_db_config("SYSTEM_FAULT_STATUS", val)
+        log_system_event("WARN" if status == "FAULT" else "INFO", f"系統故障狀態已設為 {status} (詳情: {detail})")
+    except Exception as e:
+        print(f" [Supabase] 設定系統故障狀態失敗: {str(e)}")
+
+
 

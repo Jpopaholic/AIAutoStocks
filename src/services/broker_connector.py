@@ -3,7 +3,7 @@ import threading
 from datetime import datetime, date
 from typing import Dict, Any
 from src.config import config
-from src.services.supabase_client import get_holdings, get_orders, execute_trade_transaction, log_system_event
+from src.services.supabase_client import get_holdings, get_orders, execute_trade_transaction, log_system_event, set_system_fault_status, add_pending_liquidation_stock
 from src.services.credential_manager import load_credentials
 from src.time_manager import get_local_taiwan_midnight_utc_range, get_effective_date_str
 
@@ -191,38 +191,38 @@ def place_order(stock_code: str, action: str, price: float, quantity: float) -> 
                     log_system_event("ERROR", f"模擬平倉帳務計算失敗: {str(e)}")
                     raise
  
-        # 取得目前沙盒虛擬日期（如有）
-        from src.services.sandbox_simulator import is_simulation_active, get_current_sim_date
-        current_sim_date = get_current_sim_date() if is_simulation_active() else None
+            # 取得目前沙盒虛擬日期（如有）
+            from src.services.sandbox_simulator import is_simulation_active, get_current_sim_date
+            current_sim_date = get_current_sim_date() if is_simulation_active() else None
 
-        order_detail = {
-            "stockCode": stock_code,
-            "action": action,
-            "price": price,
-            "quantity": quantity,
-            "fee": fee,
-            "totalAmount": total_amount,
-            "realizedPnl": realized_pnl,
-            "simDate": current_sim_date  # 沙盒模式為虛擬日期，真實操盤為 None
-        }
+            order_detail = {
+                "stockCode": stock_code,
+                "action": action,
+                "price": price,
+                "quantity": quantity,
+                "fee": fee,
+                "totalAmount": total_amount,
+                "realizedPnl": realized_pnl,
+                "simDate": current_sim_date  # 沙盒模式為虛擬日期，真實操盤為 None
+            }
 
-        try:
-            # 寫入模擬平倉帳務與交易訂單
-            db_result = execute_trade_transaction(order_detail)
-            
-            log_system_event(
-                "INFO", 
-                f"【模擬交易】已成功執行: {action} {stock_code} | 成交價: {price} | 股數: {quantity} | 損益: {realized_pnl:,.0f} 元",
-                sim_date=current_sim_date
-            )
-            
-            # 詳細記錄 Raw Log 供日後審計
-            _write_raw_order_log(order_detail, {"status": "SUCCESS", "mode": "PAPER", "db_id": db_result.get("id")})
-            
-            return db_result
-        except Exception as e:
-            log_system_event("ERROR", f"模擬交易資料庫寫入異常: {str(e)}", sim_date=current_sim_date)
-            raise
+            try:
+                # 寫入模擬平倉帳務與交易訂單
+                db_result = execute_trade_transaction(order_detail)
+                
+                log_system_event(
+                    "INFO", 
+                    f"【模擬交易】已成功執行: {action} {stock_code} | 成交價: {price} | 股數: {quantity} | 損益: {realized_pnl:,.0f} 元",
+                    sim_date=current_sim_date
+                )
+                
+                # 詳細記錄 Raw Log 供日後審計
+                _write_raw_order_log(order_detail, {"status": "SUCCESS", "mode": "PAPER", "db_id": db_result.get("id")})
+                
+                return db_result
+            except Exception as e:
+                log_system_event("ERROR", f"模擬交易資料庫寫入異常: {str(e)}", sim_date=current_sim_date)
+                raise
         else:
             # ================= 真實交易模式 (Real Trading) =================
             try:
@@ -245,7 +245,6 @@ def place_order(stock_code: str, action: str, price: float, quantity: float) -> 
                     raise ValueError(f"無法在 Shioaji 中找到股票代號 {stock_code} 的合約資訊，委託終止")
                 
                 # 3. 判斷交易單位與數量換算
-                # 買賣類別 (Action)
                 sj_action = SjAction.Buy if action == "BUY" else SjAction.Sell
                 
                 # 台灣市場：整股為 1000 股的整數倍，不足 1000 股需走盤中零股 (IntradayOdd)
@@ -283,7 +282,6 @@ def place_order(stock_code: str, action: str, price: float, quantity: float) -> 
                         matching_holding = next((h for h in current_holdings if h["stock_code"] == stock_code), None)
                         if matching_holding:
                             avg_cost = float(matching_holding["average_price"])
-                            # 實現損益 = (賣出價 - 買入均價) * 股數 - 規費
                             realized_pnl = (price - avg_cost) * quantity - fee
                     except Exception as he:
                         print(f" [下單連接器] 實盤計算平倉損益失敗: {str(he)}")
@@ -319,6 +317,22 @@ def place_order(stock_code: str, action: str, price: float, quantity: float) -> 
                 return db_result
             except Exception as e:
                 log_system_event("ERROR", f"真實下單委託異常失敗: {str(e)}")
+                # 判定是否為系統級故障
+                err_msg = str(e).lower()
+                systemic_keywords = ["login", "ca_path", "passwd", "cert", "connection", "timeout", "network", "auth", "invalid credential"]
+                if any(kw in err_msg for kw in systemic_keywords):
+                    set_system_fault_status("FAULT", str(e))
+                    try:
+                        from src.services.email_notifier import send_emergency_email
+                        send_emergency_email(
+                            subject="⚠️ AIAutoStocks 系統下單發生系統級故障！",
+                            message=f"系統在執行 {action} {stock_code} 時，偵測到無法排除的系統級故障或網路連線失敗，已自動鎖定全局交易！\n\n錯誤詳情：\n{str(e)}"
+                        )
+                    except Exception as email_err:
+                        print(f" [下單連接器] 發送緊急郵件失敗: {str(email_err)}")
+                else:
+                    # 一般交易性/市場性錯誤（例如限額不足或跌停無法交易）
+                    add_pending_liquidation_stock(stock_code)
                 raise
 
 def _write_raw_order_log(order_detail: Dict[str, Any], response: Dict[str, Any]) -> None:
@@ -327,6 +341,7 @@ def _write_raw_order_log(order_detail: Dict[str, Any], response: Dict[str, Any])
     """
     timestamp = datetime.now().isoformat()
     log_line = f"[{timestamp}] [ORDER_AUDIT] Detail: {order_detail} | Response: {response}\n"
+    
     
     # 嚴禁以明文寫入帳號密碼與憑證，僅記錄訂單業務與狀態
     try:
@@ -372,3 +387,4 @@ def check_and_execute_hard_stop_losses() -> None:
                 log_system_event("INFO", f"[硬體停損成功] 已強行賣出 {stock_code} 全數共 {qty:,.0f} 股。")
             except Exception as order_err:
                 log_system_event("ERROR", f"[硬體停損失敗] 無法自動賣出 {stock_code}: {str(order_err)}")
+                add_pending_liquidation_stock(stock_code)
