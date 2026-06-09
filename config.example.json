@@ -6,5 +6,6 @@
   "INITIAL_CASH": 1000000.0,
   "PAPER_TRADING_MODE": "true",
   "TAIWAN_STOCK_TIMEZONE": "Asia/Taipei",
-  "CREDENTIALS_FILE_PATH": "credentials.enc"
+  "CREDENTIALS_FILE_PATH": "credentials.enc",
+  "SANDBOX_TIME_SCALE": 8640000.0
 }

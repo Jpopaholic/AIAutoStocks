@@ -12,7 +12,7 @@ from src.services.supabase_client import get_orders
 class StockDecision(BaseModel):
     stock_code: str = Field(
         ...,
-        description="股票代號，例如 '2330'"
+        description="必須填寫 4 碼股票代號字串，例如 '2330'，不可填寫中文名稱或留空。此欄位必須與輸入的股票列表代號完全一致。"
     )
     action: str = Field(
         ..., 
@@ -227,26 +227,70 @@ def generate_portfolio_decisions(
         # 進行最後安全覆核 (避免 AI 違反規則)
         # 例如：賣出股數不得大於持股數
         decisions = decision_data.get("decisions", [])
+        
+        # 1. 蒐集每個股票代號的特徵（代號與中文名稱）
+        from src.config import get_stock_name
+        stock_info = []
+        for c in stock_codes:
+            name = get_stock_name(c)
+            stock_info.append({
+                "code": c,
+                "name": name,
+                "matched": False
+            })
+            
+        # 2. 第一階段：精準匹配（如果決策中的 stock_code 欄位直接是 watchlist 中的某個代號）
+        possible_keys = ["stock_code", "stockCode", "stockcode", "StockCode", "code", "stock"]
         for d in decisions:
-            # 相容各種股票代號鍵名與大小寫
-            possible_keys = ["stock_code", "stockCode", "stockcode", "StockCode", "code", "stock"]
             resolved_code = None
             for key in possible_keys:
                 if key in d and d[key]:
-                    resolved_code = str(d[key]).strip()
-                    break
-            
-            # 若仍未解析成功，嘗試從 reason 內容比對
-            if not resolved_code:
-                reason_text = str(d.get("reason", ""))
-                for c in stock_codes:
-                    if c in reason_text:
-                        resolved_code = c
+                    val = str(d[key]).strip()
+                    if val in stock_codes:
+                        resolved_code = val
                         break
-            
             if resolved_code:
                 d["stock_code"] = resolved_code
+                for info in stock_info:
+                    if info["code"] == resolved_code:
+                        info["matched"] = True
+                        break
+
+        # 3. 第二階段：模糊/文字匹配（針對尚未成功設定 stock_code 的決策）
+        for d in decisions:
+            if d.get("stock_code") in stock_codes:
+                continue
                 
+            reason_text = str(d.get("reason", ""))
+            other_vals = []
+            for key in possible_keys:
+                if key in d and d[key]:
+                    other_vals.append(str(d[key]))
+            combined_text = reason_text + " " + " ".join(other_vals)
+            
+            matched_code = None
+            for info in stock_info:
+                if not info["matched"]:
+                    if info["code"] in combined_text or (info["name"] and info["name"] in combined_text):
+                        matched_code = info["code"]
+                        info["matched"] = True
+                        break
+            if not matched_code:
+                for info in stock_info:
+                    if info["code"] in combined_text or (info["name"] and info["name"] in combined_text):
+                        matched_code = info["code"]
+                        break
+                        
+            if matched_code:
+                d["stock_code"] = matched_code
+
+        # 4. 第三階段：順序/位置匹配（最安全的防線：如果決策個數跟股票個數一致，且仍有 None）
+        if len(decisions) == len(stock_codes):
+            for i, d in enumerate(decisions):
+                if d.get("stock_code") not in stock_codes:
+                    d["stock_code"] = stock_codes[i]
+                    
+        for d in decisions:
             code = d.get("stock_code")
             if d.get("action") == "SELL":
                 matching_holding = next((h for h in current_holdings if h["stock_code"] == code), None)

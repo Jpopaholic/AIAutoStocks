@@ -260,7 +260,7 @@ def run_sandbox_simulation(stock_codes: List[str], start_date: str, end_date: st
         return
 
     # 2. 初始化沙盒演練狀態
-    sandbox_scale_str = get_config_val("SANDBOX_TIME_SCALE") or "1.0"
+    sandbox_scale_str = get_config_val("SANDBOX_TIME_SCALE") or "8640000.0"
     try:
         sandbox_scale = float(sandbox_scale_str)
     except ValueError:

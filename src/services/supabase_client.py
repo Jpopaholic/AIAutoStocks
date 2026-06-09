@@ -15,8 +15,13 @@ supabase: Client = create_client(_supabase_url, _supabase_key)
 
 def _get_current_time_iso() -> str:
     """
-    獲取目前符合 ISO 8601 格式之時間字串
+    獲取目前符合 ISO 8601 格式之時間字串（若為沙盒模式，則使用模擬日期時間的 UTC 格式）
     """
+    from src.time_manager import is_sandbox_active, get_effective_datetime
+    if is_sandbox_active():
+        from datetime import timezone
+        eff_dt = get_effective_datetime()
+        return eff_dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
     return get_utc_now().isoformat().replace("+00:00", "Z")
 
 def execute_with_retry(query_fn: Callable[[], Any], retries: int = 3, delay: float = 1.0) -> Any:
@@ -143,12 +148,14 @@ def get_orders(
     """
     is_paper = config.limits.is_paper_trading
     query = supabase.table("trade_orders").select(
-        "id, stock_code, action, price, quantity, fee, total_amount, executed_at, realized_pnl, sim_date"
+        "id, stock_code, action, price, quantity, fee, total_amount, executed_at, realized_pnl"
     ).eq("is_paper", is_paper)
 
     if sim_date:
-        # 沙盒模式：用虛擬日期精準過濾
-        query = query.eq("sim_date", sim_date)
+        # 沙盒模式：若無 sim_date 欄位，利用 executed_at 進行台灣當天時間範圍過濾
+        from src.time_manager import get_local_taiwan_midnight_utc_range
+        utc_start, utc_end = get_local_taiwan_midnight_utc_range(sim_date)
+        query = query.gte("executed_at", utc_start).lte("executed_at", utc_end)
     else:
         # 真實操盤：用真實 UTC 時間戳範圍過濾
         if start_date:
@@ -177,9 +184,8 @@ def execute_trade_transaction(order_detail: Dict[str, Any]) -> Dict[str, Any]:
         "total_amount": order_detail["totalAmount"],
         "realized_pnl": order_detail.get("realizedPnl", 0.0),
         "is_paper": is_paper,
-        "executed_at": _get_current_time_iso(),
-        # sim_date：沙盒模擬虛擬日期，真實操盤時為 None（存入 DB 為 NULL）
-        "sim_date": order_detail.get("simDate", None)
+        "executed_at": _get_current_time_iso()
+        # sim_date 欄位已從資料庫中移除，改以 executed_at 的模擬時間做為關聯與過濾基準
     }
 
     inserted_order = execute_with_retry(
@@ -280,9 +286,8 @@ def log_system_event(
             "level": level,
             "message": message,
             "details": details,
-            "created_at": timestamp,
-            # sim_date：沙盒模式下記錄虛擬日期，真實操盤為 NULL
-            "sim_date": sim_date
+            "created_at": timestamp
+            # sim_date 欄位已從資料庫中移除，日誌統一使用實際時間 created_at，模擬訊息已寫在 message 中
         }).execute()
     except Exception as err:
         print(f"[Supabase Log Error] 無法寫入日誌到資料庫: {str(err)}")
