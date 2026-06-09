@@ -746,6 +746,48 @@
 <body>
     <!-- Toast 通知容器 -->
     <div id="toast-container"></div>
+
+    <!-- 鎖定畫面 Overlay -->
+    <div id="lock-screen" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(5, 8, 16, 0.95); backdrop-filter: blur(25px); -webkit-backdrop-filter: blur(25px); z-index: 99999; display: flex; align-items: center; justify-content: center;">
+        <div class="glass-card" style="width: 100%; max-width: 420px; padding: 40px 30px; text-align: center; border-color: rgba(99, 102, 241, 0.25); box-shadow: 0 0 40px rgba(99, 102, 241, 0.15);">
+            <div style="width: 64px; height: 64px; border-radius: 50%; background: rgba(99, 102, 241, 0.1); border: 1px solid rgba(99, 102, 241, 0.2); display: flex; align-items: center; justify-content: center; margin: 0 auto 24px auto; color: var(--color-primary);">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+            </div>
+            
+            <h2 style="font-family: var(--font-display); font-size: 24px; font-weight: 700; margin-bottom: 8px; background: linear-gradient(135deg, #ffffff 40%, #a5b4fc 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">安全雙重驗證</h2>
+            <p style="color: var(--text-secondary); font-size: 14px; line-height: 1.6; margin-bottom: 30px;" id="lock-screen-desc">請輸入 Google Authenticator 的 6 位數動態驗證碼以解鎖主控台。</p>
+            
+            <!-- 驗證碼登入表單 -->
+            <div id="verify-form-group">
+                <input type="text" class="form-control" id="totp-code" placeholder="000000" maxlength="6" style="text-align: center; font-size: 24px; font-weight: 700; letter-spacing: 6px; padding: 12px; margin-bottom: 20px; font-family: monospace;" onkeyup="if(this.value.length===6) submitTOTP()">
+                <button class="btn btn-primary" style="width: 100%; padding: 12px; font-size: 15px;" onclick="submitTOTP()">驗證並登入</button>
+                <div style="margin-top: 20px;">
+                    <a href="javascript:void(0)" onclick="showSetupForm()" style="color: var(--color-primary); font-size: 13px; text-decoration: none; font-weight: 500;">首次設定 / 綁定 Google Authenticator</a>
+                </div>
+            </div>
+
+            <!-- 首次設定表單 -->
+            <div id="setup-form-group" style="display: none;">
+                <div id="setup-master-key-input">
+                    <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 16px; text-align: left;">請輸入您的後端 Master Key（設定於 config.json 或 MASTER_KEY 環境變數中）：</p>
+                    <input type="password" class="form-control" id="setup-master-key" placeholder="輸入 Master Key" style="text-align: center; margin-bottom: 16px;">
+                    <button class="btn btn-primary" style="width: 100%; margin-bottom: 12px;" onclick="submitSetupKey()">驗證 Master Key</button>
+                    <button class="btn btn-secondary" style="width: 100%;" onclick="hideSetupForm()">返回登入</button>
+                </div>
+                
+                <div id="setup-qrcode-display" style="display: none; flex-direction: column; align-items: center;">
+                    <p style="color: var(--text-secondary); font-size: 13px; margin-bottom: 16px; line-height: 1.6;">請使用手機打開 Google Authenticator 或其他 OTP 軟體，掃描以下 QR Code，或手動輸入金鑰綁定：</p>
+                    <div style="background: white; padding: 12px; border-radius: 8px; margin-bottom: 16px; display: inline-block;">
+                        <img id="setup-qrcode-img" src="" width="180" height="180" alt="QR Code" style="display: block;">
+                    </div>
+                    <div style="background: rgba(255,255,255,0.04); border: 1px solid var(--glass-border); padding: 8px 16px; border-radius: 8px; margin-bottom: 24px; font-family: monospace; font-size: 14px; letter-spacing: 1px; color: var(--color-warning);">
+                        金鑰: <span id="setup-secret-key">----</span>
+                    </div>
+                    <button class="btn btn-primary" style="width: 100%;" onclick="hideSetupForm()">我已完成綁定，去登入</button>
+                </div>
+            </div>
+        </div>
+    </div>
     <!-- 氛圍流光元素 -->
     <div class="ambient-glows">
         <div class="glow-sphere glow-sphere-1"></div>
@@ -1054,17 +1096,174 @@
             return STOCK_NAMES[code] ? ` ${STOCK_NAMES[code]}` : "";
         }
 
+        // --- Session 與認證驗證 Token 處理器 ---
+        function getSessionToken() {
+            return localStorage.getItem("totp_session_token");
+        }
+
+        function setSessionToken(token) {
+            localStorage.setItem("totp_session_token", token);
+        }
+
+        function clearSessionToken() {
+            localStorage.removeItem("totp_session_token");
+        }
+
+        // 包裝 fetch 自動加上 Authorization 標頭，並在 401 時顯示鎖定畫面
+        async function authFetch(url, options = {}) {
+            const token = getSessionToken();
+            if (!options.headers) {
+                options.headers = {};
+            }
+            if (token) {
+                options.headers["Authorization"] = `Bearer ${token}`;
+            }
+            
+            try {
+                const response = await fetch(url, options);
+                if (response.status === 401) {
+                    clearSessionToken();
+                    showLockScreen();
+                }
+                return response;
+            } catch (err) {
+                console.error("連線錯誤:", err);
+                throw err;
+            }
+        }
+
+        function showLockScreen() {
+            document.getElementById("lock-screen").style.display = "flex";
+            document.getElementById("totp-code").focus();
+        }
+
+        function hideLockScreen() {
+            document.getElementById("lock-screen").style.display = "none";
+        }
+
+        // 提交驗證碼
+        async function submitTOTP() {
+            const codeInput = document.getElementById("totp-code");
+            const code = codeInput.value.trim();
+            if (!code || code.length !== 6) {
+                showToast("請輸入 6 位數驗證碼", "error");
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/auth/verify`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ code: code })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    setSessionToken(data.token);
+                    hideLockScreen();
+                    showToast("驗證成功，歡迎使用！", "success");
+                    
+                    // 驗證成功後載入所有資料
+                    fetchPresets();
+                    fetchStatus();
+                    fetchWatchlist();
+                    fetchConfig();
+                    loadLogs();
+                    
+                    codeInput.value = "";
+                } else {
+                    const err = await response.json();
+                    showToast(err.detail || "驗證失敗，請再試一次", "error");
+                    codeInput.value = "";
+                    codeInput.focus();
+                }
+            } catch (err) {
+                console.error(err);
+                showToast("連線伺服器時發生錯誤", "error");
+            }
+        }
+
+        // 顯示設定表單
+        function showSetupForm() {
+            document.getElementById("verify-form-group").style.display = "none";
+            document.getElementById("setup-form-group").style.display = "block";
+            document.getElementById("setup-master-key-input").style.display = "block";
+            document.getElementById("setup-qrcode-display").style.display = "none";
+            document.getElementById("lock-screen-desc").textContent = "首次設定 Google Authenticator 二階段驗證";
+            document.getElementById("setup-master-key").focus();
+        }
+
+        // 隱藏設定表單
+        function hideSetupForm() {
+            document.getElementById("verify-form-group").style.display = "block";
+            document.getElementById("setup-form-group").style.display = "none";
+            document.getElementById("lock-screen-desc").textContent = "請輸入 Google Authenticator 的 6 位數動態驗證碼以解鎖主控台。";
+            document.getElementById("totp-code").focus();
+        }
+
+        // 提交 Master Key 以獲取 setup secret
+        async function submitSetupKey() {
+            const keyInput = document.getElementById("setup-master-key");
+            const masterKey = keyInput.value.trim();
+            if (!masterKey) {
+                showToast("請輸入 Master Key", "error");
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/auth/setup`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ master_key: masterKey })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    
+                    document.getElementById("setup-master-key-input").style.display = "none";
+                    document.getElementById("setup-qrcode-display").style.display = "flex";
+                    document.getElementById("setup-secret-key").textContent = data.secret;
+                    
+                    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(data.url)}`;
+                    document.getElementById("setup-qrcode-img").src = qrUrl;
+                    
+                    keyInput.value = "";
+                } else {
+                    const err = await response.json();
+                    showToast(err.detail || "Master Key 驗證失敗", "error");
+                }
+            } catch (err) {
+                console.error(err);
+                showToast("連線伺服器時發生錯誤", "error");
+            }
+        }
+
         // 頁面加載完成後的初始化
         window.addEventListener("DOMContentLoaded", () => {
-            fetchPresets();
-            fetchStatus();
-            fetchWatchlist();
-            fetchConfig();
-            loadLogs();
+            const token = getSessionToken();
+            if (!token) {
+                showLockScreen();
+            } else {
+                hideLockScreen();
+                fetchPresets();
+                fetchStatus();
+                fetchWatchlist();
+                fetchConfig();
+                loadLogs();
+            }
 
-            // 定時刷新：狀態 8 秒，日誌 10 秒，分析範疇 12 秒
-            setInterval(fetchStatus, 8000);
-            setInterval(loadLogs, 10000);
+            // 定時刷新：狀態 8 秒，日誌 10 秒
+            setInterval(() => {
+                if (getSessionToken()) {
+                    fetchStatus();
+                }
+            }, 8000);
+            
+            setInterval(() => {
+                if (getSessionToken()) {
+                    loadLogs();
+                }
+            }, 10000);
         });
 
         // Toast 輕量通知（替代 alert）
@@ -1090,8 +1289,8 @@
         // 獲取狀態資料
         async function fetchStatus() {
             try {
-                const response = await fetch(`${API_BASE}/api/status`);
-                if (!response.ok) throw new Error("API 狀態加載失敗");
+                const response = await authFetch(`${API_BASE}/api/status`);
+                if (!response.ok) return;
                 
                 const data = await response.json();
                 
@@ -1254,9 +1453,11 @@
         // 獲取自選股
         async function fetchWatchlist() {
             try {
-                const response = await fetch(`${API_BASE}/api/watchlist`);
+                const response = await authFetch(`${API_BASE}/api/watchlist`);
+                if (!response.ok) return;
                 const data = await response.json();
                 const watchlistDetails = data.watchlist_details || [];
+                currentWatchlist = data.watchlist || [];
                 
                 const tagsEl = document.getElementById("watchlist-tags");
                 tagsEl.innerHTML = "";
@@ -1278,13 +1479,13 @@
             }
         }
 
-
         let presets = {};
 
         // 從 API 載入預設股群
         async function fetchPresets() {
             try {
-                const response = await fetch(`${API_BASE}/api/presets`);
+                const response = await authFetch(`${API_BASE}/api/presets`);
+                if (!response.ok) return;
                 presets = await response.json();
                 
                 const container = document.getElementById("preset-buttons-container");
@@ -1313,7 +1514,6 @@
             const codes = preset.codes;
             const name = preset.name;
 
-            // 只追加尚未在自選股中的標的，不覆蓋現有清單
             const toAdd = codes.filter(c => !currentWatchlist.includes(c));
 
             if (toAdd.length === 0) {
@@ -1323,7 +1523,7 @@
 
             try {
                 for (const newCode of toAdd) {
-                    await fetch(`${API_BASE}/api/watchlist`, {
+                    await authFetch(`${API_BASE}/api/watchlist`, {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ stock_code: newCode })
@@ -1345,7 +1545,7 @@
             if (!code) return;
             
             try {
-                const response = await fetch(`${API_BASE}/api/watchlist`, {
+                const response = await authFetch(`${API_BASE}/api/watchlist`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ stock_code: code })
@@ -1368,7 +1568,7 @@
         async function removeWatchlist(code) {
             if (!confirm(`確定要將 ${code} 自自選股清單移除嗎？`)) return;
             try {
-                const response = await fetch(`${API_BASE}/api/watchlist/${code}`, {
+                const response = await authFetch(`${API_BASE}/api/watchlist/${code}`, {
                     method: "DELETE"
                 });
                 if (response.ok) {
@@ -1394,7 +1594,7 @@
             let removed = 0, failed = 0;
             for (const code of [...currentWatchlist]) {
                 try {
-                    const res = await fetch(`${API_BASE}/api/watchlist/${code}`, { method: "DELETE" });
+                    const res = await authFetch(`${API_BASE}/api/watchlist/${code}`, { method: "DELETE" });
                     if (res.ok) removed++;
                     else failed++;
                 } catch { failed++; }
@@ -1413,7 +1613,8 @@
         // 讀取設定值
         async function fetchConfig() {
             try {
-                const response = await fetch(`${API_BASE}/api/config`);
+                const response = await authFetch(`${API_BASE}/api/config`);
+                if (!response.ok) return;
                 const data = await response.json();
                 
                 document.getElementById("cfg-initial-cash").value = data.INITIAL_CASH;
@@ -1440,7 +1641,7 @@
             const sandboxEnd = document.getElementById("cfg-sandbox-end").value;
 
             try {
-                const response = await fetch(`${API_BASE}/api/config`, {
+                const response = await authFetch(`${API_BASE}/api/config`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
@@ -1472,16 +1673,13 @@
         // 載入系統日誌
         async function loadLogs() {
             try {
-                const response = await fetch(`${API_BASE}/api/logs`);
+                const response = await authFetch(`${API_BASE}/api/logs`);
+                if (!response.ok) return;
                 const logs = await response.json();
                 
                 const consoleEl = document.getElementById("log-console");
-                // 記錄目前是否滾動到底部
-                const isAtBottom = consoleEl.scrollHeight - consoleEl.clientHeight <= consoleEl.scrollTop + 50;
-
                 consoleEl.innerHTML = "";
                 
-                // 反轉陣列：API 回傳最新在前，reverse 後最舊在上、最新在下，符合終端機閱讀習慣
                 const orderedLogs = [...logs].reverse();
                 
                 orderedLogs.forEach(log => {
@@ -1499,7 +1697,6 @@
                     consoleEl.appendChild(line);
                 });
 
-                // 每次重新載入後，自動滾動到最底部（最新的 log）
                 consoleEl.scrollTop = consoleEl.scrollHeight;
             } catch (err) {
                 console.error("載入日誌失敗:", err);
@@ -1511,9 +1708,10 @@
             if (!confirm("確定要現在立即觸發一輪全自動交易決策嗎？\n(將會透過 Gemini LLM 進行選股配比並嘗試進行下單模擬/真實交易)")) return;
             
             try {
-                const response = await fetch(`${API_BASE}/api/trigger`, {
+                const response = await authFetch(`${API_BASE}/api/trigger`, {
                     method: "POST"
                 });
+                if (!response.ok) return;
                 const data = await response.json();
                 
                 if (data.status === "ok") {
@@ -1540,9 +1738,10 @@
             }
             
             try {
-                const response = await fetch(`${API_BASE}/api/stop`, {
+                const response = await authFetch(`${API_BASE}/api/stop`, {
                     method: "POST"
                 });
+                if (!response.ok) return;
                 const data = await response.json();
                 
                 if (data.status === "ok") {
@@ -1585,14 +1784,14 @@
             }
             
             try {
-                const response = await fetch(`${API_BASE}/api/liquidate`, {
+                const response = await authFetch(`${API_BASE}/api/liquidate`, {
                     method: "POST"
                 });
+                if (!response.ok) return;
                 const data = await response.json();
                 
                 if (data.status === "ok") {
                     showToast(data.message, "success");
-                    // 延遲 1 秒刷新
                     setTimeout(() => {
                         fetchStatus();
                         loadLogs();
@@ -1621,14 +1820,14 @@
             }
             
             try {
-                const response = await fetch(`${API_BASE}/api/sandbox/clear`, {
+                const response = await authFetch(`${API_BASE}/api/sandbox/clear`, {
                     method: "POST"
                 });
+                if (!response.ok) return;
                 const data = await response.json();
                 
                 if (response.ok) {
                     showToast(data.message || "清除成功！", "success");
-                    // 重新載入狀態以同步更新可用現金、資產淨值、持股與歷史訂單
                     fetchStatus();
                     loadLogs();
                 } else {

@@ -47,6 +47,55 @@ def on_startup():
     except Exception as e:
         print(f" [啟動任務] 警告: 自動清理舊日誌失敗: {e}")
 
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from src.services.totp_service import verify_session_token, verify_totp, get_totp_url, get_totp_secret, create_session_token
+
+class VerifyOTPRequest(BaseModel):
+    code: str
+
+class SetupOTPRequest(BaseModel):
+    master_key: str
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    path = request.url.path
+    if path.startswith("/api/") and path not in ["/api/auth/verify", "/api/auth/setup"]:
+        auth_header = request.headers.get("Authorization")
+        token = None
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+            
+        if not token or not verify_session_token(token):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Unauthorized: Invalid or expired session token"}
+            )
+            
+    response = await call_next(request)
+    return response
+
+@app.post("/api/auth/setup")
+def api_setup_otp(payload: SetupOTPRequest):
+    config_master = config.credentials.master_key or "default_master_key"
+    if payload.master_key != config_master:
+        raise HTTPException(status_code=401, detail="驗證失敗：Master Key 不正確")
+    return {
+        "status": "ok",
+        "secret": get_totp_secret(),
+        "url": get_totp_url()
+    }
+
+@app.post("/api/auth/verify")
+def api_verify_otp(payload: VerifyOTPRequest):
+    if verify_totp(payload.code):
+        token = create_session_token()
+        return {
+            "status": "ok",
+            "token": token
+        }
+    raise HTTPException(status_code=401, detail="驗證碼無效或已過期")
+
 # Background runner state
 is_running = False
 is_running_lock = threading.Lock()
