@@ -11,7 +11,7 @@ import time
 from datetime import datetime
 from typing import List
 
-from src.services.stock_fetcher import fetch_stock_klines
+from src.services.stock_fetcher import fetch_stock_klines, fetch_taiex_klines
 from src.services.supabase_client import save_stock_klines
 from src.config import resolve_stock_codes
 
@@ -75,14 +75,22 @@ def main():
     
     total_inserted = 0
 
-    # 2. 雙重迴圈逐股、逐月抓取
-    for code in stock_codes:
-        print(f"\n------------------ 開始下載股票: {code} ------------------")
+    # 2. 雙重迴圈逐股、逐月抓取 (自動將 TAIEX 大盤指數納入)
+    download_targets = list(stock_codes)
+    if "TAIEX" not in download_targets:
+        download_targets.append("TAIEX")
+
+    for code in download_targets:
+        is_taiex = (code == "TAIEX")
+        label = "大盤指數" if is_taiex else "股票"
+        print(f"\n------------------ 開始下載{label}: {code} ------------------")
         for month_str in query_months:
-            print(f"正在從證交所下載 {code} 於 {month_str[:4]}年{month_str[4:6]}月 的數據...")
-            
-            # 呼叫數據擷取器 (已內建 3 秒防被鎖延遲機制)
-            klines = fetch_stock_klines(code, month_str)
+            if is_taiex:
+                print(f"正在從證交所下載大盤加權指數 (TAIEX) 於 {month_str[:4]}年{month_str[4:6]}月 的數據...")
+                klines = fetch_taiex_klines(month_str)
+            else:
+                print(f"正在從證交所下載 {code} 於 {month_str[:4]}年{month_str[4:6]}月 的數據...")
+                klines = fetch_stock_klines(code, month_str)
             
             if klines:
                 # 篩選掉超出使用者指定起訖日期範圍的日 K 線（因為 API 返回整個月）
