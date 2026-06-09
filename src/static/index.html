@@ -1021,6 +1021,39 @@
         const API_BASE = "";
         let currentWatchlist = [];
 
+        const STOCK_NAMES = {
+            "2330": "台積電",
+            "2317": "鴻海",
+            "2454": "聯發科",
+            "2308": "台達電",
+            "2881": "富邦金",
+            "2882": "國泰金",
+            "2891": "中信金",
+            "2886": "兆豐金",
+            "2884": "玉山金",
+            "2303": "聯電",
+            "3711": "日月光投控",
+            "2379": "瑞昱",
+            "2382": "廣達",
+            "3231": "緯創",
+            "2357": "華碩",
+            "3034": "聯詠",
+            "2301": "光寶科",
+            "2356": "英業達",
+            "2449": "京元電",
+            "3045": "台灣大",
+            "2618": "長榮航",
+            "2324": "仁寶",
+            "2883": "凱基金",
+            "3481": "群創",
+            "2353": "宏碁",
+            "9999": "模擬測試股"
+        };
+
+        function getStockName(code) {
+            return STOCK_NAMES[code] ? ` ${STOCK_NAMES[code]}` : "";
+        }
+
         // 頁面加載完成後的初始化
         window.addEventListener("DOMContentLoaded", () => {
             fetchPresets();
@@ -1162,7 +1195,7 @@
                         const pnlSign = h.pnl >= 0 ? "+" : "";
                         
                         row.innerHTML = `
-                            <td class="stock-tag-td"><span>${h.stock_code}</span></td>
+                            <td class="stock-tag-td"><span>${h.stock_code}${h.stock_name ? ' ' + h.stock_name : ''}</span></td>
                             <td class="price-td">${h.quantity.toLocaleString()} 股</td>
                             <td class="price-td">${formatCurrency(h.average_price)}</td>
                             <td class="price-td">${formatCurrency(h.current_price)}</td>
@@ -1201,7 +1234,7 @@
 
                         row.innerHTML = `
                             <td style="font-size:12px; color:var(--text-secondary);">${formattedTime}</td>
-                            <td class="stock-tag-td"><span>${o.stock_code}</span></td>
+                            <td class="stock-tag-td"><span>${o.stock_code}${o.stock_name ? ' ' + o.stock_name : ''}</span></td>
                             <td><span class="pnl-badge ${actionClass}">${actionLabel}</span></td>
                             <td class="price-td">${formatCurrency(o.price)}</td>
                             <td class="price-td">${parseInt(o.quantity).toLocaleString()} 股</td>
@@ -1223,17 +1256,17 @@
             try {
                 const response = await fetch(`${API_BASE}/api/watchlist`);
                 const data = await response.json();
-                currentWatchlist = data.watchlist || [];
+                const watchlistDetails = data.watchlist_details || [];
                 
                 const tagsEl = document.getElementById("watchlist-tags");
                 tagsEl.innerHTML = "";
                 
-                currentWatchlist.forEach(code => {
+                watchlistDetails.forEach(item => {
                     const tag = document.createElement("div");
                     tag.className = "watchlist-tag";
                     tag.innerHTML = `
-                        ${code}
-                        <svg onclick="removeWatchlist('${code}')" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                        ${item.code}${item.name ? ' ' + item.name : ''}
+                        <svg onclick="removeWatchlist('${item.code}')" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
                             <line x1="18" y1="6" x2="6" y2="18"></line>
                             <line x1="6" y1="6" x2="18" y2="18"></line>
                         </svg>

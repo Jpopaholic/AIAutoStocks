@@ -182,3 +182,64 @@ def fetch_realtime_quote(stock_code: str) -> Dict[str, Any]:
     """
     batch_res = fetch_realtime_quotes_batch([stock_code])
     return batch_res.get(stock_code, {})
+
+def fetch_taiex_klines(date_str: str = None) -> List[Dict[str, Any]]:
+    """
+    從台灣證券交易所 (TWSE) 獲取大盤加權指數當月 (或指定日期所在月份) 的歷史 K 線數據。
+    :param date_str: 格式為 YYYYMMDD 的日期字串 (若為 None 則預設為今天)
+    :returns: 清理與格式化後的大盤 K 線數據列表 (以 stockCode 'TAIEX' 表示)
+    """
+    _apply_rate_limit()
+    if not date_str:
+        date_str = datetime.now().strftime("%Y%m%d")
+
+    url = f"https://www.twse.com.tw/indicesReport/MI_5MINS_HIST?response=json&date={date_str}"
+
+    try:
+        response = requests.get(url, timeout=10, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        })
+        response.raise_for_status()
+        data = response.json()
+
+        if data.get("stat") != "OK" or "data" not in data:
+            print(f" [數據擷取器] 無法取得大盤加權指數的 K 線數據，證交所回應: {data.get('stat')}")
+            return []
+
+        klines = []
+        for row in data["data"]:
+            # row 格式: ["日期", "開盤指數", "最高指數", "最低指數", "收盤指數"]
+            try:
+                # 1. 解析與校正民國日期: "115/06/01" -> "2026-06-01"
+                date_parts = row[0].split("/")
+                roc_year = int(date_parts[0])
+                ad_year = roc_year + 1911
+                iso_date = f"{ad_year}-{date_parts[1]}-{date_parts[2]}"
+
+                # 2. 轉換欄位為數值並去除千分位逗號
+                open_val = float(row[1].replace(",", ""))
+                high_val = float(row[2].replace(",", ""))
+                low_val = float(row[3].replace(",", ""))
+                close_val = float(row[4].replace(",", ""))
+
+                # 3. 驗證數據
+                if open_val <= 0 or high_val <= 0 or low_val <= 0 or close_val <= 0:
+                    continue
+
+                klines.append({
+                    "stockCode": "TAIEX",
+                    "date": iso_date,
+                    "open": open_val,
+                    "high": high_val,
+                    "low": low_val,
+                    "close": close_val,
+                    "volume": 0  # 大盤以 0 作為成交股數
+                })
+            except (ValueError, IndexError):
+                continue
+
+        return klines
+    except Exception as e:
+        print(f" [數據擷取器] 擷取大盤加權指數 K 線時發生異常: {str(e)}")
+        return []
+

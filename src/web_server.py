@@ -14,7 +14,7 @@ from pydantic import BaseModel
 # Add workspace directory to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.config import config
+from src.config import config, get_stock_name
 from src.services.supabase_client import (
     get_db_watchlist,
     add_to_db_watchlist,
@@ -181,6 +181,7 @@ def get_status():
                 
                 enhanced_holdings.append({
                     "stock_code": stock_code,
+                    "stock_name": get_stock_name(stock_code),
                     "quantity": qty,
                     "average_price": avg_price,
                     "current_price": current_price,
@@ -194,6 +195,13 @@ def get_status():
         try:
             orders = get_orders()
             orders = orders[:15] # 僅回傳前15筆
+            # 為訂單添加股票名稱
+            enhanced_orders = []
+            for o in orders:
+                o_dict = dict(o)
+                o_dict["stock_name"] = get_stock_name(o_dict["stock_code"])
+                enhanced_orders.append(o_dict)
+            orders = enhanced_orders
         except Exception as e:
             orders = []
             print(f"[Web API] 載入交易訂單失敗: {e}")
@@ -217,20 +225,26 @@ def get_status():
 def api_get_watchlist():
     try:
         watchlist = get_db_watchlist()
-        return {"watchlist": watchlist, "fallback": False}
+        watchlist_details = [{"code": code, "name": get_stock_name(code)} for code in watchlist]
+        return {"watchlist": watchlist, "watchlist_details": watchlist_details, "fallback": False}
     except Exception as e:
         import json
         watchlist_path = os.path.join(os.getcwd(), "watchlist.json")
+        fallback_wl = []
         if os.path.exists(watchlist_path):
             try:
                 with open(watchlist_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     if isinstance(data, list):
-                        return {"watchlist": data, "fallback": True}
+                        fallback_wl = data
             except Exception:
                 pass
-        from src.config import resolve_stock_codes
-        return {"watchlist": resolve_stock_codes("2330,2454"), "fallback": True, "error": str(e)}
+        if not fallback_wl:
+            from src.config import resolve_stock_codes
+            fallback_wl = resolve_stock_codes("2330,2454")
+        
+        watchlist_details = [{"code": code, "name": get_stock_name(code)} for code in fallback_wl]
+        return {"watchlist": fallback_wl, "watchlist_details": watchlist_details, "fallback": True, "error": str(e)}
 
 @app.post("/api/watchlist")
 def api_add_watchlist(item: WatchlistItem):

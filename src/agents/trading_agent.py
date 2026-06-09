@@ -48,7 +48,8 @@ DEFAULT_TRADING_SKILLS = [
     "相對強弱指標 (RSI): 評估短期超買與超賣狀態。RSI > 70 視為超買過熱（注意賣出/拉回），RSI < 30 視為超賣超跌（注意買入分批佈局）。",
     "嚴格風險控制與止損停利: 當帳戶目前持股之跌幅大於 5% 時，必須無條件發送 SELL 決策以停損；當持股獲利達 15% 時，考慮分批停利入袋為安。",
     "資金配置策略: 進行多股投資組合分析時，將資金分配給多個標的以分散風險（不要把雞蛋放在同一個籃子裡）。單筆買入之委託總額限制在可用資金之 20% 以內，遵守全局交易防呆上限，禁止單筆重倉孤注一擲。",
-    "【停損買回冷卻】：若在「近期帳戶交易歷史」中，某檔股票在當天剛剛執行過賣出 (SELL) 且為虧損平倉（即停損），則今日絕對禁止再次對該檔股票發送買入 (BUY) 決策，避免陷入重複追高殺低。"
+    "【停損買回冷卻】：若在「近期帳戶交易歷史」中，某檔股票在當天剛剛執行過賣出 (SELL) 且為虧損平倉（即停損），則今日絕對禁止再次對該檔股票發送買入 (BUY) 決策，避免陷入重複追高殺低。",
+    "【大盤趨勢防禦】：大盤加權指數 (TAIEX) 是整體市場走向的風向球。若大盤指數收盤跌破其 MA20 (即大盤收盤價最近 20 天的簡單移動平均)，代表大盤已步入弱勢或空頭排列，此時應嚴格採取防守策略，原則上禁止買入 (BUY) 新增任何持股或部位（除非個股有極強的置信度與特大個股利多），並應主動減持手上已持有的高風險股票以規避市場崩跌風險；若大盤收盤站穩在 MA20 之上，則可正常執行交易與買入評估。"
 ]
 
 def generate_portfolio_decisions(
@@ -153,9 +154,27 @@ def generate_portfolio_decisions(
     else:
         recent_orders_info = "【近期帳戶交易歷史 (最新 10 筆)】: 尚無近期交易歷史紀錄。"
 
+    # 格式化大盤加權指數最近 30 天 K 線數據
+    taiex_info = ""
+    taiex_klines = klines_map.get("TAIEX", [])
+    if taiex_klines:
+        taiex_recent = taiex_klines[-30:]
+        taiex_lines = []
+        for k in taiex_recent:
+            taiex_lines.append(
+                f"  日期: {k['date']} | 開盤指數: {k['open']:.2f} | 最高指數: {k['high']:.2f} | "
+                f"最低指數: {k['low']:.2f} | 收盤指數: {k['close']:.2f}"
+            )
+        taiex_text = "\n".join(taiex_lines)
+        taiex_info = f"【大盤加權指數 (TAIEX) 最近 30 天日 K 線數據 (最下方為最新一日行情，供您計算大盤 MA20)】：\n{taiex_text}"
+    else:
+        taiex_info = "【大盤加權指數 (TAIEX) 最近 30 天日 K 線數據】：目前無可用的歷史大盤加權指數數據。"
+
     # 格式化各股票最近 30 天日 K 線數據
     klines_sections = []
     for code in stock_codes:
+        if code == "TAIEX":
+            continue
         klines = klines_map.get(code, [])
         recent_klines = klines[-30:]
         klines_lines = []
@@ -172,6 +191,8 @@ def generate_portfolio_decisions(
 
     user_prompt = f"""
 請針對股票列表 {stock_codes} 進行多股投資組合分析與配置決策。
+
+{taiex_info}
 
 {funds_info}
 

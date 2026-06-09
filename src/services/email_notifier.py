@@ -6,7 +6,7 @@ from email.mime.text import MIMEText
 from datetime import date, datetime
 from typing import Dict, List, Any, Optional
 
-from src.config import config
+from src.config import config, get_stock_name
 from src.services.supabase_client import get_orders, get_holdings, log_system_event
 # 由於要動態判斷是沙盒還是真實環境以獲取報價，我們引用 sandbox_simulator
 # 它會自動根據當前系統狀態，透明切換即時報價或歷史模擬報價
@@ -108,9 +108,11 @@ def send_daily_report(ai_outlook: str, override_orders: Optional[List[Dict[str, 
         pnl_color = "#22c55e" if unrealized_pnl >= 0 else "#ef4444"
         pnl_prefix = "+" if unrealized_pnl >= 0 else ""
 
+        stock_name = get_stock_name(stock_code)
+        name_display = f" ({stock_name})" if stock_name else ""
         holdings_rows_html.append(f"""
             <tr style="border-bottom: 1px solid #e2e8f0;">
-                <td style="padding: 10px; font-weight: bold; color: #1e293b;">{stock_code}</td>
+                <td style="padding: 10px; font-weight: bold; color: #1e293b;">{stock_code}{name_display}</td>
                 <td style="padding: 10px; text-align: right;">{qty:,.0f}</td>
                 <td style="padding: 10px; text-align: right;">{avg_price:,.2f}</td>
                 <td style="padding: 10px; text-align: right;">{current_price:,.2f}</td>
@@ -138,9 +140,11 @@ def send_daily_report(ai_outlook: str, override_orders: Optional[List[Dict[str, 
         pnl_text = f"{realized_pnl:+,.0f} 元" if o["action"] == "SELL" else "-"
         pnl_color = "#22c55e" if realized_pnl > 0 else ("#ef4444" if realized_pnl < 0 else "#64748b")
 
+        stock_name = get_stock_name(o['stock_code'])
+        name_display = f" ({stock_name})" if stock_name else ""
         orders_rows_html.append(f"""
             <tr style="border-bottom: 1px solid #e2e8f0;">
-                <td style="padding: 10px; color: #1e293b; font-weight: bold;">{o['stock_code']}</td>
+                <td style="padding: 10px; color: #1e293b; font-weight: bold;">{o['stock_code']}{name_display}</td>
                 <td style="padding: 10px; text-align: center;"><span style="background-color: {action_bg}; color: {action_color}; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold;">{action_label}</span></td>
                 <td style="padding: 10px; text-align: right;">{float(o['price']):,.2f}</td>
                 <td style="padding: 10px; text-align: right;">{float(o['quantity']):,.0f}</td>

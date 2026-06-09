@@ -463,3 +463,69 @@ config = AppConfig(
     gemini_api_keys=gemini_api_keys,
     gemini_model=_gemini_model
 )
+
+# 股票代號至名稱映射對照表 (供 Web 端及 Email 報表使用)
+STOCK_NAMES = {
+    "2330": "台積電",
+    "2317": "鴻海",
+    "2454": "聯發科",
+    "2308": "台達電",
+    "2881": "富邦金",
+    "2882": "國泰金",
+    "2891": "中信金",
+    "2886": "兆豐金",
+    "2884": "玉山金",
+    "2303": "聯電",
+    "3711": "日月光投控",
+    "2379": "瑞昱",
+    "2382": "廣達",
+    "3231": "緯創",
+    "2357": "華碩",
+    "3034": "聯詠",
+    "2301": "光寶科",
+    "2356": "英業達",
+    "2449": "京元電",
+    "3045": "台灣大",
+    "2618": "長榮航",
+    "2324": "仁寶",
+    "2883": "凱基金",
+    "3481": "群創",
+    "2353": "宏碁",
+    "9999": "模擬測試股"
+}
+
+_dynamic_stock_names = {}
+
+def get_stock_name(stock_code: str) -> str:
+    """
+    獲取股票代號對應的中文簡稱名稱。若不在對照表中，則從台灣證券交易所 API 動態查詢並快取。
+    """
+    clean_code = str(stock_code).strip()
+    if not clean_code:
+        return ""
+        
+    if clean_code in STOCK_NAMES:
+        return STOCK_NAMES[clean_code]
+        
+    if clean_code in _dynamic_stock_names:
+        return _dynamic_stock_names[clean_code]
+        
+    # 動態自證交所即時資訊 API 查詢名稱
+    try:
+        import requests
+        url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_{clean_code}.tw|otc_{clean_code}.tw"
+        response = requests.get(url, timeout=3, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        })
+        if response.status_code == 200:
+            data = response.json()
+            if "msgArray" in data and len(data["msgArray"]) > 0:
+                name = data["msgArray"][0].get("n", "").strip()
+                if name:
+                    _dynamic_stock_names[clean_code] = name
+                    print(f" [配置管理] 成功動態獲取自訂股票 {clean_code} 名稱: {name}")
+                    return name
+    except Exception as e:
+        print(f" [配置管理] 警告: 無法動態查詢股票 {clean_code} 名稱: {e}")
+        
+    return ""

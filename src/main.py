@@ -69,24 +69,85 @@ def run_live_trading_job(stock_codes: List[str]) -> None:
     except Exception as h_err:
         print(f" [排程引擎] 警告: 獲取目前持股以合併分析標的時發生異常: {str(h_err)}")
 
+    # A-0. 抓取大盤加權指數 (TAIEX) 的最新 K 線歷史數據並儲存
+    from datetime import timedelta
+    try:
+        print(" [排程引擎] 正在獲取大盤加權指數 (TAIEX) 的最新 K 線歷史數據...")
+        taiex_klines = stock_fetcher.fetch_taiex_klines()
+        # 同步抓取前一個月以避免月份交替時的資料斷層
+        prev_date = (tw_now - timedelta(days=30)).strftime("%Y%m%d")
+        prev_taiex_klines = stock_fetcher.fetch_taiex_klines(prev_date)
+        all_taiex = taiex_klines + prev_taiex_klines
+        
+        if all_taiex:
+            supabase_client.save_stock_klines(all_taiex)
+            print(f" [排程引擎] 成功儲存 {len(all_taiex)} 筆大盤 K 線數據至資料庫")
+        else:
+            print(" [排程引擎] 警告: 未能獲取大盤加權指數的最新 K 線。")
+    except Exception as taiex_err:
+        print(f" [排程引擎] 警告: 獲取大盤 K 線數據時發生異常: {str(taiex_err)}")
+
     klines_map = {}
     
-    # A. 抓取所有股票的最新日 K 線數據
+    # A. 抓取所有股票的最新日 K 線數據，並自資料庫載入完整的歷史 K 線 (最新 100 筆)
     for stock_code in stock_codes:
         try:
             print(f" [排程引擎] 正在獲取 {stock_code} 的最新 K 線歷史數據...")
             klines = stock_fetcher.fetch_stock_klines(stock_code)
-            if not klines:
-                print(f" [排程引擎] 警告: 未能獲取 {stock_code} 的 K 線，跳過此股票。")
-                continue
+            if klines:
+                # 將最新 K 線儲存至 Supabase 作為歷史備份
+                supabase_client.save_stock_klines(klines)
+            else:
+                print(f" [排程引擎] 警告: 未能自 API 獲取 {stock_code} 的 K 線，將嘗試僅從資料庫載入歷史。")
 
-            # 將最新 K 線儲存至 Supabase 作為歷史備份
-            supabase_client.save_stock_klines(klines)
-            klines_map[stock_code] = klines
+            # 從資料庫載入完整 100 筆 K 線以防月份交替斷層
+            db_klines = supabase_client.get_stock_klines(stock_code, limit=100)
+            if not db_klines:
+                print(f" [排程引擎] 錯誤: 資料庫中亦無 {stock_code} 的 K 線，跳過該股票。")
+                continue
+                
+            formatted = []
+            for k in db_klines:
+                formatted.append({
+                    "stockCode": k["stock_code"],
+                    "date": str(k["date"]),
+                    "open": float(k["open"]),
+                    "high": float(k["high"]),
+                    "low": float(k["low"]),
+                    "close": float(k["close"]),
+                    "volume": int(k["volume"] or 0)
+                })
+            # 按日期升序排序
+            formatted.sort(key=lambda x: x["date"])
+            klines_map[stock_code] = formatted
         except Exception as e:
-            err_msg = f"獲取 {stock_code} 的 K 線數據時發生錯誤: {str(e)}"
+            err_msg = f"處理 {stock_code} 的 K 線數據時發生錯誤: {str(e)}"
             print(f" [排程引擎] {err_msg}")
             supabase_client.log_system_event("ERROR", err_msg)
+
+    # A-idx. 從資料庫讀取大盤加權指數的歷史 K 線 (最新 100 筆)
+    try:
+        db_taiex = supabase_client.get_stock_klines("TAIEX", limit=100)
+        if db_taiex:
+            formatted_taiex = []
+            for k in db_taiex:
+                formatted_taiex.append({
+                    "stockCode": k["stock_code"],
+                    "date": str(k["date"]),
+                    "open": float(k["open"]),
+                    "high": float(k["high"]),
+                    "low": float(k["low"]),
+                    "close": float(k["close"]),
+                    "volume": int(k["volume"] or 0)
+                })
+            formatted_taiex.sort(key=lambda x: x["date"])
+            klines_map["TAIEX"] = formatted_taiex
+            print(f" [排程引擎] 已成功自資料庫載入 {len(formatted_taiex)} 筆大盤 (TAIEX) 數據並寫入 klines_map")
+        else:
+            print(" [排程引擎] 警告: 資料庫中無大盤 (TAIEX) 的歷史數據")
+    except Exception as taiex_db_err:
+        print(f" [排程引擎] 警告: 自資料庫讀取大盤歷史數據失敗: {str(taiex_db_err)}")
+
 
     if not klines_map:
         print(" [排程引擎] 錯誤: 未能獲取任何股票的 K 線數據，結束排程任務。")
@@ -100,11 +161,14 @@ def run_live_trading_job(stock_codes: List[str]) -> None:
         holdings = []
 
     # C. 呼叫 AI 交易決策代理生成多股聯合配置決策
+    # TAIEX 只作為大盤參考數據傳入 klines_map，但不列入決策 stock_codes
+    from src.config import get_stock_name
+    ai_stock_codes = [c for c in klines_map.keys() if c != "TAIEX"]
     ai_outlook_details = []
     try:
-        print(f" [排程引擎] 呼叫 AI 決策代理分析投資組合 {list(klines_map.keys())}...")
+        print(f" [排程引擎] 呼叫 AI 決策代理分析投資組合 {ai_stock_codes}...")
         portfolio_decision = trading_agent.generate_portfolio_decisions(
-            stock_codes=list(klines_map.keys()),
+            stock_codes=ai_stock_codes,
             klines_map=klines_map,
             current_holdings=holdings
         )
@@ -118,16 +182,21 @@ def run_live_trading_job(stock_codes: List[str]) -> None:
     # D. 執行模擬或真實證券下單 (由 PAPER_TRADING_MODE 決定)
     for d in decisions:
         stock_code = (d.get("stock_code") or d.get("stockCode")) if isinstance(d, dict) else getattr(d, "stock_code", getattr(d, "stockCode", None))
+        # TAIEX 僅作大盤參考，不應出現在決策輸出中，直接跳過
+        if stock_code == "TAIEX":
+            continue
         action = d.get("action") if isinstance(d, dict) else d.action
         price = d.get("price") if isinstance(d, dict) else d.price
         quantity = float(d.get("quantity") if isinstance(d, dict) else d.quantity)
         reason = d.get("reason") if isinstance(d, dict) else d.reason
+        stock_name = get_stock_name(stock_code)
+        display_code = f"{stock_code} {stock_name}" if stock_name else stock_code
 
-        print(f"   - AI 決策 [{stock_code}]: {action} | 價格: {price} | 數量: {quantity}")
+        print(f"   - AI 決策 [{display_code}]: {action} | 價格: {price} | 數量: {quantity}")
         print(f"   - 決策理由: {reason}")
 
         ai_outlook_details.append(
-            f"股票代號 {stock_code}: AI 決策為 {action}，"
+            f"股票 {display_code}: AI 決策為 {action}，"
             f"委託價格 {price} 元，數量 {quantity:.0f} 股。\n"
             f"決策依據: {reason}"
         )
@@ -215,6 +284,11 @@ def run_sandbox_simulation(stock_codes: List[str], start_date: str, end_date: st
             if klines:
                 klines_map[stock_code] = klines
 
+        # 獲取大盤加權指數 (TAIEX) 的模擬 K 線數據
+        taiex_klines = sandbox_simulator.fetch_stock_klines("TAIEX")
+        if taiex_klines:
+            klines_map["TAIEX"] = taiex_klines
+
         if not klines_map:
             # 時間軸推進
             next_day = sandbox_simulator.advance_simulation_step()
@@ -231,10 +305,12 @@ def run_sandbox_simulation(stock_codes: List[str], start_date: str, end_date: st
         # 取得目前的模擬持股
         holdings = supabase_client.get_holdings()
 
-        # 生成交易決策
+        # 生成交易決策 (TAIEX 只作大盤參考，不列入決策 stock_codes)
+        from src.config import get_stock_name as _get_name
+        ai_stock_codes = [c for c in klines_map.keys() if c != "TAIEX"]
         try:
             portfolio_decision = trading_agent.generate_portfolio_decisions(
-                stock_codes=list(klines_map.keys()),
+                stock_codes=ai_stock_codes,
                 klines_map=klines_map,
                 current_holdings=holdings
             )
@@ -246,16 +322,21 @@ def run_sandbox_simulation(stock_codes: List[str], start_date: str, end_date: st
         # 執行模擬下單
         for d in decisions:
             stock_code = (d.get("stock_code") or d.get("stockCode")) if isinstance(d, dict) else getattr(d, "stock_code", getattr(d, "stockCode", None))
+            # TAIEX 僅大盤參考，跳過
+            if stock_code == "TAIEX":
+                continue
             action = d.get("action") if isinstance(d, dict) else d.action
             price = d.get("price") if isinstance(d, dict) else d.price
             quantity = float(d.get("quantity") if isinstance(d, dict) else d.quantity)
             reason = d.get("reason") if isinstance(d, dict) else d.reason
+            stock_name = _get_name(stock_code)
+            display_code = f"{stock_code} {stock_name}" if stock_name else stock_code
 
-            print(f"  AI 決策 [{stock_code}]: {action} | 價格: {price} | 數量: {quantity}")
+            print(f"  AI 決策 [{display_code}]: {action} | 價格: {price} | 數量: {quantity}")
             print(f"  原因: {reason}")
 
             ai_outlook_details.append(
-                f"股票 {stock_code}: AI 決策 {action} (價格 {price}, 股數 {quantity})。\n"
+                f"股票 {display_code}: AI 決策 {action} (價格 {price}, 股數 {quantity})。\n"
                 f"理由: {reason}"
             )
 
