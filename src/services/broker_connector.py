@@ -195,32 +195,38 @@ def place_order(stock_code: str, action: str, price: float, quantity: float) -> 
                     log_system_event("ERROR", f"模擬平倉帳務計算失敗: {str(e)}")
                     raise
  
-            order_detail = {
-                "stockCode": stock_code,
-                "action": action,
-                "price": price,
-                "quantity": quantity,
-                "fee": fee,
-                "totalAmount": total_amount,
-                "realizedPnl": realized_pnl
-            }
- 
-            try:
-                # 寫入模擬平倉帳務與交易訂單
-                db_result = execute_trade_transaction(order_detail)
-                
-                log_system_event(
-                    "INFO", 
-                    f"【模擬交易】已成功執行: {action} {stock_code} | 成交價: {price} | 股數: {quantity} | 損益: {realized_pnl:,.0f} 元"
-                )
-                
-                # 詳細記錄 Raw Log 供日後審計
-                _write_raw_order_log(order_detail, {"status": "SUCCESS", "mode": "PAPER", "db_id": db_result.get("id")})
-                
-                return db_result
-            except Exception as e:
-                log_system_event("ERROR", f"模擬交易資料庫寫入異常: {str(e)}")
-                raise
+        # 取得目前沙盒虛擬日期（如有）
+        from src.services.sandbox_simulator import is_simulation_active, get_current_sim_date
+        current_sim_date = get_current_sim_date() if is_simulation_active() else None
+
+        order_detail = {
+            "stockCode": stock_code,
+            "action": action,
+            "price": price,
+            "quantity": quantity,
+            "fee": fee,
+            "totalAmount": total_amount,
+            "realizedPnl": realized_pnl,
+            "simDate": current_sim_date  # 沙盒模式為虛擬日期，真實操盤為 None
+        }
+
+        try:
+            # 寫入模擬平倉帳務與交易訂單
+            db_result = execute_trade_transaction(order_detail)
+            
+            log_system_event(
+                "INFO", 
+                f"【模擬交易】已成功執行: {action} {stock_code} | 成交價: {price} | 股數: {quantity} | 損益: {realized_pnl:,.0f} 元",
+                sim_date=current_sim_date
+            )
+            
+            # 詳細記錄 Raw Log 供日後審計
+            _write_raw_order_log(order_detail, {"status": "SUCCESS", "mode": "PAPER", "db_id": db_result.get("id")})
+            
+            return db_result
+        except Exception as e:
+            log_system_event("ERROR", f"模擬交易資料庫寫入異常: {str(e)}", sim_date=current_sim_date)
+            raise
         else:
             # ================= 真實交易模式 (Real Trading) =================
             try:

@@ -1481,7 +1481,10 @@
 
                 consoleEl.innerHTML = "";
                 
-                logs.forEach(log => {
+                // 反轉陣列：API 回傳最新在前，reverse 後最舊在上、最新在下，符合終端機閱讀習慣
+                const orderedLogs = [...logs].reverse();
+                
+                orderedLogs.forEach(log => {
                     const line = document.createElement("div");
                     line.className = "log-line";
                     
@@ -1496,10 +1499,8 @@
                     consoleEl.appendChild(line);
                 });
 
-                // 如果原本在底部，則自動保持在底部
-                if (isAtBottom) {
-                    consoleEl.scrollTop = consoleEl.scrollHeight;
-                }
+                // 每次重新載入後，自動滾動到最底部（最新的 log）
+                consoleEl.scrollTop = consoleEl.scrollHeight;
             } catch (err) {
                 console.error("載入日誌失敗:", err);
             }

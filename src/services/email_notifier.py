@@ -52,25 +52,39 @@ def send_daily_report(ai_outlook: str, override_orders: Optional[List[Dict[str, 
     :param ai_outlook: AI 針對今日交易的反思或明日台股的分析預測
     :param override_orders: 手動指定交易訂單列表（主要用於下車平倉報告，防止時區或沙盒時間軸不對而漏載）
     """
-    today_str = date.today().isoformat()
-    sim_active = sandbox_simulator.is_simulation_active()
-    
+    from datetime import timezone
+
     is_liquidation = override_orders is not None
-    # 若為下車清倉模式，我們將日期標記顯示為真實系統當前時間
-    current_date_label = (
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S") if is_liquidation
-        else (sandbox_simulator.get_current_sim_date() if sim_active else today_str)
-    )
-    
+    sim_active = sandbox_simulator.is_simulation_active()
+
+    # ── 日期標籤：Email 標題顯示用 ──────────────────────────────────────────────
+    if is_liquidation:
+        # 下車清倉：顯示真實台北時間（含時分秒）
+        current_date_label = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    elif sim_active:
+        # 沙盒演練：顯示模擬（虛擬）日期，讓收件者知道這是哪一天的回測結果
+        current_date_label = sandbox_simulator.get_current_sim_date()
+    else:
+        # 真實操盤：顯示真實台北日期
+        current_date_label = datetime.now().strftime("%Y-%m-%d")
+
+    # ── 訂單查詢：永遠用真實 UTC 日期過濾，因為 Supabase executed_at 存的是 UTC ─
+    # 不論是沙盒還是真實模式，寫入 DB 的 executed_at 都是真實 UTC 時間戳
+    utc_today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
     # 1. 取得今日交易訂單
     if override_orders is not None:
         today_orders = override_orders
     else:
         try:
-            # 開始日期設定為今日凌晨
-            orders = get_orders(start_date=f"{current_date_label}T00:00:00Z")
-            # 只保留今天執行的訂單 (比對日期前十碼 YYYY-MM-DD)
-            today_orders = [o for o in orders if o["executed_at"].startswith(current_date_label)]
+            if sim_active:
+                # 【沙盒模式】：取今天（真實 UTC）在本次模擬中下的所有訂單
+                orders = get_orders(start_date=f"{utc_today}T00:00:00Z")
+                today_orders = [o for o in orders if o["executed_at"].startswith(utc_today)]
+            else:
+                # 【真實操盤】：取今天（真實 UTC）的所有真實下單紀錄
+                orders = get_orders(start_date=f"{utc_today}T00:00:00Z")
+                today_orders = [o for o in orders if o["executed_at"].startswith(utc_today)]
         except Exception as e:
             print(f" [郵件通知器] 無法取得今日交易紀錄: {str(e)}")
             today_orders = []

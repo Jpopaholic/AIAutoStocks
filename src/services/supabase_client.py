@@ -129,19 +129,31 @@ def get_holdings() -> List[Dict[str, Any]]:
         .execute()
     )
 
-def get_orders(start_date: Optional[str] = None, end_date: Optional[str] = None) -> List[Dict[str, Any]]:
+def get_orders(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    sim_date: Optional[str] = None
+) -> List[Dict[str, Any]]:
     """
     取得特定時間區間內的交易訂單。
+    :param start_date: 依真實 executed_at 篩選起始時間（真實操盤模式用）
+    :param end_date: 依真實 executed_at 篩選結束時間
+    :param sim_date: 依沙盒虛擬日期精準篩選（如 '2026-05-05'，沙盒模式用）
     """
     is_paper = config.limits.is_paper_trading
     query = supabase.table("trade_orders").select(
-        "id, stock_code, action, price, quantity, fee, total_amount, executed_at, realized_pnl"
+        "id, stock_code, action, price, quantity, fee, total_amount, executed_at, realized_pnl, sim_date"
     ).eq("is_paper", is_paper)
 
-    if start_date:
-        query = query.gte("executed_at", start_date)
-    if end_date:
-        query = query.lte("executed_at", end_date)
+    if sim_date:
+        # 沙盒模式：用虛擬日期精準過濾
+        query = query.eq("sim_date", sim_date)
+    else:
+        # 真實操盤：用真實 UTC 時間戳範圍過濾
+        if start_date:
+            query = query.gte("executed_at", start_date)
+        if end_date:
+            query = query.lte("executed_at", end_date)
 
     return execute_with_retry(
         lambda: query.order("executed_at", desc=True).execute()
@@ -150,6 +162,7 @@ def get_orders(start_date: Optional[str] = None, end_date: Optional[str] = None)
 def execute_trade_transaction(order_detail: Dict[str, Any]) -> Dict[str, Any]:
     """
     寫入一筆新的交易訂單，並自動更新或刪除持股明細（封裝交易與帳務計算）。
+    order_detail 可含 'simDate' 欄位（沙盒模式下傳入虛擬日期字串，如 '2026-05-05'）。
     """
     is_paper = config.limits.is_paper_trading
 
@@ -163,7 +176,9 @@ def execute_trade_transaction(order_detail: Dict[str, Any]) -> Dict[str, Any]:
         "total_amount": order_detail["totalAmount"],
         "realized_pnl": order_detail.get("realizedPnl", 0.0),
         "is_paper": is_paper,
-        "executed_at": _get_current_time_iso()
+        "executed_at": _get_current_time_iso(),
+        # sim_date：沙盒模擬虛擬日期，真實操盤時為 None（存入 DB 為 NULL）
+        "sim_date": order_detail.get("simDate", None)
     }
 
     inserted_order = execute_with_retry(
@@ -236,9 +251,15 @@ def execute_trade_transaction(order_detail: Dict[str, Any]) -> Dict[str, Any]:
 # 4. 系統日誌 相關資料庫操作
 # ==========================================================================
 
-def log_system_event(level: str, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+def log_system_event(
+    level: str,
+    message: str,
+    details: Optional[Dict[str, Any]] = None,
+    sim_date: Optional[str] = None
+) -> None:
     """
     寫入中文或英文系統運行日誌。同時輸出至標準主機控制台。
+    :param sim_date: 沙盒模擬虛擬日期（如 '2026-05-05'），真實操盤時不傳（預設 None）
     """
     if details is None:
         details = {}
@@ -258,7 +279,9 @@ def log_system_event(level: str, message: str, details: Optional[Dict[str, Any]]
             "level": level,
             "message": message,
             "details": details,
-            "created_at": timestamp
+            "created_at": timestamp,
+            # sim_date：沙盒模式下記錄虛擬日期，真實操盤為 NULL
+            "sim_date": sim_date
         }).execute()
     except Exception as err:
         print(f"[Supabase Log Error] 無法寫入日誌到資料庫: {str(err)}")
