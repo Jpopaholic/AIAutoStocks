@@ -116,7 +116,8 @@ def run_trading_job_in_background():
             return
             
         last_run_status = "執行中..."
-        last_run_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        from src.time_manager import get_local_taiwan_datetime_str
+        last_run_time = get_local_taiwan_datetime_str()
         
         # 2. 呼叫主交易流程
         if config.limits.is_paper_trading:

@@ -1,19 +1,19 @@
 # Path: src/main.py
 import sys
 import argparse
-import pytz
+import time
 from datetime import datetime
 from typing import List
 
-from src.config import config, resolve_stock_codes
+from src.config import config, get_config_val, resolve_stock_codes
 from src.services import supabase_client
+from src.time_manager import get_local_taiwan_datetime
 
 def get_taiwan_time() -> datetime:
     """
     獲取目前的台灣時間 (Asia/Taipei, UTC+8)
     """
-    tz = pytz.timezone(config.timezone)
-    return datetime.now(tz)
+    return get_local_taiwan_datetime()
 
 def run_live_trading_job(stock_codes: List[str]) -> None:
     """
@@ -260,10 +260,16 @@ def run_sandbox_simulation(stock_codes: List[str], start_date: str, end_date: st
         return
 
     # 2. 初始化沙盒演練狀態
-    sandbox_simulator.initialize_simulation(start_date, end_date, trading_days)
+    sandbox_scale_str = get_config_val("SANDBOX_TIME_SCALE") or "1.0"
+    try:
+        sandbox_scale = float(sandbox_scale_str)
+    except ValueError:
+        sandbox_scale = 1.0
+    sandbox_simulator.initialize_simulation(start_date, end_date, trading_days, scale=sandbox_scale)
 
     # 3. 模擬時間軸推進循環
-    while True:
+    last_sim_date = None
+    while sandbox_simulator.is_simulation_active():
         if should_stop and should_stop():
             msg = "偵測到手動停止指令，安全終止沙盒模擬循環。"
             print(f" [排程引擎] {msg}")
@@ -272,11 +278,46 @@ def run_sandbox_simulation(stock_codes: List[str], start_date: str, end_date: st
             except Exception:
                 pass
             break
+
+        current_day_idx = sandbox_simulator.get_current_day_index()
+        target_day_idx = sandbox_simulator.get_current_target_day_index()
         sim_date = sandbox_simulator.get_current_sim_date()
+
+        if sim_date == last_sim_date:
+            if current_day_idx < target_day_idx:
+                next_day = sandbox_simulator.advance_simulation_step()
+                if next_day:
+                    print(f" [模擬器] 時間比例推進至下一個交易日: {next_day}")
+                continue
+
+            if sandbox_simulator.has_reached_simulation_end():
+                print(" [排程引擎] 已到達模擬結束時間，終止沙盒演練。")
+                break
+
+            time.sleep(5)
+            continue
+
+        last_sim_date = sim_date
         print(f"\n=================== 模擬交易日: {sim_date} ===================")
         
         ai_outlook_details = []
         klines_map = {}
+
+        # 取得目前持股，若無持股則自動終止沙盒演練
+        try:
+            holdings = supabase_client.get_holdings()
+        except Exception as e:
+            print(f" [排程引擎] 警告: 無法取得持股資料: {str(e)}")
+            holdings = []
+
+        if not holdings and not stock_codes:
+            msg = "沙盒演練已無任何持股或交易標的，終止模擬。"
+            print(f" [排程引擎] {msg}")
+            try:
+                supabase_client.log_system_event("INFO", msg)
+            except Exception:
+                pass
+            break
 
         # 獲取各個股票模擬時間軸的 K 線數據
         for stock_code in stock_codes:
@@ -290,10 +331,8 @@ def run_sandbox_simulation(stock_codes: List[str], start_date: str, end_date: st
             klines_map["TAIEX"] = taiex_klines
 
         if not klines_map:
-            # 時間軸推進
-            next_day = sandbox_simulator.advance_simulation_step()
-            if not next_day:
-                break
+            print(" [排程引擎] 本模擬時間點尚無有效交易日資料，等待下一個模擬時間片...")
+            time.sleep(5)
             continue
 
         # 執行硬體止損防線檢查 (在獲取持股與 AI 決策前)
@@ -358,10 +397,16 @@ def run_sandbox_simulation(stock_codes: List[str], start_date: str, end_date: st
         except Exception as e:
             print(f"   [模擬郵件發送失敗]: {str(e)}")
 
-        # 時間軸推進
-        next_day = sandbox_simulator.advance_simulation_step()
-        if not next_day:
-            break
+        current_day_idx = sandbox_simulator.get_current_day_index()
+        target_day_idx = sandbox_simulator.get_current_target_day_index()
+        if current_day_idx < target_day_idx:
+            next_day = sandbox_simulator.advance_simulation_step()
+            if next_day:
+                print(f" [模擬器] 時間比例推進至下一個交易日: {next_day}")
+                last_sim_date = None
+                continue
+
+        time.sleep(1)
 
     print("\n [排程引擎] 沙盒演練歷史重播模擬結束。")
 

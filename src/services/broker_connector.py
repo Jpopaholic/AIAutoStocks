@@ -5,6 +5,7 @@ from typing import Dict, Any
 from src.config import config
 from src.services.supabase_client import get_holdings, get_orders, execute_trade_transaction, log_system_event
 from src.services.credential_manager import load_credentials
+from src.time_manager import get_local_taiwan_midnight_utc_range, get_effective_date_str
 
 # 全局排他鎖，防止多線程重複下單
 _order_mutex = threading.Lock()
@@ -66,23 +67,18 @@ def _validate_trading_limits(action: str, price: float, quantity: float) -> None
         single_limit, daily_limit = get_dynamic_limits()
         
         # 判斷是否為沙盒模擬模式，若是則使用模擬日期
-        from src.services.sandbox_simulator import is_simulation_active, get_current_sim_date
+        from src.services.sandbox_simulator import is_simulation_active
         if is_simulation_active():
-            today_iso = get_current_sim_date()
+            today_iso = get_effective_date_str()
+            today_orders = get_orders(sim_date=today_iso)
         else:
-            today_iso = date.today().isoformat()
+            start_utc, end_utc = get_local_taiwan_midnight_utc_range()
+            today_orders = get_orders(start_date=start_utc, end_date=end_utc)
         
-        # 撈取今日所有的委託訂單
-        try:
-            today_orders = get_orders(start_date=f"{today_iso}T00:00:00Z")
-        except Exception as e:
-            print(f" [下單連接器] 警告: 無法獲取今日訂單進行限額檢查: {str(e)}")
-            today_orders = []
-            
         today_buy_sum = sum(
-            float(o["total_amount"]) 
-            for o in today_orders 
-            if o["action"] == "BUY" and o["executed_at"].startswith(today_iso)
+            float(o["total_amount"])
+            for o in today_orders
+            if o["action"] == "BUY"
         )
         
         if (today_buy_sum + order_amount) > daily_limit:

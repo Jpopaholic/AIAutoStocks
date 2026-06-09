@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Callable, Any, List, Dict, Optional
 from supabase import create_client, Client
 from src.config import config
+from src.time_manager import get_utc_now
 
 # 初始化 Supabase 用戶端
 _supabase_url = config.supabase.url
@@ -16,7 +17,7 @@ def _get_current_time_iso() -> str:
     """
     獲取目前符合 ISO 8601 格式之時間字串
     """
-    return datetime.utcnow().isoformat() + "Z"
+    return get_utc_now().isoformat().replace("+00:00", "Z")
 
 def execute_with_retry(query_fn: Callable[[], Any], retries: int = 3, delay: float = 1.0) -> Any:
     """

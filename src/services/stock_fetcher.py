@@ -4,6 +4,8 @@ import requests
 from datetime import datetime
 from typing import List, Dict, Any
 
+from src.time_manager import get_local_taiwan_date_str, get_utc_now
+
 # 證交所 API 呼叫頻率限制 (限制每次請求間隔至少 3.0 秒)
 _LAST_REQUEST_TIME = 0.0
 MIN_REQUEST_INTERVAL = 3.0
@@ -28,7 +30,7 @@ def fetch_stock_klines(stock_code: str, date_str: str = None) -> List[Dict[str, 
     """
     _apply_rate_limit()
     if not date_str:
-        date_str = datetime.now().strftime("%Y%m%d")
+        date_str = get_local_taiwan_date_str().replace("-", "")
 
     url = f"https://www.twse.com.tw/exchangeReport/STOCK_DAY?response=json&date={date_str}&stockNo={stock_code}"
 
@@ -157,7 +159,7 @@ def fetch_realtime_quotes_batch(stock_codes: List[str]) -> Dict[str, Dict[str, A
                         "volume": volume,
                         "bids": bids[:5],
                         "asks": asks[:5],
-                        "timestamp": datetime.now().isoformat() + "Z"
+                        "timestamp": get_utc_now().isoformat().replace("+00:00", "Z")
                     }
                     _QUOTE_CACHE[code] = (quote, now)
                     results[code] = quote
@@ -191,7 +193,7 @@ def fetch_taiex_klines(date_str: str = None) -> List[Dict[str, Any]]:
     """
     _apply_rate_limit()
     if not date_str:
-        date_str = datetime.now().strftime("%Y%m%d")
+        date_str = get_local_taiwan_date_str().replace("-", "")
 
     url = f"https://www.twse.com.tw/indicesReport/MI_5MINS_HIST?response=json&date={date_str}"
 

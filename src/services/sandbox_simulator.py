@@ -1,6 +1,7 @@
 # Path: src/services/sandbox_simulator.py
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
+from zoneinfo import ZoneInfo
 from src.config import config
 from src.services.supabase_client import get_stock_klines as db_get_klines
 from src.services import stock_fetcher
@@ -10,8 +11,32 @@ _simulation_active: bool = False
 _current_sim_date: str = "2026-05-01"  # 格式為 YYYY-MM-DD
 _sim_start_date: str = "2026-05-01"
 _sim_end_date: str = "2026-06-08"
+_simulation_start_dt: Optional[datetime] = None
+_simulation_end_dt: Optional[datetime] = None
+_server_start_dt: Optional[datetime] = None
+_simulation_time_scale: float = 1.0
+_use_time_scaling: bool = True
 _trading_days: List[str] = []
 _current_day_idx: int = 0
+
+
+def _as_taiwan_datetime(date_str: str) -> datetime:
+    return datetime.fromisoformat(date_str).replace(tzinfo=ZoneInfo(config.timezone))
+
+
+def _resolve_sim_date_from_wallclock() -> str:
+    if not _simulation_active or not _simulation_start_dt or not _simulation_end_dt or not _server_start_dt:
+        return _current_sim_date
+
+    now_utc = datetime.now(timezone.utc)
+    elapsed = now_utc - _server_start_dt
+    scaled_delta = timedelta(seconds=elapsed.total_seconds() * _simulation_time_scale)
+    sim_dt = _simulation_start_dt + scaled_delta
+    if sim_dt >= _simulation_end_dt:
+        return _sim_end_date
+
+    return sim_dt.date().isoformat()
+
 
 def set_simulation_mode(active: bool) -> None:
     """
@@ -27,32 +52,65 @@ def is_simulation_active() -> bool:
     """
     return _simulation_active
 
+def get_current_day_index() -> int:
+    """返回已處理的當前模擬交易日索引"""
+    return _current_day_idx
+
+def get_current_target_day_index() -> int:
+    """根據真實時間與比例返回應該達到的模擬交易日索引"""
+    if not _simulation_active or not _trading_days:
+        return _current_day_idx
+
+    target_date = _resolve_sim_date_from_wallclock()
+    valid_days = [d for d in _trading_days if d <= target_date]
+    if valid_days:
+        return len(valid_days) - 1
+    return 0
+
+def has_reached_simulation_end() -> bool:
+    """檢查是否已經到達模擬結束時間且已處理最後一個交易日"""
+    if not _simulation_active or not _simulation_start_dt or not _simulation_end_dt or not _server_start_dt:
+        return False
+
+    now_utc = datetime.now(timezone.utc)
+    elapsed = now_utc - _server_start_dt
+    scaled_delta = timedelta(seconds=elapsed.total_seconds() * _simulation_time_scale)
+    sim_dt = _simulation_start_dt + scaled_delta
+    return sim_dt >= _simulation_end_dt and _current_day_idx >= len(_trading_days) - 1
+
 def get_current_sim_date() -> str:
     """
-    獲取目前模擬的時間軸日期
+    獲取目前已處理的模擬時間軸日期
     """
     return _current_sim_date
 
-def initialize_simulation(start_date: str, end_date: str, trading_days: List[str]) -> None:
+def initialize_simulation(start_date: str, end_date: str, trading_days: List[str], scale: float = 1.0) -> None:
     """
     初始化沙盒演練參數與時間軸
     :param start_date: 模擬開始日期 YYYY-MM-DD
     :param end_date: 模擬結束日期 YYYY-MM-DD
     :param trading_days: 包含該區間所有台股交易日的有序字串列表
+    :param scale: 模擬時間與真實時間的比例 (1.0 = 1 秒真實時間 = 1 秒模擬時間)
     """
-    global _sim_start_date, _sim_end_date, _current_sim_date, _trading_days, _current_day_idx, _simulation_active
+    global _sim_start_date, _sim_end_date, _current_sim_date, _simulation_start_dt, _simulation_end_dt
+    global _server_start_dt, _simulation_time_scale, _trading_days, _current_day_idx, _simulation_active
+
     _sim_start_date = start_date
     _sim_end_date = end_date
     _trading_days = sorted(list(set(trading_days)))  # 確保有序且無重複
     _current_day_idx = 0
-    
-    if _trading_days:
-        _current_sim_date = _trading_days[0]
-    else:
-        _current_sim_date = start_date
-        
+    _simulation_time_scale = max(float(scale), 0.0) if scale is not None else 1.0
+    _simulation_start_dt = _as_taiwan_datetime(start_date)
+    _simulation_end_dt = _as_taiwan_datetime(end_date)
+    _server_start_dt = datetime.now(timezone.utc)
+
+    _current_sim_date = _trading_days[0] if _trading_days else start_date
     _simulation_active = True
-    print(f" [模擬器] 沙盒初始化完成。區間: {start_date} 至 {end_date}，共 {_trading_days} 個交易日。目前模擬日期: {_current_sim_date}")
+    print(
+        f" [模擬器] 沙盒初始化完成。區間: {start_date} 至 {end_date}，" \
+        f"共 {_trading_days} 個交易日。目前模擬日期: {_current_sim_date}，"
+        f"時間比例: {_simulation_time_scale}x"
+    )
 
 def advance_simulation_step() -> Optional[str]:
     """

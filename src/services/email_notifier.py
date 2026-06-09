@@ -3,7 +3,7 @@ import time
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from datetime import date, datetime
+from datetime import date
 from typing import Dict, List, Any, Optional
 
 from src.config import config, get_stock_name
@@ -11,6 +11,12 @@ from src.services.supabase_client import get_orders, get_holdings, log_system_ev
 # 由於要動態判斷是沙盒還是真實環境以獲取報價，我們引用 sandbox_simulator
 # 它會自動根據當前系統狀態，透明切換即時報價或歷史模擬報價
 from src.services import sandbox_simulator
+from src.time_manager import (
+    get_local_taiwan_date_str,
+    get_local_taiwan_datetime_str,
+    get_local_taiwan_midnight_utc_range,
+    get_effective_date_str,
+)
 
 def _send_email_via_gmail(subject: str, html_content: str, retries: int = 3, delay: float = 2.0) -> bool:
     """
@@ -52,7 +58,6 @@ def send_daily_report(ai_outlook: str, override_orders: Optional[List[Dict[str, 
     :param ai_outlook: AI 針對今日交易的反思或明日台股的分析預測
     :param override_orders: 手動指定交易訂單列表（主要用於下車平倉報告，防止時區或沙盒時間軸不對而漏載）
     """
-    from datetime import timezone
 
     is_liquidation = override_orders is not None
     sim_active = sandbox_simulator.is_simulation_active()
@@ -60,17 +65,13 @@ def send_daily_report(ai_outlook: str, override_orders: Optional[List[Dict[str, 
     # ── 日期標籤：Email 標題顯示用 ──────────────────────────────────────────────
     if is_liquidation:
         # 下車清倉：顯示真實台北時間（含時分秒）
-        current_date_label = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        current_date_label = get_local_taiwan_datetime_str()
     elif sim_active:
         # 沙盒演練：顯示模擬（虛擬）日期，讓收件者知道這是哪一天的回測結果
-        current_date_label = sandbox_simulator.get_current_sim_date()
+        current_date_label = get_effective_date_str()
     else:
         # 真實操盤：顯示真實台北日期
-        current_date_label = datetime.now().strftime("%Y-%m-%d")
-
-    # ── 訂單查詢：永遠用真實 UTC 日期過濾，因為 Supabase executed_at 存的是 UTC ─
-    # 不論是沙盒還是真實模式，寫入 DB 的 executed_at 都是真實 UTC 時間戳
-    utc_today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        current_date_label = get_local_taiwan_date_str()
 
     # 1. 取得今日交易訂單
     if override_orders is not None:
@@ -78,13 +79,10 @@ def send_daily_report(ai_outlook: str, override_orders: Optional[List[Dict[str, 
     else:
         try:
             if sim_active:
-                # 【沙盒模式】：取今天（真實 UTC）在本次模擬中下的所有訂單
-                orders = get_orders(start_date=f"{utc_today}T00:00:00Z")
-                today_orders = [o for o in orders if o["executed_at"].startswith(utc_today)]
+                today_orders = get_orders(sim_date=get_effective_date_str())
             else:
-                # 【真實操盤】：取今天（真實 UTC）的所有真實下單紀錄
-                orders = get_orders(start_date=f"{utc_today}T00:00:00Z")
-                today_orders = [o for o in orders if o["executed_at"].startswith(utc_today)]
+                start_utc, end_utc = get_local_taiwan_midnight_utc_range()
+                today_orders = get_orders(start_date=start_utc, end_date=end_utc)
         except Exception as e:
             print(f" [郵件通知器] 無法取得今日交易紀錄: {str(e)}")
             today_orders = []
