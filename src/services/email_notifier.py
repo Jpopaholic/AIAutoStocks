@@ -139,36 +139,72 @@ def send_daily_report(ai_outlook: str, override_orders: Optional[List[Dict[str, 
     net_asset_roi = ((net_asset_value - initial_cash) / initial_cash * 100)
 
     # 4. 建立交易記錄表格 HTML
-    orders_rows_html = []
+    filled_and_other_rows = []
+    pending_rows = []
     today_realized_pnl = 0.0
     
     for o in today_orders:
+        status = o.get("status", "FILLED")
         action_label = "買入" if o["action"] == "BUY" else "賣出"
         action_bg = "#dcfce7" if o["action"] == "BUY" else "#fee2e2"
         action_color = "#15803d" if o["action"] == "BUY" else "#b91c1c"
         
-        realized_pnl = float(o.get("realized_pnl") or 0.0)
-        today_realized_pnl += realized_pnl
-        pnl_text = f"{realized_pnl:+,.0f} 元" if o["action"] == "SELL" else "-"
-        pnl_color = "#22c55e" if realized_pnl > 0 else ("#ef4444" if realized_pnl < 0 else "#64748b")
-
         stock_name = get_stock_name(o['stock_code'])
         name_display = f" ({stock_name})" if stock_name else ""
-        orders_rows_html.append(f"""
-            <tr style="border-bottom: 1px solid #e2e8f0;">
-                <td style="padding: 10px; color: #1e293b; font-weight: bold;">{o['stock_code']}{name_display}</td>
-                <td style="padding: 10px; text-align: center;"><span style="background-color: {action_bg}; color: {action_color}; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold;">{action_label}</span></td>
-                <td style="padding: 10px; text-align: right;">{float(o['price']):,.2f}</td>
-                <td style="padding: 10px; text-align: right;">{float(o['quantity']):,.0f}</td>
-                <td style="padding: 10px; text-align: right;">{float(o['fee']):,.0f} 元</td>
-                <td style="padding: 10px; text-align: right; font-weight: bold; color: {pnl_color};">{pnl_text}</td>
-            </tr>
-        """)
+        fee_val = float(o.get("fee") or 0.0)
+        
+        if status == "PENDING":
+            pending_rows.append(f"""
+                <tr style="border-bottom: 1px solid #e2e8f0;">
+                    <td style="padding: 10px; color: #1e293b; font-weight: bold;">{o['stock_code']}{name_display}</td>
+                    <td style="padding: 10px; text-align: center;"><span style="background-color: {action_bg}; color: {action_color}; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold;">{action_label}</span></td>
+                    <td style="padding: 10px; text-align: right;">{float(o['price']):,.2f}</td>
+                    <td style="padding: 10px; text-align: right;">{float(o['quantity']):,.0f}</td>
+                    <td style="padding: 10px; text-align: right;">{fee_val:,.0f} 元</td>
+                    <td style="padding: 10px; text-align: center;"><span style="background-color: #fef3c7; color: #d97706; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold;">預約中</span></td>
+                </tr>
+            """)
+        else:
+            realized_pnl = float(o.get("realized_pnl") or 0.0)
+            today_realized_pnl += realized_pnl
+            
+            pnl_text = f"{realized_pnl:+,.0f} 元" if o["action"] == "SELL" and status == "FILLED" else "-"
+            pnl_color = "#22c55e" if realized_pnl > 0 else ("#ef4444" if realized_pnl < 0 else "#64748b")
+            
+            exec_price_val = o.get("execution_price")
+            if status == "FILLED" and exec_price_val is not None:
+                exec_price_display = f"{float(exec_price_val):,.2f}"
+            else:
+                exec_price_display = "--"
+                
+            if status == "FILLED":
+                status_badge = f'<span style="background-color: #dcfce7; color: #15803d; padding: 3px 8px; border-radius: 4px; font-size: 11px;">已成交</span>'
+            elif status == "CANCELLED":
+                status_badge = f'<span style="background-color: #f1f5f9; color: #64748b; padding: 3px 8px; border-radius: 4px; font-size: 11px;">已取消</span>'
+            else:
+                status_badge = f'<span style="background-color: #fee2e2; color: #b91c1c; padding: 3px 8px; border-radius: 4px; font-size: 11px;">已失敗</span>'
+                
+            filled_and_other_rows.append(f"""
+                <tr style="border-bottom: 1px solid #e2e8f0;">
+                    <td style="padding: 10px; color: #1e293b; font-weight: bold;">{o['stock_code']}{name_display}</td>
+                    <td style="padding: 10px; text-align: center;"><span style="background-color: {action_bg}; color: {action_color}; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold;">{action_label}</span></td>
+                    <td style="padding: 10px; text-align: right;">{exec_price_display}</td>
+                    <td style="padding: 10px; text-align: right;">{float(o['quantity']):,.0f}</td>
+                    <td style="padding: 10px; text-align: right;">{fee_val:,.0f} 元</td>
+                    <td style="padding: 10px; text-align: right; font-weight: bold; color: {pnl_color};">{pnl_text}</td>
+                    <td style="padding: 10px; text-align: center;">{status_badge}</td>
+                </tr>
+            """)
 
-    if not orders_rows_html:
-        orders_table_body = """<tr><td colspan="6" style="padding: 20px; text-align: center; color: #64748b;">今日無交易委託紀錄</td></tr>"""
+    if not filled_and_other_rows:
+        filled_table_body = """<tr><td colspan="7" style="padding: 20px; text-align: center; color: #64748b;">今日無已完成交易成交紀錄</td></tr>"""
     else:
-        orders_table_body = "\n".join(orders_rows_html)
+        filled_table_body = "\n".join(filled_and_other_rows)
+        
+    if not pending_rows:
+        pending_table_body = """<tr><td colspan="6" style="padding: 20px; text-align: center; color: #64748b;">今日無新委託預約單紀錄</td></tr>"""
+    else:
+        pending_table_body = "\n".join(pending_rows)
 
     if not holdings_rows_html:
         holdings_table_body = """<tr><td colspan="5" style="padding: 20px; text-align: center; color: #64748b;">目前帳戶無持股倉位</td></tr>"""
@@ -223,23 +259,46 @@ def send_daily_report(ai_outlook: str, override_orders: Optional[List[Dict[str, 
                 </td>
             </tr>
 
-            <!-- 今日交易明細 -->
+            <!-- 今日已完成交易 -->
             <tr>
                 <td style="padding: 0 20px;">
-                    <h3 style="margin: 10px 0; color: #1e293b; border-bottom: 2px solid #e2e8f0; padding-bottom: 5px; font-size: 16px;">今日交易明細</h3>
+                    <h3 style="margin: 10px 0; color: #1e293b; border-bottom: 2px solid #e2e8f0; padding-bottom: 5px; font-size: 16px;">今日已完成交易 (實際成交回報)</h3>
                     <table width="100%" cellspacing="0" cellpadding="0" style="font-size: 13px; border-collapse: collapse;">
                         <thead>
                             <tr style="background-color: #f8fafc; color: #64748b; font-weight: bold; border-bottom: 2px solid #cbd5e1;">
                                 <th style="padding: 8px; text-align: left;">股票</th>
                                 <th style="padding: 8px; text-align: center;">動作</th>
-                                <th style="padding: 8px; text-align: right;">成交價</th>
+                                <th style="padding: 8px; text-align: right;">實際成交價</th>
                                 <th style="padding: 8px; text-align: right;">股數</th>
                                 <th style="padding: 8px; text-align: right;">規費</th>
                                 <th style="padding: 8px; text-align: right;">實現損益</th>
+                                <th style="padding: 8px; text-align: center;">狀態</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {orders_table_body}
+                            {filled_table_body}
+                        </tbody>
+                    </table>
+                </td>
+            </tr>
+
+            <!-- 今日盤後 AI 新增委託 -->
+            <tr>
+                <td style="padding: 20px 20px 0 20px;">
+                    <h3 style="margin: 10px 0; color: #1e293b; border-bottom: 2px solid #e2e8f0; padding-bottom: 5px; font-size: 16px;">今日盤後 AI 新增委託 (預約明日交易)</h3>
+                    <table width="100%" cellspacing="0" cellpadding="0" style="font-size: 13px; border-collapse: collapse;">
+                        <thead>
+                            <tr style="background-color: #f8fafc; color: #64748b; font-weight: bold; border-bottom: 2px solid #cbd5e1;">
+                                <th style="padding: 8px; text-align: left;">股票</th>
+                                <th style="padding: 8px; text-align: center;">動作</th>
+                                <th style="padding: 8px; text-align: right;">委託價</th>
+                                <th style="padding: 8px; text-align: right;">數量</th>
+                                <th style="padding: 8px; text-align: right;">預估規費</th>
+                                <th style="padding: 8px; text-align: center;">狀態</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {pending_table_body}
                         </tbody>
                     </table>
                 </td>

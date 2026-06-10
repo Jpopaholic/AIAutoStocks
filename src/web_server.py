@@ -44,6 +44,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Background runner state
+is_running = False
+is_running_lock = threading.Lock()
+is_liquidating = False
+is_liquidating_lock = threading.Lock()
+stop_requested = False
+last_run_status = "尚未執行過手動交易"
+last_run_time = "無"
+
 @app.on_event("startup")
 def on_startup():
     try:
@@ -52,6 +61,20 @@ def on_startup():
         prune_old_db_logs(days=7)
     except Exception as e:
         print(f" [啟動任務] 警告: 自動清理舊日誌失敗: {e}")
+
+    # 啟動自檢：如果自動交易開關在啟動前為開啟，且是實時交易模式，則在啟動時自動拉起定時排程引擎 (永動機)
+    try:
+        from src.config import config
+        if config.is_auto_trading_active and not config.limits.is_paper_trading:
+            global is_running
+            with is_running_lock:
+                if not is_running:
+                    is_running = True
+                    t = threading.Thread(target=run_trading_job_in_background, daemon=True)
+                    t.start()
+                    print(" [啟動任務] 已成功在背景自動重新啟動實時交易定時排程引擎 (永動機)。")
+    except Exception as auto_err:
+        print(f" [啟動任務] 自動拉起定時排程引擎失敗: {auto_err}")
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -105,12 +128,6 @@ def api_verify_otp(payload: VerifyOTPRequest):
         }
     raise HTTPException(status_code=401, detail="驗證碼無效或已過期")
 
-# Background runner state
-is_running = False
-is_running_lock = threading.Lock()
-stop_requested = False
-last_run_status = "尚未執行過手動交易"
-last_run_time = "無"
 
 class WatchlistItem(BaseModel):
     stock_code: str
@@ -130,6 +147,7 @@ def run_trading_job_in_background():
             
         log_system_event("INFO", "=== 開始執行網頁端手動觸發交易任務 ===")
         stop_requested = False  # 每次啟動前重置停止旗標
+        start_mode_is_paper = config.limits.is_paper_trading
         
         # 1. 獲取當前自選股（優先 Supabase，回退本機 watchlist.json）
         stock_codes = []
@@ -188,11 +206,66 @@ def run_trading_job_in_background():
             )
         else:
             from src.main import run_live_trading_job
+            from src.time_manager import get_local_taiwan_datetime
+            
+            # 第一步：手動觸發時，立即執行第一輪實盤交易任務
+            log_system_event("INFO", "[永動機] 手動觸發啟動：立即執行第一輪實盤交易任務")
             run_live_trading_job(stock_codes)
+            
+            last_run_date = get_local_taiwan_datetime().date()
+            log_system_event("INFO", f"[永動機] 已完成初始交易輪次。進入每日定時自動交易循環 (目標時間: 每日 14:00 - 14:15 台灣時間，排除週末)")
+            
+            # 進入永動機定時排程循環
+            while not stop_requested:
+                # 靈敏偵測：每隔 30 秒分段 Sleep 1 秒，快速響應 stop_requested
+                for _ in range(30):
+                    if stop_requested:
+                        break
+                    time.sleep(1)
+                
+                if stop_requested:
+                    break
+                
+                # 運行中防竄改交易模式自檢鎖
+                current_mode_is_paper = config.limits.is_paper_trading
+                if current_mode_is_paper != start_mode_is_paper:
+                    msg = f"[永動機] 偵測到交易模式 (PAPER_TRADING_MODE) 被修改（啟動時為 {'模擬' if start_mode_is_paper else '實盤'}, 目前為 {'模擬' if current_mode_is_paper else '實盤'}），為防誤傷與安全起見，已自動強制終止背景定時循環！請重新啟動交易任務。"
+                    log_system_event("ERROR", msg)
+                    last_run_status = "錯誤：運行中交易模式被修改，已強制停止"
+                    break
+                
+                tw_now = get_local_taiwan_datetime()
+                current_date = tw_now.date()
+                
+                # 若跨天
+                if current_date > last_run_date:
+                    # 目標觸發時段：每日 14:00 - 14:15 之間
+                    if tw_now.hour == 14 and 0 <= tw_now.minute < 15:
+                        # 排除週末 (週六是 5, 週日是 6)
+                        if tw_now.weekday() not in (5, 6):
+                            log_system_event("INFO", f"[永動機] 跨天偵測觸發：開始執行當日 ({current_date}) 實盤自動交易...")
+                            # 更新最後執行狀態與時間
+                            from src.time_manager import get_local_taiwan_datetime_str
+                            last_run_time = get_local_taiwan_datetime_str()
+                            last_run_status = "定時任務執行中..."
+                            try:
+                                run_live_trading_job(stock_codes)
+                                last_run_status = "定時任務成功完成"
+                                log_system_event("INFO", f"[永動機] 當日 ({current_date}) 實盤自動交易順利完成。")
+                            except Exception as ex:
+                                last_run_status = f"定時任務失敗: {str(ex)}"
+                                log_system_event("ERROR", f"[永動機] 執行定時自動交易出錯: {str(ex)}")
+                        else:
+                            log_system_event("INFO", f"[永動機] 今日 ({current_date}) 為週末非交易日，跳過當日定時交易排程。")
+                        
+                        # 不論成敗或週末，皆標記為此日已處理，避免在該時段內重複觸發
+                        last_run_date = current_date
         
         if stop_requested:
             last_run_status = "已被使用者手動停止"
             log_system_event("INFO", "=== 網頁端交易任務已被使用者手動停止 ===")
+        elif last_run_status.startswith("錯誤："):
+            pass
         else:
             last_run_status = "成功完成"
             log_system_event("INFO", "=== 網頁端手動觸發交易任務順利完成 ===")
@@ -273,12 +346,26 @@ def get_status():
             "orders": orders,
             "is_paper": config.limits.is_paper_trading,
             "is_running": is_running,
+            "is_liquidating": is_liquidating,
             "stop_requested": stop_requested,
             "last_run_status": last_run_status,
             "last_run_time": last_run_time
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"載入儀表板狀態失敗: {str(e)}")
+
+@app.post("/api/sync")
+def api_sync_orders():
+    """
+    手動對帳同步：調用券商與資料庫進行未成交訂單狀態同步
+    """
+    try:
+        from src.services.broker_connector import sync_broker_orders
+        sync_broker_orders()
+        return {"status": "ok", "message": "對帳同步已執行完成"}
+    except Exception as e:
+        log_system_event("ERROR", f"網頁端手動觸發對帳同步時發生異常: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"對帳同步失敗: {str(e)}")
 
 @app.get("/api/watchlist")
 def api_get_watchlist():
@@ -450,6 +537,16 @@ def api_get_config():
 
 @app.post("/api/config")
 def api_update_config(payload: ConfigUpdate):
+    global is_running
+    if is_running:
+        new_paper_mode_val = payload.settings.get("PAPER_TRADING_MODE")
+        if new_paper_mode_val is not None:
+            new_paper_mode = str(new_paper_mode_val).lower() == "true"
+            if new_paper_mode != config.limits.is_paper_trading:
+                raise HTTPException(
+                    status_code=400,
+                    detail="交易任務正在執行中，禁止修改交易模式 (PAPER_TRADING_MODE)。請先點選「停止」交易任務。"
+                )
     try:
         # 1. 嘗試寫入 Supabase 資料庫
         try:
@@ -533,6 +630,54 @@ def api_clear_sandbox():
             detail=f"清除模擬交易資料失敗: {err_msg}"
         )
 
+def run_liquidate_in_background():
+    global is_liquidating
+    with is_liquidating_lock:
+        is_liquidating = True
+    try:
+        from src.main import run_liquidate_job
+        run_liquidate_job()
+    finally:
+        with is_liquidating_lock:
+            is_liquidating = False
+
+@app.post("/api/liquidate")
+def api_liquidate(background_tasks: BackgroundTasks):
+    global stop_requested, is_running
+    try:
+        # 1. 停止目前正在執行的背景交易任務
+        if is_running:
+            stop_requested = True
+            log_system_event("WARN", "已手動發送停止自動交易任務訊號（準備執行下車清倉）")
+            
+        # 2. 自動關閉自動交易開關 (AUTO_TRADING_ACTIVE = false)
+        try:
+            set_db_config("AUTO_TRADING_ACTIVE", "false")
+        except Exception as db_err:
+            # 回退寫入 config.json
+            import json
+            config_path = os.path.join(os.getcwd(), "config.json")
+            existing_config = {}
+            if os.path.exists(config_path):
+                try:
+                    with open(config_path, "r", encoding="utf-8") as f:
+                        existing_config = json.load(f)
+                except Exception:
+                    pass
+            existing_config["AUTO_TRADING_ACTIVE"] = "false"
+            try:
+                with open(config_path, "w", encoding="utf-8") as f:
+                    json.dump(existing_config, f, indent=2, ensure_ascii=False)
+            except Exception as io_err:
+                print(f"[Web API] 警告: 無法寫入 config.json (可能為唯讀檔案系統): {str(io_err)}")
+        
+        # 3. 在背景非同步執行下車平倉任務
+        background_tasks.add_task(run_liquidate_in_background)
+        
+        return {"status": "ok", "message": "已成功停止自動交易並關閉開關，且已於背景啟動下車平倉流程！"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"下車平倉失敗: {str(e)}")
+
 @app.post("/api/trigger")
 def api_trigger_run(background_tasks: BackgroundTasks):
     global is_running
@@ -562,7 +707,8 @@ def api_trigger_run(background_tasks: BackgroundTasks):
         except Exception as io_err:
             print(f"[Web API] 警告: 無法寫入 config.json (可能為唯讀檔案系統): {str(io_err)}")
 
-    background_tasks.add_task(run_trading_job_in_background)
+    t = threading.Thread(target=run_trading_job_in_background, daemon=True)
+    t.start()
     return {"status": "ok", "message": "自動交易排程已成功在背景啟動，且已重啟自動交易開關！"}
 
 
@@ -571,8 +717,31 @@ def api_stop_job():
     global stop_requested
     if not is_running:
         return {"status": "error", "message": "目前沒有正在執行的交易任務。"}
+    
     stop_requested = True
-    return {"status": "ok", "message": "已發送停止訊號，任務將在完成當前模擬交易日後安全停止。"}
+    
+    # 同步將自動交易開關設為 false，避免重啟後自動拉起
+    try:
+        set_db_config("AUTO_TRADING_ACTIVE", "false")
+    except Exception as db_err:
+        # 回退寫入 config.json
+        import json
+        config_path = os.path.join(os.getcwd(), "config.json")
+        existing_config = {}
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    existing_config = json.load(f)
+            except Exception:
+                pass
+        existing_config["AUTO_TRADING_ACTIVE"] = "false"
+        try:
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(existing_config, f, indent=2, ensure_ascii=False)
+        except Exception as io_err:
+            print(f"[Web API] 警告: 無法寫入 config.json (可能為唯讀檔案系統): {str(io_err)}")
+            
+    return {"status": "ok", "message": "已發送停止訊號，任務將在完成當前個股/交易日後安全停止，且已關閉自動交易開關。"}
 
 @app.post("/api/liquidate")
 def api_liquidate(background_tasks: BackgroundTasks):

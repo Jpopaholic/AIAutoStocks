@@ -49,6 +49,29 @@ def run_live_trading_job(stock_codes: List[str]) -> None:
     from src.services import stock_fetcher, sandbox_simulator, broker_connector, email_notifier
     from src.agents import trading_agent
 
+    # 0. 優先執行券商對帳同步任務
+    try:
+        broker_connector.sync_broker_orders()
+    except Exception as sync_err:
+        print(f" [排程引擎] 警告: 執行對帳同步任務時發生異常: {str(sync_err)}")
+        supabase_client.log_system_event("WARN", f"對帳同步任務發生異常: {str(sync_err)}")
+
+    # 1b. 國定假日與臨時休市 (如颱風假) 自檢
+    try:
+        tsmc_klines = stock_fetcher.fetch_stock_klines("2330")
+        if tsmc_klines:
+            latest_market_date = tsmc_klines[-1]["date"]
+            today_str = tw_now.strftime("%Y-%m-%d")
+            if latest_market_date != today_str:
+                msg = f"今日 {today_str} 無最新交易數據（最新交易日為 {latest_market_date}），判斷為國定假日或臨時休市（如颱風假），自動跳過今日任務。"
+                print(f" [排程引擎] {msg}")
+                supabase_client.log_system_event("INFO", msg)
+                return
+        else:
+            print(" [排程引擎] 警告: 無法獲取基準股 (2330) 的 K 線，跳過休市自檢。")
+    except Exception as check_err:
+        print(f" [排程引擎] 警告: 執行基準股休市自檢時發生異常: {check_err}")
+
     # 確保關閉模擬時間軸模式，使用即時數據窗口
     sandbox_simulator.set_simulation_mode(False)
 
@@ -299,6 +322,12 @@ def run_sandbox_simulation(stock_codes: List[str], start_date: str, end_date: st
 
         last_sim_date = sim_date
         print(f"\n=================== 模擬交易日: {sim_date} ===================")
+        
+        # 優先執行模擬對帳同步 (將前一天的 PENDING 模擬單在今天成交)
+        try:
+            broker_connector.sync_sandbox_orders(sim_date)
+        except Exception as sync_err:
+            print(f"   [模擬對帳異常]: {str(sync_err)}")
         
         ai_outlook_details = []
         klines_map = {}

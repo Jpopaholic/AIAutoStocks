@@ -1,9 +1,22 @@
 # Path: src/services/broker_connector.py
 import threading
+import time
 from datetime import datetime, date
 from typing import Dict, Any
 from src.config import config
-from src.services.supabase_client import get_holdings, get_orders, execute_trade_transaction, log_system_event, set_system_fault_status, add_pending_liquidation_stock
+from src.services.supabase_client import (
+    get_holdings,
+    get_orders,
+    execute_trade_transaction,
+    log_system_event,
+    set_system_fault_status,
+    add_pending_liquidation_stock,
+    update_holding_after_fill,
+    get_pending_real_orders,
+    update_order_status,
+    execute_with_retry,
+    supabase
+)
 from src.services.credential_manager import load_credentials
 from src.time_manager import get_local_taiwan_midnight_utc_range, get_effective_date_str
 
@@ -193,7 +206,20 @@ def place_order(stock_code: str, action: str, price: float, quantity: float) -> 
  
             # 取得目前沙盒虛擬日期（如有）
             from src.services.sandbox_simulator import is_simulation_active, get_current_sim_date
-            current_sim_date = get_current_sim_date() if is_simulation_active() else None
+            sim_active = is_simulation_active()
+            current_sim_date = get_current_sim_date() if sim_active else None
+
+            # 在沙盒演練回測中，我們模擬「盤後預約單」機制：
+            # 決定下單時寫入 PENDING，等下一個交易日開盤/收盤對帳時才轉為 FILLED 並正式更新 holdings。
+            # 如果是實時的模擬交易 (Live Paper Trading)，則直接 FILLED。
+            if sim_active:
+                status_to_write = "PENDING"
+                exec_price_to_write = None
+                order_id_to_write = f"PAPER_PENDING_{int(time.time())}"
+            else:
+                status_to_write = "FILLED"
+                exec_price_to_write = price
+                order_id_to_write = f"PAPER_{int(time.time())}"
 
             order_detail = {
                 "stockCode": stock_code,
@@ -203,6 +229,9 @@ def place_order(stock_code: str, action: str, price: float, quantity: float) -> 
                 "fee": fee,
                 "totalAmount": total_amount,
                 "realizedPnl": realized_pnl,
+                "status": status_to_write,
+                "executionPrice": exec_price_to_write,
+                "orderId": order_id_to_write,
                 "simDate": current_sim_date  # 沙盒模式為虛擬日期，真實操盤為 None
             }
 
@@ -293,7 +322,10 @@ def place_order(stock_code: str, action: str, price: float, quantity: float) -> 
                     "quantity": quantity,
                     "fee": fee,
                     "totalAmount": total_amount,
-                    "realizedPnl": realized_pnl
+                    "realizedPnl": realized_pnl,
+                    "status": "PENDING",
+                    "executionPrice": None,
+                    "orderId": trade.status.id
                 }
                 
                 # 寫入 Supabase 訂單與持股明細
@@ -388,3 +420,207 @@ def check_and_execute_hard_stop_losses() -> None:
             except Exception as order_err:
                 log_system_event("ERROR", f"[硬體停損失敗] 無法自動賣出 {stock_code}: {str(order_err)}")
                 add_pending_liquidation_stock(stock_code)
+
+def sync_broker_orders() -> None:
+    """
+    與券商對帳同步所有 PENDING 的訂單狀態。
+    """
+    is_paper = config.limits.is_paper_trading
+    if is_paper:
+        log_system_event("INFO", "[對帳同步] 模擬交易模式，跳過券商對帳同步。")
+        return
+
+    log_system_event("INFO", "[對帳同步] 開始進行券商對帳同步...")
+    try:
+        # 1. 取得所有真實交易且狀態為 PENDING 的訂單
+        pending_orders = get_pending_real_orders()
+        if not pending_orders:
+            log_system_event("INFO", "[對帳同步] 目前無任何 PENDING 委託訂單，結束同步。")
+            return
+
+        # 2. 登入 Shioaji 并更新委託狀態
+        api = _get_shioaji_api()
+        api.update_status(api.stock_account)
+        
+        # 獲取今日委託紀錄
+        trades = api.list_trades()
+        
+        # 建立一個 dictionary：order_id -> trade mapping
+        trade_map = {}
+        for t in trades:
+            if t.status and t.status.id:
+                trade_map[t.status.id] = t
+        
+        for order in pending_orders:
+            order_db_id = order["id"]
+            order_id = order.get("order_id")
+            stock_code = order["stock_code"]
+            action = order["action"]
+            
+            if not order_id:
+                log_system_event("WARN", f"[對帳同步] 訂單 ID {order_db_id} ({stock_code}) 缺少券商 order_id，跳過")
+                continue
+                
+            if order_id not in trade_map:
+                log_system_event("WARN", f"[對帳同步] 找不到券商委託單號 {order_id}，可能尚未送出或非今日委託")
+                continue
+                
+            trade = trade_map[order_id]
+            status_val = trade.status.status
+            status_name = status_val.name if hasattr(status_val, 'name') else str(status_val)
+            
+            log_system_event("INFO", f"[對帳同步] 正在同步訂單 {order_id} ({stock_code} {action}) | 券商狀態: {status_name}")
+            
+            if status_name in ["Filled", "PartFilled"]:
+                deals = trade.status.deals
+                if not deals:
+                    log_system_event("WARN", f"[對帳同步] 訂單 {order_id} 狀態為 {status_name} 但無成交明細，暫不處理")
+                    continue
+                
+                total_deal_qty = sum(float(d.quantity) for d in deals)
+                if total_deal_qty == 0:
+                    log_system_event("WARN", f"[對帳同步] 訂單 {order_id} 狀態為 {status_name} 但累計成交數量為 0，暫不處理")
+                    continue
+                    
+                avg_exec_price = sum(float(d.price) * float(d.quantity) for d in deals) / total_deal_qty
+                
+                costs = calculate_fees(action, avg_exec_price, total_deal_qty)
+                actual_fee = costs["fee"]
+                actual_total_amount = costs["net_amount"]
+                
+                realized_pnl = 0.0
+                if action == "SELL":
+                    try:
+                        current_holdings = get_holdings()
+                        matching_holding = next((h for h in current_holdings if h["stock_code"] == stock_code), None)
+                        if matching_holding:
+                            avg_cost = float(matching_holding["average_price"])
+                            realized_pnl = (avg_exec_price - avg_cost) * total_deal_qty - actual_fee
+                    except Exception as he:
+                        print(f" [對帳同步] 實盤計算平倉損益失敗: {str(he)}")
+                
+                updates = {
+                    "status": "FILLED",
+                    "execution_price": avg_exec_price,
+                    "quantity": total_deal_qty,
+                    "fee": actual_fee,
+                    "total_amount": actual_total_amount,
+                    "realized_pnl": realized_pnl
+                }
+                update_order_status(order_db_id, updates)
+                
+                update_holding_after_fill(
+                    stock_code=stock_code,
+                    action=action,
+                    price=avg_exec_price,
+                    quantity=total_deal_qty,
+                    is_paper=False
+                )
+                
+                log_system_event(
+                    "INFO",
+                    f" [對帳同步成功] 訂單 {order_id} 已成功轉為 FILLED | 實際成交價: {avg_exec_price} | 實際成交股數: {total_deal_qty} | 損益: {realized_pnl:,.0f} 元"
+                )
+                
+            elif status_name in ["Cancelled", "Failed"]:
+                updates = {
+                    "status": status_name.upper(),
+                    "total_amount": 0.0,
+                    "fee": 0.0
+                }
+                update_order_status(order_db_id, updates)
+                log_system_event(
+                    "INFO",
+                    f" [對帳同步] 訂單 {order_id} 已轉為 {status_name.upper()}，已釋放可用資金。"
+                )
+            else:
+                log_system_event(
+                    "INFO",
+                    f"[對帳同步] 訂單 {order_id} 當前狀態為 {status_name}，保持 PENDING 狀態。"
+                )
+                
+    except Exception as e:
+        log_system_event("ERROR", f"[對帳同步] 對帳同步任務執行失敗: {str(e)}")
+
+def sync_sandbox_orders(sim_date: str) -> None:
+    """
+    在沙盒模式下，模擬將前一日的 PENDING 訂單在今日 (sim_date) 成交。
+    """
+    # 1. 取得所有 status = 'PENDING' 且 is_paper = True 的模擬訂單
+    pending_orders = execute_with_retry(
+        lambda: supabase.table("trade_orders")
+        .select("id, stock_code, action, price, quantity, fee, total_amount, executed_at, realized_pnl, status, execution_price, order_id")
+        .eq("status", "PENDING")
+        .eq("is_paper", True)
+        .execute()
+    )
+    
+    if not pending_orders:
+        return
+        
+    log_system_event("INFO", f"[模擬對帳] 發現 {len(pending_orders)} 筆 PENDING 模擬訂單，正在今日 {sim_date} 進行模擬撮合成交...")
+    
+    from src.services import sandbox_simulator
+    
+    for order in pending_orders:
+        order_db_id = order["id"]
+        stock_code = order["stock_code"]
+        action = order["action"]
+        qty = float(order["quantity"])
+        limit_price = float(order["price"])
+        
+        # 2. 獲取今日即時報價 (收盤價)
+        quote = sandbox_simulator.fetch_realtime_quote(stock_code)
+        if not quote:
+            log_system_event("WARN", f"[模擬對帳] 警告: 無法獲取 {stock_code} 在 {sim_date} 的模擬報價，跳過")
+            continue
+            
+        exec_price = float(quote.get("price") or limit_price)
+        
+        # 3. 重新計算費用與實現損益 (買入以實際成交價，賣出計算與持股均價的損益)
+        costs = calculate_fees(action, exec_price, qty)
+        actual_fee = costs["fee"]
+        actual_total_amount = costs["net_amount"]
+        
+        realized_pnl = 0.0
+        if action == "SELL":
+            try:
+                # 取得持股庫存均價
+                holdings = get_holdings()
+                matching_holding = next((h for h in holdings if h["stock_code"] == stock_code), None)
+                if matching_holding:
+                    avg_cost = float(matching_holding["average_price"])
+                    realized_pnl = (exec_price - avg_cost) * qty - actual_fee
+            except Exception as e:
+                print(f" [模擬對帳] 計算模擬平倉損益失敗: {e}")
+                
+        # 4. 更新訂單為 FILLED，且將 executed_at 更新為今日時間戳，以便出現在今天的報告中
+        updates = {
+            "status": "FILLED",
+            "execution_price": exec_price,
+            "fee": actual_fee,
+            "total_amount": actual_total_amount,
+            "realized_pnl": realized_pnl,
+            "executed_at": f"{sim_date}T13:30:00Z"
+        }
+        
+        execute_with_retry(
+            lambda: supabase.table("trade_orders")
+            .update(updates)
+            .eq("id", order_db_id)
+            .execute()
+        )
+        
+        # 5. 更新持股表
+        update_holding_after_fill(
+            stock_code=stock_code,
+            action=action,
+            price=exec_price,
+            quantity=qty,
+            is_paper=True
+        )
+        
+        log_system_event(
+            "INFO",
+            f" [模擬對帳成功] 訂單 ID {order_db_id} ({stock_code}) 於 {sim_date} 成交 | 成交價: {exec_price} | 股數: {qty}"
+        )

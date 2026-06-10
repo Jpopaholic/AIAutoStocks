@@ -2,7 +2,8 @@
 import time
 from datetime import datetime
 from typing import Callable, Any, List, Dict, Optional
-from supabase import create_client, Client
+import httpx
+from supabase import create_client, Client, ClientOptions
 from src.config import config
 from src.time_manager import get_utc_now
 
@@ -10,8 +11,18 @@ from src.time_manager import get_utc_now
 _supabase_url = config.supabase.url
 _supabase_key = config.supabase.key
 
+# 建立自訂的 httpx Client 以停用 HTTP/2，解決 Supabase API 連線不穩（ConnectionState.CLOSED、PROTOCOL_ERROR 等）的問題
+# 並將逾時設定為與 Supabase 預設一致的 120 秒，避免 5 秒預設逾時影響大型查詢。
+_custom_http_client = httpx.Client(
+    http2=False,
+    timeout=120.0
+)
+_client_options = ClientOptions(
+    httpx_client=_custom_http_client
+)
+
 # 由於前置驗證已確保 url 與 key 存在，此處可安全初始化
-supabase: Client = create_client(_supabase_url, _supabase_key)
+supabase: Client = create_client(_supabase_url, _supabase_key, options=_client_options)
 
 def _get_current_time_iso() -> str:
     """
@@ -148,7 +159,7 @@ def get_orders(
     """
     is_paper = config.limits.is_paper_trading
     query = supabase.table("trade_orders").select(
-        "id, stock_code, action, price, quantity, fee, total_amount, executed_at, realized_pnl"
+        "id, stock_code, action, price, quantity, fee, total_amount, executed_at, realized_pnl, status, execution_price, order_id"
     ).eq("is_paper", is_paper)
 
     if sim_date:
@@ -184,19 +195,90 @@ def execute_trade_transaction(order_detail: Dict[str, Any]) -> Dict[str, Any]:
         "total_amount": order_detail["totalAmount"],
         "realized_pnl": order_detail.get("realizedPnl", 0.0),
         "is_paper": is_paper,
-        "executed_at": _get_current_time_iso()
-        # sim_date 欄位已從資料庫中移除，改以 executed_at 的模擬時間做為關聯與過濾基準
+        "executed_at": _get_current_time_iso(),
+        "status": order_detail.get("status", "PENDING"),
+        "execution_price": order_detail.get("executionPrice", None),
+        "order_id": order_detail.get("orderId", None)
     }
 
     inserted_order = execute_with_retry(
         lambda: supabase.table("trade_orders").insert(order_record).execute()
     )
 
-    # 2. 獲取當前該個股持股
+    # 僅在訂單狀態為 FILLED (status = 'FILLED') 時才執行更新/刪除持股表
+    status = order_record["status"]
+    if status == "FILLED":
+        # 2. 獲取當前該個股持股
+        holdings_res = execute_with_retry(
+            lambda: supabase.table("holdings")
+            .select("id, quantity, average_price")
+            .eq("stock_code", order_detail["stockCode"])
+            .eq("is_paper", is_paper)
+            .execute()
+        )
+
+        existing_holding = holdings_res[0] if holdings_res else None
+
+        new_quantity = 0.0
+        new_avg_price = 0.0
+
+        if order_detail["action"] == "BUY":
+            if existing_holding:
+                cur_qty = float(existing_holding["quantity"])
+                cur_avg = float(existing_holding["average_price"])
+                buy_qty = float(order_detail["quantity"])
+                buy_price = float(order_detail["price"])
+
+                new_quantity = cur_qty + buy_qty
+                new_avg_price = ((cur_qty * cur_avg) + (buy_qty * buy_price)) / new_quantity
+            else:
+                new_quantity = float(order_detail["quantity"])
+                new_avg_price = float(order_detail["price"])
+        elif order_detail["action"] == "SELL":
+            if existing_holding:
+                cur_qty = float(existing_holding["quantity"])
+                sell_qty = float(order_detail["quantity"])
+
+                new_quantity = max(0.0, cur_qty - sell_qty)
+                new_avg_price = float(existing_holding["average_price"]) if new_quantity > 0 else 0.0
+            else:
+                raise ValueError(f"無法執行賣出訂單：帳戶中無 {order_detail['stockCode']} 的持股")
+
+        # 3. 更新持股表
+        if new_quantity > 0:
+            holding_record = {
+                "stock_code": order_detail["stockCode"],
+                "quantity": new_quantity,
+                "average_price": new_avg_price,
+                "is_paper": is_paper,
+                "updated_at": _get_current_time_iso()
+            }
+            execute_with_retry(
+                lambda: supabase.table("holdings")
+                .upsert(holding_record, on_conflict="stock_code,is_paper")
+                .execute()
+            )
+        else:
+            # 若持股降為 0，則刪除該持股紀錄
+            if existing_holding:
+                execute_with_retry(
+                    lambda: supabase.table("holdings")
+                    .delete()
+                    .eq("id", existing_holding["id"])
+                    .execute()
+                )
+
+    return inserted_order[0] if inserted_order else {}
+
+def update_holding_after_fill(stock_code: str, action: str, price: float, quantity: float, is_paper: bool = False) -> None:
+    """
+    對帳同步成交後，更新資料庫的持股明細庫存。
+    """
+    # 1. 獲取當前該個股持股
     holdings_res = execute_with_retry(
         lambda: supabase.table("holdings")
         .select("id, quantity, average_price")
-        .eq("stock_code", order_detail["stockCode"])
+        .eq("stock_code", stock_code)
         .eq("is_paper", is_paper)
         .execute()
     )
@@ -206,32 +288,33 @@ def execute_trade_transaction(order_detail: Dict[str, Any]) -> Dict[str, Any]:
     new_quantity = 0.0
     new_avg_price = 0.0
 
-    if order_detail["action"] == "BUY":
+    if action == "BUY":
         if existing_holding:
             cur_qty = float(existing_holding["quantity"])
             cur_avg = float(existing_holding["average_price"])
-            buy_qty = float(order_detail["quantity"])
-            buy_price = float(order_detail["price"])
+            buy_qty = float(quantity)
+            buy_price = float(price)
 
             new_quantity = cur_qty + buy_qty
             new_avg_price = ((cur_qty * cur_avg) + (buy_qty * buy_price)) / new_quantity
         else:
-            new_quantity = float(order_detail["quantity"])
-            new_avg_price = float(order_detail["price"])
-    elif order_detail["action"] == "SELL":
+            new_quantity = float(quantity)
+            new_avg_price = float(price)
+    elif action == "SELL":
         if existing_holding:
             cur_qty = float(existing_holding["quantity"])
-            sell_qty = float(order_detail["quantity"])
+            sell_qty = float(quantity)
 
             new_quantity = max(0.0, cur_qty - sell_qty)
             new_avg_price = float(existing_holding["average_price"]) if new_quantity > 0 else 0.0
         else:
-            raise ValueError(f"無法執行賣出訂單：帳戶中無 {order_detail['stockCode']} 的持股")
+            print(f" [Supabase] 警告: 嘗試平倉賣出但持股表中無 {stock_code} 的任何持股")
+            return
 
     # 3. 更新持股表
     if new_quantity > 0:
         holding_record = {
-            "stock_code": order_detail["stockCode"],
+            "stock_code": stock_code,
             "quantity": new_quantity,
             "average_price": new_avg_price,
             "is_paper": is_paper,
@@ -252,7 +335,28 @@ def execute_trade_transaction(order_detail: Dict[str, Any]) -> Dict[str, Any]:
                 .execute()
             )
 
-    return inserted_order[0] if inserted_order else {}
+def get_pending_real_orders() -> List[Dict[str, Any]]:
+    """
+    取得所有狀態為 PENDING 且為真實交易的訂單
+    """
+    return execute_with_retry(
+        lambda: supabase.table("trade_orders")
+        .select("id, stock_code, action, price, quantity, fee, total_amount, executed_at, realized_pnl, status, execution_price, order_id")
+        .eq("status", "PENDING")
+        .eq("is_paper", False)
+        .execute()
+    )
+
+def update_order_status(order_id_db: int, updates: Dict[str, Any]) -> Any:
+    """
+    更新指定 id 的訂單狀態及相關欄位
+    """
+    return execute_with_retry(
+        lambda: supabase.table("trade_orders")
+        .update(updates)
+        .eq("id", order_id_db)
+        .execute()
+    )
 
 # ==========================================================================
 # 4. 系統日誌 相關資料庫操作

@@ -492,6 +492,32 @@
             color: var(--color-danger);
         }
 
+        .status-badge-item {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 12px;
+            font-family: var(--font-sans);
+        }
+        .status-badge-item.pending {
+            background: rgba(245, 158, 11, 0.15);
+            color: #fbbf24;
+        }
+        .status-badge-item.filled {
+            background: var(--color-success-glow);
+            color: var(--color-success);
+        }
+        .status-badge-item.cancelled {
+            background: rgba(148, 163, 184, 0.15);
+            color: #94a3b8;
+        }
+        .status-badge-item.failed {
+            background: var(--color-danger-glow);
+            color: var(--color-danger);
+        }
+
         /* 側邊欄控制面版：自選股與動態配置 */
         .sidebar {
             display: flex;
@@ -836,6 +862,10 @@
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect></svg>
                     停止執行
                 </button>
+                <button class="btn btn-secondary" id="btn-sync" onclick="syncBrokerOrders()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+                    對帳同步
+                </button>
                 <button class="btn btn-danger" id="btn-liquidate" onclick="triggerLiquidateJob()" style="background: linear-gradient(135deg, #ea580c 0%, #dc2626 100%); box-shadow: 0 4px 16px rgba(234, 88, 12, 0.25); border: none;">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 22H5a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h5"></path><polyline points="17 16 21 12 17 8"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
                     立即下車平倉
@@ -973,16 +1003,18 @@
                                     <th>交易時間</th>
                                     <th>股票代號</th>
                                     <th>類型</th>
-                                    <th>成交價格</th>
+                                    <th>委託價格</th>
+                                    <th>實際成交價</th>
                                     <th>數量</th>
                                     <th>交易費用</th>
                                     <th>總金額</th>
-                                    <th style="text-align: right;">實現損益</th>
+                                    <th>實現損益</th>
+                                    <th style="text-align: right;">狀態</th>
                                 </tr>
                             </thead>
                             <tbody id="orders-table-body">
                                 <tr>
-                                    <td colspan="8" class="empty-state">
+                                    <td colspan="10" class="empty-state">
                                         <div>暫無交易紀錄</div>
                                     </td>
                                 </tr>
@@ -1416,6 +1448,27 @@
                     }
                 }
 
+                // 3b. 更新下車平倉按鈕狀態
+                const btnLiq = document.getElementById("btn-liquidate");
+                if (btnLiq) {
+                    if (data.is_liquidating) {
+                        btnLiq.disabled = true;
+                        btnLiq.innerHTML = `<span class="loading-spinner"></span> 正在下車中...`;
+                    } else if (!data.holdings || data.holdings.length === 0) {
+                        btnLiq.disabled = true;
+                        btnLiq.innerHTML = `
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 22H5a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h5"></path><polyline points="17 16 21 12 17 8"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+                            立即下車平倉
+                        `;
+                    } else {
+                        btnLiq.disabled = false;
+                        btnLiq.innerHTML = `
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 22H5a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h5"></path><polyline points="17 16 21 12 17 8"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+                            立即下車平倉
+                        `;
+                    }
+                }
+
                 // 4. 填充持股表格
                 const holdingsBody = document.getElementById("holdings-table-body");
                 holdingsBody.innerHTML = "";
@@ -1458,7 +1511,7 @@
                 if (data.orders.length === 0) {
                     ordersBody.innerHTML = `
                         <tr>
-                            <td colspan="8" class="empty-state">
+                            <td colspan="10" class="empty-state">
                                 <div>暫無歷史交易紀錄</div>
                             </td>
                         </tr>
@@ -1469,19 +1522,42 @@
                         const actionClass = o.action === "BUY" ? "positive" : "negative";
                         const actionLabel = o.action === "BUY" ? "買入" : "賣出";
                         const formattedTime = new Date(o.executed_at).toLocaleString('zh-TW', { hour12: false });
-                        const pnlVal = parseFloat(o.realized_pnl) || 0;
+                        
+                        const statusVal = o.status || "FILLED";
+                        let statusClass = "filled";
+                        let statusLabel = "已成交";
+
+                        if (statusVal === "PENDING") {
+                            statusClass = "pending";
+                            statusLabel = "預約中";
+                        } else if (statusVal === "CANCELLED") {
+                            statusClass = "cancelled";
+                            statusLabel = "已取消";
+                        } else if (statusVal === "FAILED") {
+                            statusClass = "failed";
+                            statusLabel = "已失敗";
+                        }
+
+                        const pnlVal = statusVal === "FILLED" ? (parseFloat(o.realized_pnl) || 0) : 0;
                         const pnlDisplay = pnlVal !== 0 ? `${pnlVal > 0 ? "+" : ""}${formatCurrency(pnlVal)}` : "-";
                         const pnlClass = pnlVal > 0 ? "positive" : (pnlVal < 0 ? "negative" : "");
+
+                        const execPriceVal = o.execution_price;
+                        const execPriceDisplay = (statusVal === "FILLED" && execPriceVal !== null && execPriceVal !== undefined)
+                            ? formatCurrency(execPriceVal)
+                            : "--";
 
                         row.innerHTML = `
                             <td style="font-size:12px; color:var(--text-secondary);">${formattedTime}</td>
                             <td class="stock-tag-td"><span>${o.stock_code}${o.stock_name ? ' ' + o.stock_name : ''}</span></td>
                             <td><span class="pnl-badge ${actionClass}">${actionLabel}</span></td>
                             <td class="price-td">${formatCurrency(o.price)}</td>
+                            <td class="price-td">${execPriceDisplay}</td>
                             <td class="price-td">${parseInt(o.quantity).toLocaleString()} 股</td>
                             <td class="price-td" style="color:var(--text-muted);">${formatCurrency(o.fee)}</td>
                             <td class="price-td" style="font-weight:600;">${formatCurrency(o.total_amount)}</td>
-                            <td style="text-align: right;" class="price-td ${pnlClass}">${pnlDisplay}</td>
+                            <td class="price-td ${pnlClass}">${pnlDisplay}</td>
+                            <td style="text-align: right;"><span class="status-badge-item ${statusClass}">${statusLabel}</span></td>
                         `;
                         ordersBody.appendChild(row);
                     });
@@ -1869,6 +1945,41 @@
             }
         }
 
+        // 觸發與券商對帳同步
+        async function syncBrokerOrders() {
+            const btnSync = document.getElementById("btn-sync");
+            const originalHTML = btnSync.innerHTML;
+            
+            btnSync.disabled = true;
+            btnSync.innerHTML = `<span class="loading-spinner" style="width: 12px; height: 12px; border-width: 2px;"></span> 正在對帳...`;
+            
+            try {
+                const response = await authFetch(`${API_BASE}/api/sync`, {
+                    method: "POST"
+                });
+                if (!response.ok) {
+                    const errData = await response.json();
+                    throw new Error(errData.detail || "伺服器返回錯誤");
+                }
+                const data = await response.json();
+                
+                if (data.status === "ok") {
+                    showToast(data.message, "success");
+                    // 重新加載狀態
+                    fetchStatus();
+                    loadLogs();
+                } else {
+                    showToast("同步失敗: " + (data.message || "未知錯誤"), "error");
+                }
+            } catch (err) {
+                console.error(err);
+                showToast("對帳同步失敗：" + err.message, "error");
+            } finally {
+                btnSync.disabled = false;
+                btnSync.innerHTML = originalHTML;
+            }
+        }
+
         // 觸發交易任務
         async function triggerTradingJob() {
             if (!confirm("確定要現在立即觸發一輪全自動交易決策嗎？\n(將會透過 Gemini LLM 進行選股配比並嘗試進行下單模擬/真實交易)")) return;
@@ -1949,6 +2060,7 @@
                 btnLiq.innerHTML = `<span class="loading-spinner"></span> 正在下車中...`;
             }
             
+            let shouldReenable = true;
             try {
                 const response = await authFetch(`${API_BASE}/api/liquidate`, {
                     method: "POST"
@@ -1958,6 +2070,7 @@
                 
                 if (data.status === "ok") {
                     showToast(data.message, "success");
+                    shouldReenable = false; // 成功啟動下車流程後，按鈕維持禁用，由 fetchStatus 決定何時啟用
                     setTimeout(() => {
                         fetchStatus();
                         loadLogs();
@@ -1969,7 +2082,7 @@
                 console.error(err);
                 showToast("連線後端伺服器時發生錯誤。", "error");
             } finally {
-                if (btnLiq) {
+                if (shouldReenable && btnLiq) {
                     btnLiq.disabled = false;
                     btnLiq.innerHTML = `
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 22H5a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h5"></path><polyline points="17 16 21 12 17 8"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>

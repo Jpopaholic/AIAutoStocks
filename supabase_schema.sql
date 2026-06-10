@@ -58,7 +58,10 @@ CREATE TABLE IF NOT EXISTS trade_orders (
     total_amount  NUMERIC(18, 4) NOT NULL,
     realized_pnl  NUMERIC(18, 4) NOT NULL DEFAULT 0,
     is_paper      BOOLEAN NOT NULL DEFAULT TRUE,
-    executed_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    executed_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    execution_price NUMERIC(18, 4),                     -- 實際成交價
+    status        TEXT NOT NULL DEFAULT 'PENDING',    -- 訂單狀態: PENDING, FILLED, CANCELLED, FAILED
+    order_id      TEXT                                -- 券商委託單號
 );
 
 CREATE INDEX IF NOT EXISTS idx_trade_orders_stock_code   ON trade_orders (stock_code);

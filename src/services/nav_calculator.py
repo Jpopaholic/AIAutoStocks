@@ -46,10 +46,13 @@ def calculate_nav() -> Tuple[float, float, float]:
         cash_balance = initial_cash
         for o in all_orders:
             amt = float(o["total_amount"])
+            status = o.get("status", "FILLED")
             if o["action"] == "BUY":
-                cash_balance -= amt
+                if status not in ["CANCELLED", "FAILED"]:
+                    cash_balance -= amt
             elif o["action"] == "SELL":
-                cash_balance += amt
+                if status == "FILLED":
+                    cash_balance += amt
     except Exception as e:
         log_system_event("WARN", f"[NAV計算器] 無法取得歷史訂單，使用初始本金 {initial_cash:,.0f} 元作為現金餘額: {str(e)}")
         cash_balance = initial_cash
