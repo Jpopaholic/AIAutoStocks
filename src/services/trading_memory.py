@@ -46,6 +46,7 @@ def get_experience_context(limit: int = 3) -> str:
             case_info = {
                 "stock_code": o.get("stock_code"),
                 "price": float(o.get("price") or 0.0),
+                "execution_price": float(o.get("execution_price") or o.get("price") or 0.0),
                 "quantity": float(o.get("quantity") or 0.0),
                 "realized_pnl": realized_pnl,
                 "roi": roi,
@@ -73,7 +74,7 @@ def get_experience_context(limit: int = 3) -> str:
         for i, c in enumerate(successful_cases, 1):
             lines.append(
                 f"  {i}. 股票: {c['stock_code']} | 賣出日期: {c['date']} | "
-                f"均價: {c['price']} | 股數: {c['quantity']} | "
+                f"委託價: {c['price']:,.2f} | 成交均價: {c['execution_price']:,.2f} | 股數: {c['quantity']:,.0f} | "
                 f"平倉損益: +{c['realized_pnl']:,.0f} 元 | 投報率 (ROI): +{c['roi']*100:.2f}%"
             )
     else:
@@ -84,7 +85,7 @@ def get_experience_context(limit: int = 3) -> str:
         for i, c in enumerate(failed_cases, 1):
             lines.append(
                 f"  {i}. 股票: {c['stock_code']} | 賣出日期: {c['date']} | "
-                f"均價: {c['price']} | 股數: {c['quantity']} | "
+                f"委託價: {c['price']:,.2f} | 成交均價: {c['execution_price']:,.2f} | 股數: {c['quantity']:,.0f} | "
                 f"平倉損益: {c['realized_pnl']:,.0f} 元 | 投報率 (ROI): {c['roi']*100:.2f}%"
             )
     else:

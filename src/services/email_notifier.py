@@ -171,6 +171,12 @@ def send_daily_report(ai_outlook: str, override_orders: Optional[List[Dict[str, 
             pnl_text = f"{realized_pnl:+,.0f} 元" if o["action"] == "SELL" and status == "FILLED" else "-"
             pnl_color = "#22c55e" if realized_pnl > 0 else ("#ef4444" if realized_pnl < 0 else "#64748b")
             
+            limit_price_val = o.get("price")
+            if limit_price_val is not None:
+                limit_price_display = f"{float(limit_price_val):,.2f}"
+            else:
+                limit_price_display = "--"
+
             exec_price_val = o.get("execution_price")
             if status == "FILLED" and exec_price_val is not None:
                 exec_price_display = f"{float(exec_price_val):,.2f}"
@@ -188,6 +194,7 @@ def send_daily_report(ai_outlook: str, override_orders: Optional[List[Dict[str, 
                 <tr style="border-bottom: 1px solid #e2e8f0;">
                     <td style="padding: 10px; color: #1e293b; font-weight: bold;">{o['stock_code']}{name_display}</td>
                     <td style="padding: 10px; text-align: center;"><span style="background-color: {action_bg}; color: {action_color}; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold;">{action_label}</span></td>
+                    <td style="padding: 10px; text-align: right;">{limit_price_display}</td>
                     <td style="padding: 10px; text-align: right;">{exec_price_display}</td>
                     <td style="padding: 10px; text-align: right;">{float(o['quantity']):,.0f}</td>
                     <td style="padding: 10px; text-align: right;">{fee_val:,.0f} 元</td>
@@ -197,7 +204,7 @@ def send_daily_report(ai_outlook: str, override_orders: Optional[List[Dict[str, 
             """)
 
     if not filled_and_other_rows:
-        filled_table_body = """<tr><td colspan="7" style="padding: 20px; text-align: center; color: #64748b;">今日無已完成交易成交紀錄</td></tr>"""
+        filled_table_body = """<tr><td colspan="8" style="padding: 20px; text-align: center; color: #64748b;">今日無已完成交易成交紀錄</td></tr>"""
     else:
         filled_table_body = "\n".join(filled_and_other_rows)
         
@@ -268,6 +275,7 @@ def send_daily_report(ai_outlook: str, override_orders: Optional[List[Dict[str, 
                             <tr style="background-color: #f8fafc; color: #64748b; font-weight: bold; border-bottom: 2px solid #cbd5e1;">
                                 <th style="padding: 8px; text-align: left;">股票</th>
                                 <th style="padding: 8px; text-align: center;">動作</th>
+                                <th style="padding: 8px; text-align: right;">委託價</th>
                                 <th style="padding: 8px; text-align: right;">實際成交價</th>
                                 <th style="padding: 8px; text-align: right;">股數</th>
                                 <th style="padding: 8px; text-align: right;">規費</th>

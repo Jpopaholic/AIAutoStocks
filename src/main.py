@@ -394,8 +394,16 @@ def run_sandbox_simulation(stock_codes: List[str], start_date: str, end_date: st
             if stock_code == "TAIEX":
                 continue
             action = d.get("action") if isinstance(d, dict) else d.action
-            price = d.get("price") if isinstance(d, dict) else d.price
-            quantity = float(d.get("quantity") if isinstance(d, dict) else d.quantity)
+            price_val = d.get("price") if isinstance(d, dict) else getattr(d, "price", None)
+            quantity_val = d.get("quantity") if isinstance(d, dict) else getattr(d, "quantity", None)
+            try:
+                price = float(price_val) if price_val is not None else 0.0
+            except (ValueError, TypeError):
+                price = 0.0
+            try:
+                quantity = float(quantity_val) if quantity_val is not None else 0.0
+            except (ValueError, TypeError):
+                quantity = 0.0
             reason = d.get("reason") if isinstance(d, dict) else d.reason
             stock_name = _get_name(stock_code)
             display_code = f"{stock_code} {stock_name}" if stock_name else stock_code

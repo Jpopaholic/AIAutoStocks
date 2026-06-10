@@ -207,7 +207,7 @@ def place_order(stock_code: str, action: str, price: float, quantity: float) -> 
                     if not matching_holding:
                         raise ValueError(f"模擬平倉失敗：帳戶中並無 {stock_code} 的任何持股")
                     
-                    avg_cost = float(matching_holding["average_price"])
+                    avg_cost = float(matching_holding.get("average_price") or 0.0)
                     # 實現損益 = (賣出價 - 買入均價) * 股數 - 規費
                     realized_pnl = (price - avg_cost) * quantity - fee
                 except Exception as e:
@@ -318,9 +318,9 @@ def place_order(stock_code: str, action: str, price: float, quantity: float) -> 
                 if action == "SELL":
                     try:
                         current_holdings = get_holdings()
-                        matching_holding = next((h for h in current_holdings if h["stock_code"] == stock_code), None)
+                        matching_holding = next((h for h in current_holdings if h.get("stock_code") == stock_code), None)
                         if matching_holding:
-                            avg_cost = float(matching_holding["average_price"])
+                            avg_cost = float(matching_holding.get("average_price") or 0.0)
                             realized_pnl = (price - avg_cost) * quantity - fee
                     except Exception as he:
                         print(f" [下單連接器] 實盤計算平倉損益失敗: {str(he)}")
@@ -402,7 +402,7 @@ def _write_raw_order_log(order_detail: Dict[str, Any], response: Dict[str, Any])
 
 def check_and_execute_hard_stop_losses() -> None:
     """
-    掃描目前所有持股倉位，若有持股虧損達到或超過 5% (-5%)，
+    掃描目前所有持股倉位，若有持股虧損達到或超過 8% (-8%)，
     則不經過 AI 直接觸發硬體強制平倉（SELL），自動全數賣出以控制下檔風險。
     """
     log_system_event("INFO", "啟動持股硬體停損防線掃描...")
@@ -413,9 +413,14 @@ def check_and_execute_hard_stop_losses() -> None:
         return
 
     for h in holdings:
-        stock_code = h["stock_code"]
-        qty = float(h["quantity"])
-        avg_price = float(h["average_price"])
+        stock_code = h.get("stock_code")
+        if not stock_code:
+            continue
+        try:
+            qty = float(h.get("quantity") or 0.0)
+            avg_price = float(h.get("average_price") or 0.0)
+        except (ValueError, TypeError):
+            continue
         
         if qty <= 0:
             continue
@@ -423,12 +428,16 @@ def check_and_execute_hard_stop_losses() -> None:
         # 取得模擬或真實盤中報價
         from src.services import sandbox_simulator
         quote = sandbox_simulator.fetch_realtime_quote(stock_code)
-        current_price = float(quote.get("price") or avg_price)
+        price_val = quote.get("price") or avg_price if quote else avg_price
+        try:
+            current_price = float(price_val) if price_val is not None else 0.0
+        except (ValueError, TypeError):
+            current_price = 0.0
         
         roi = (current_price - avg_price) / avg_price if avg_price > 0 else 0.0
         
-        # 虧損達 5% 或以上觸發停損
-        if roi <= -0.05:
+        # 虧損達 8% 或以上觸發停損
+        if roi <= -0.08:
             msg = f"【硬體停損觸發】偵測到 {stock_code} 虧損達 {roi*100:.2f}% (成本: {avg_price} | 現價: {current_price})，執行強制平倉！"
             log_system_event("WARN", msg)
             try:
@@ -592,8 +601,12 @@ def sync_sandbox_orders(sim_date: str) -> None:
         order_db_id = order["id"]
         stock_code = order["stock_code"]
         action = order["action"]
-        qty = float(order["quantity"])
-        limit_price = float(order["price"])
+        try:
+            qty = float(order.get("quantity") or 0.0)
+            limit_price = float(order.get("price") or 0.0)
+        except (ValueError, TypeError):
+            qty = 0.0
+            limit_price = 0.0
         
         # 2. 獲取今日即時報價 (收盤價)
         quote = sandbox_simulator.fetch_realtime_quote(stock_code)
@@ -601,7 +614,11 @@ def sync_sandbox_orders(sim_date: str) -> None:
             log_system_event("WARN", f"[模擬對帳] 警告: 無法獲取 {stock_code} 在 {sim_date} 的模擬報價，跳過")
             continue
             
-        exec_price = float(quote.get("price") or limit_price)
+        price_val = quote.get("price") or limit_price if quote else limit_price
+        try:
+            exec_price = float(price_val) if price_val is not None else 0.0
+        except (ValueError, TypeError):
+            exec_price = 0.0
         
         # 3. 重新計算費用與實現損益 (買入以實際成交價，賣出計算與持股均價的損益)
         costs = calculate_fees(action, exec_price, qty)
@@ -613,9 +630,9 @@ def sync_sandbox_orders(sim_date: str) -> None:
             try:
                 # 取得持股庫存均價
                 holdings = get_holdings()
-                matching_holding = next((h for h in holdings if h["stock_code"] == stock_code), None)
+                matching_holding = next((h for h in holdings if h.get("stock_code") == stock_code), None)
                 if matching_holding:
-                    avg_cost = float(matching_holding["average_price"])
+                    avg_cost = float(matching_holding.get("average_price") or 0.0)
                     realized_pnl = (exec_price - avg_cost) * qty - actual_fee
             except Exception as e:
                 print(f" [模擬對帳] 計算模擬平倉損益失敗: {e}")

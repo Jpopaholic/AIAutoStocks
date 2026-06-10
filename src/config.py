@@ -252,14 +252,16 @@ class LimitsConfig:
         db_cfg = _get_db_config_cached()
         if "TRADING_LIMIT_SINGLE_STOCK" in db_cfg:
             try:
-                return float(db_cfg["TRADING_LIMIT_SINGLE_STOCK"])
-            except ValueError:
+                val = db_cfg["TRADING_LIMIT_SINGLE_STOCK"]
+                if val is not None and str(val).strip() != "":
+                    return float(val)
+            except (ValueError, TypeError):
                 pass
         val = get_config_val("TRADING_LIMIT_SINGLE_STOCK")
-        if val is not None:
+        if val is not None and str(val).strip() != "":
             try:
                 return float(val)
-            except ValueError:
+            except (ValueError, TypeError):
                 pass
         return self._single_stock
 
@@ -268,14 +270,16 @@ class LimitsConfig:
         db_cfg = _get_db_config_cached()
         if "TRADING_LIMIT_DAILY_TOTAL" in db_cfg:
             try:
-                return float(db_cfg["TRADING_LIMIT_DAILY_TOTAL"])
-            except ValueError:
+                val = db_cfg["TRADING_LIMIT_DAILY_TOTAL"]
+                if val is not None and str(val).strip() != "":
+                    return float(val)
+            except (ValueError, TypeError):
                 pass
         val = get_config_val("TRADING_LIMIT_DAILY_TOTAL")
-        if val is not None:
+        if val is not None and str(val).strip() != "":
             try:
                 return float(val)
-            except ValueError:
+            except (ValueError, TypeError):
                 pass
         return self._daily_total
 
@@ -283,7 +287,8 @@ class LimitsConfig:
     def is_paper_trading(self) -> bool:
         db_cfg = _get_db_config_cached()
         if "PAPER_TRADING_MODE" in db_cfg:
-            return db_cfg["PAPER_TRADING_MODE"].lower() != "false"
+            val = db_cfg["PAPER_TRADING_MODE"]
+            return val is not None and str(val).lower() != "false"
         val = get_config_val("PAPER_TRADING_MODE")
         if val is not None:
             return val.lower() != "false"
@@ -296,7 +301,7 @@ class LimitsConfig:
             try:
                 val = db_cfg["TRADING_LIMIT_SINGLE_STOCK_PCT"]
                 return float(val) if val is not None and str(val).strip() != "" else None
-            except ValueError:
+            except (ValueError, TypeError):
                 pass
         val = get_config_val("TRADING_LIMIT_SINGLE_STOCK_PCT")
         return _parse_float_opt(val) if val is not None else self._single_stock_pct
@@ -308,7 +313,7 @@ class LimitsConfig:
             try:
                 val = db_cfg["TRADING_LIMIT_DAILY_TOTAL_PCT"]
                 return float(val) if val is not None and str(val).strip() != "" else None
-            except ValueError:
+            except (ValueError, TypeError):
                 pass
         val = get_config_val("TRADING_LIMIT_DAILY_TOTAL_PCT")
         return _parse_float_opt(val) if val is not None else self._daily_total_pct
@@ -318,14 +323,16 @@ class LimitsConfig:
         db_cfg = _get_db_config_cached()
         if "INITIAL_CASH" in db_cfg:
             try:
-                return float(db_cfg["INITIAL_CASH"])
-            except ValueError:
+                val = db_cfg["INITIAL_CASH"]
+                if val is not None and str(val).strip() != "":
+                    return float(val)
+            except (ValueError, TypeError):
                 pass
         val = get_config_val("INITIAL_CASH")
-        if val is not None:
+        if val is not None and str(val).strip() != "":
             try:
                 return float(val)
-            except ValueError:
+            except (ValueError, TypeError):
                 pass
         return self._initial_cash
 

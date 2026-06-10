@@ -46,7 +46,7 @@ class PortfolioDecision(BaseModel):
 DEFAULT_TRADING_SKILLS = [
     "均線交叉策略 (Moving Average Cross): 當短線均線 (MA5) 向上突破長線均線 (MA20) 且有量能配合時，視為潛在黃金交叉買點；反之，跌破時視為死亡交叉賣點。",
     "相對強弱指標 (RSI): 評估短期超買與超賣狀態。RSI > 70 視為超買過熱（注意賣出/拉回），RSI < 30 視為超賣超跌（注意買入分批佈局）。",
-    "嚴格風險控制與止損停利: 當帳戶目前持股之跌幅大於 5% 時，必須無條件發送 SELL 決策以停損；當持股獲利達 15% 時，考慮分批停利入袋為安。",
+    "嚴格風險控制與止損停利: 當帳戶目前持股之跌幅大於 8% 時，必須無條件發送 SELL 決策以停損；當持股獲利達 15% 時，考慮分批停利入袋為安。",
     "資金配置策略: 進行多股投資組合分析時，將資金分配給多個標的以分散風險（不要把雞蛋放在同一個籃子裡）。單筆買入之委託總額限制在可用資金之 20% 以內，遵守全局交易防呆上限，禁止單筆重倉孤注一擲。",
     "【停損買回冷卻】：若在「近期帳戶交易歷史」中，某檔股票在當天剛剛執行過賣出 (SELL) 且為虧損平倉（即停損），則今日絕對禁止再次對該檔股票發送買入 (BUY) 決策，避免陷入重複追高殺低。",
     "【大盤趨勢防禦】：大盤加權指數 (TAIEX) 是整體市場走向的風向球。若大盤指數收盤跌破其 MA20 (即大盤收盤價最近 20 天的簡單移動平均)，代表大盤已步入弱勢或空頭排列，此時應嚴格採取防守策略，原則上禁止買入 (BUY) 新增任何持股或部位（除非個股有極強的置信度與特大個股利多），並應主動減持手上已持有的高風險股票以規避市場崩跌風險；若大盤收盤站穩在 MA20 之上，則可正常執行交易與買入評估。"
@@ -176,9 +176,17 @@ def generate_portfolio_decisions(
             action_label = "買入 (BUY)" if o.get("action") == "BUY" else "賣出 (SELL)"
             pnl_val = float(o.get("realized_pnl") or 0.0)
             pnl_label = f" | 實現損益: {pnl_val:+,.0f} 元" if o.get("action") == "SELL" else ""
+            exec_price_val = o.get("execution_price")
+            limit_price = float(o.get("price") or 0.0)
+            status = o.get("status", "FILLED")
+            if status == "FILLED" and exec_price_val is not None:
+                price_text = f"委託價: {limit_price:,.2f} 元 (成交價: {float(exec_price_val):,.2f} 元)"
+            else:
+                price_text = f"委託價: {limit_price:,.2f} 元"
+
             recent_orders_lines.append(
                 f"  - {time_label} | {action_label} {o.get('stock_code')} | "
-                f"價格: {float(o.get('price') or 0):,.2f} 元 | 股數: {float(o.get('quantity') or 0):,.0f} 股 | "
+                f"{price_text} | 股數: {float(o.get('quantity') or 0):,.0f} 股 | "
                 f"總金額: {float(o.get('total_amount') or 0):,.0f} 元{pnl_label}"
             )
     except Exception as e:
