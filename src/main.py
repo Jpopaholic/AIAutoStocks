@@ -186,6 +186,23 @@ def run_live_trading_job(stock_codes: List[str]) -> None:
     # C. 呼叫 AI 交易決策代理生成多股聯合配置決策
     # TAIEX 只作為大盤參考數據傳入 klines_map，但不列入決策 stock_codes
     from src.config import get_stock_name
+    from src.agents import regime_agent
+    
+    # 呼叫大盤氣候代理判定市場氣候
+    try:
+        print(" [排程引擎] 呼叫大盤氣候代理判定市場氣候...")
+        regime_assessment = regime_agent.generate_market_regime(klines_map.get("TAIEX", []))
+        print(f" [排程引擎] 大盤氣候判定完成: {regime_assessment.get('regime')} | 姿態: {regime_assessment.get('posture')} | 風險乘數: {regime_assessment.get('risk_multiplier')}")
+        print(f"   - 理由: {regime_assessment.get('reason')}")
+        supabase_client.log_system_event(
+            "INFO", 
+            f"大盤氣候判定: {regime_assessment.get('regime')} ({regime_assessment.get('posture')}), "
+            f"風險乘數: {regime_assessment.get('risk_multiplier')}, 理由: {regime_assessment.get('reason')}"
+        )
+    except Exception as regime_err:
+        print(f" [排程引擎] 警告: 判定大盤氣候時發生異常: {regime_err}")
+        regime_assessment = None
+
     ai_stock_codes = [c for c in klines_map.keys() if c != "TAIEX"]
     ai_outlook_details = []
     try:
@@ -193,7 +210,8 @@ def run_live_trading_job(stock_codes: List[str]) -> None:
         portfolio_decision = trading_agent.generate_portfolio_decisions(
             stock_codes=ai_stock_codes,
             klines_map=klines_map,
-            current_holdings=holdings
+            current_holdings=holdings,
+            regime_assessment=regime_assessment
         )
         decisions = portfolio_decision.get("decisions", [])
     except Exception as e:
@@ -240,7 +258,7 @@ def run_live_trading_job(stock_codes: List[str]) -> None:
     # E. 彙整今日交易損益與持股，發送每日報告至 Discord Webhook
     ai_outlook_str = "\n\n".join(ai_outlook_details)
     try:
-        discord_notifier.send_daily_report(ai_outlook_str)
+        discord_notifier.send_daily_report(ai_outlook_str, regime_assessment=regime_assessment)
     except Exception as e:
         print(f" [排程引擎] Discord 報告發送失敗: {str(e)}")
 
@@ -375,12 +393,23 @@ def run_sandbox_simulation(stock_codes: List[str], start_date: str, end_date: st
 
         # 生成交易決策 (TAIEX 只作大盤參考，不列入決策 stock_codes)
         from src.config import get_stock_name as _get_name
+        from src.agents import regime_agent
+        
+        # 呼叫大盤氣候代理判定市場氣候
+        try:
+            regime_assessment = regime_agent.generate_market_regime(klines_map.get("TAIEX", []))
+            print(f"   [沙盒大盤氣候]: {regime_assessment.get('regime')} | 姿態: {regime_assessment.get('posture')} | 風險乘數: {regime_assessment.get('risk_multiplier')}")
+        except Exception as regime_err:
+            print(f"   [沙盒大盤氣候判定失敗]: {regime_err}")
+            regime_assessment = None
+
         ai_stock_codes = [c for c in klines_map.keys() if c != "TAIEX"]
         try:
             portfolio_decision = trading_agent.generate_portfolio_decisions(
                 stock_codes=ai_stock_codes,
                 klines_map=klines_map,
-                current_holdings=holdings
+                current_holdings=holdings,
+                regime_assessment=regime_assessment
             )
             decisions = portfolio_decision.get("decisions", [])
         except Exception as e:
@@ -430,7 +459,7 @@ def run_sandbox_simulation(stock_codes: List[str], start_date: str, end_date: st
         # 該模擬日交易結束，發送模擬結算報告至 Discord Webhook
         ai_outlook_str = "\n\n".join(ai_outlook_details)
         try:
-            discord_notifier.send_daily_report(ai_outlook_str)
+            discord_notifier.send_daily_report(ai_outlook_str, regime_assessment=regime_assessment)
         except Exception as e:
             print(f"   [模擬 Discord 報告發送失敗]: {str(e)}")
 

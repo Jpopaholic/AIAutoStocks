@@ -56,7 +56,8 @@ def generate_portfolio_decisions(
     stock_codes: List[str],
     klines_map: Dict[str, List[Dict[str, Any]]],
     current_holdings: List[Dict[str, Any]],
-    extra_skills: Optional[List[str]] = None
+    extra_skills: Optional[List[str]] = None,
+    regime_assessment: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
     整合多個股票的歷史 K 線、當前所有持股、過去交易記憶，利用 Gemini 進行多股聯合量化與資金配置決策。
@@ -97,6 +98,14 @@ def generate_portfolio_decisions(
     from src.services.nav_calculator import get_dynamic_limits, calculate_nav
     single_limit, daily_limit = get_dynamic_limits()
     
+    if regime_assessment:
+        try:
+            multiplier = float(regime_assessment.get("risk_multiplier", 1.0))
+            single_limit = single_limit * multiplier
+            daily_limit = daily_limit * multiplier
+        except Exception as mult_err:
+            print(f" [AI交易代理] 警告: 套用風險限額乘數失敗: {mult_err}")
+
     try:
         cash_balance, holdings_value, net_asset_value = calculate_nav()
     except Exception:
@@ -116,10 +125,22 @@ def generate_portfolio_decisions(
         pending_instruction = f"\n6. 【智慧平倉排隊】：當前股票 {', '.join(pending_stocks)} 處於等候平倉狀態（因先前停損委託未能成交或跌停鎖死）。對這些處於等候平倉狀態的股票，你「絕對禁止發出買入 (BUY)」決策。請合理評估當前 K 線與大盤買氣：若該股持續疲弱無買氣支撐，請給出 'SELL' 以便系統繼續掛單排隊平倉；若個股出現反彈信號或有暫緩賣出之需要，可給出 'HOLD' 以暫時停在持股中觀望。"
 
     # 3. 構建 System Instruction (系統提示詞)
+    regime_text = ""
+    if regime_assessment:
+        regime_text = (
+            f"\n【當前大盤市場氣候判定 (Regime Layer Assessment)】:\n"
+            f"- 市場狀態 (Regime): {regime_assessment.get('regime', 'UNKNOWN')}\n"
+            f"- 交易姿態 (Posture): {regime_assessment.get('posture', 'UNKNOWN')}\n"
+            f"- 風險限額乘數 (Multiplier): {regime_assessment.get('risk_multiplier', 1.0)}\n"
+            f"- 大腦分析理由 (Reason): {regime_assessment.get('reason', '')}\n"
+            f"請務必將上述大盤氣候（特別是交易姿態與分析理由）作為最高風控指令！\n"
+            f"如果交易姿態為 DEFENSIVE，代表此時大盤走勢極差或劇烈震盪，你的個股操作應「極度保守」，強烈傾向 HOLD 或 SELL 避險，原則上禁止任何新增買入 (BUY) 部位（除非有極端強勢個股之特大個股利多支撐，且此時你被配置的可用額度已被乘以風險乘數縮小至極低水位，請務必精準遵守額度上限）。\n"
+        )
+
     system_instruction = f"""
 你是一個資深的台股量化投資與多股投資組合（Portfolio）配置分析專家。你熟悉台股市場特性、技術線圖分析與風控原則。
 你的任務是分析給定的多個個股的 K 線數據、目前帳戶的所有持股現況與過往的平倉成敗經驗，生成一份標準的多股交易決策 JSON。
-
+{regime_text}
 你的金融分析技能與風控準則包含：
 {skills_text}
 

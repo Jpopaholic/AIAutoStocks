@@ -35,7 +35,11 @@ def _send_discord_webhook(webhook_url: str, payload: dict, retries: int = 3, del
 
 
 
-def send_daily_report(ai_outlook: str, override_orders: Optional[List[Dict[str, Any]]] = None) -> None:
+def send_daily_report(
+    ai_outlook: str,
+    override_orders: Optional[List[Dict[str, Any]]] = None,
+    regime_assessment: Optional[Dict[str, Any]] = None
+) -> None:
     """
     彙整今日交易、持股現況、資產淨值與 AI 分析，產出 Discord Rich Embed 每日交易與狀態報告並發送
     :param ai_outlook: AI 針對今日交易的反思或明日台股的分析預測
@@ -216,6 +220,67 @@ def send_daily_report(ai_outlook: str, override_orders: Optional[List[Dict[str, 
         color = 15679812 if is_liquidation else (3899902 if is_sandbox_mode else 2278750)
         ai_outlook_display = ai_outlook[:1000] + "..." if len(ai_outlook) > 1000 else ai_outlook
 
+        fields = [
+            {
+                "name": "💰 投資組合帳戶總覽",
+                "value": (
+                    f"可用現金餘額: `{cash_balance:,.0f}` 元\n"
+                    f"持股總市值: `{holdings_value:,.0f}` 元\n"
+                    f"資產淨總值 (NAV): **`{net_asset_value:,.0f}`** 元 (`{'+' if net_asset_roi >= 0 else ''}{net_asset_roi:.2f}%`)\n"
+                    f"今日已實現損益: **`{today_realized_pnl:+,.0f}`** 元"
+                ),
+                "inline": False
+            }
+        ]
+
+        if regime_assessment:
+            regime = regime_assessment.get("regime", "UNKNOWN")
+            posture = regime_assessment.get("posture", "UNKNOWN")
+            risk_mult = regime_assessment.get("risk_multiplier", 1.0)
+            reason = regime_assessment.get("reason", "")
+            
+            emoji_map = {
+                "BULLISH_TREND": "🐂 多頭趨勢",
+                "BEARISH_TREND": "🐻 空頭趨勢",
+                "CALM_RANGE": "🦀 低波動盤整",
+                "VOLATILE_RANGE": "🌪️ 高波動震盪"
+            }
+            regime_display = emoji_map.get(regime, regime)
+            
+            fields.append({
+                "name": "🌦️ Market Regime 大盤氣候判定",
+                "value": (
+                    f"市場狀態: **`{regime_display}`**\n"
+                    f"交易姿態: **`{posture}`**\n"
+                    f"風險限額乘數: **`{risk_mult:.1f}`**\n"
+                    f"分析理由: {reason}"
+                ),
+                "inline": False
+            })
+
+        fields.extend([
+            {
+                "name": "🟢 今日已完成交易 (實際成交回報)",
+                "value": completed_trades_text,
+                "inline": False
+            },
+            {
+                "name": "⏳ 今日盤後 AI 新增委託 (預約明日交易)",
+                "value": pending_trades_text,
+                "inline": False
+            },
+            {
+                "name": "📈 目前持股現況",
+                "value": holdings_text,
+                "inline": False
+            },
+            {
+                "name": "🧠 AI 明日分析預測與反思",
+                "value": ai_outlook_display or "無 AI 預測數據",
+                "inline": False
+            }
+        ])
+
         discord_payload = {
             "username": "AI 台股自動交易報告",
             "embeds": [
@@ -223,38 +288,7 @@ def send_daily_report(ai_outlook: str, override_orders: Optional[List[Dict[str, 
                     "title": f"📊 {subject}",
                     "description": f"**環境/模式**: `{mode_label}`",
                     "color": color,
-                    "fields": [
-                        {
-                            "name": "💰 投資組合帳戶總覽",
-                            "value": (
-                                f"可用現金餘額: `{cash_balance:,.0f}` 元\n"
-                                f"持股總市值: `{holdings_value:,.0f}` 元\n"
-                                f"資產淨總值 (NAV): **`{net_asset_value:,.0f}`** 元 (`{'+' if net_asset_roi >= 0 else ''}{net_asset_roi:.2f}%`)\n"
-                                f"今日已實現損益: **`{today_realized_pnl:+,.0f}`** 元"
-                            ),
-                            "inline": False
-                        },
-                        {
-                            "name": "🟢 今日已完成交易 (實際成交回報)",
-                            "value": completed_trades_text,
-                            "inline": False
-                        },
-                        {
-                            "name": "⏳ 今日盤後 AI 新增委託 (預約明日交易)",
-                            "value": pending_trades_text,
-                            "inline": False
-                        },
-                        {
-                            "name": "📈 目前持股現況",
-                            "value": holdings_text,
-                            "inline": False
-                        },
-                        {
-                            "name": "🧠 AI 明日分析預測與反思",
-                            "value": ai_outlook_display or "無 AI 預測數據",
-                            "inline": False
-                        }
-                    ],
+                    "fields": fields,
                     "footer": {
                         "text": f"此報告由 AI 自動化交易系統發送。"
                     },
