@@ -833,4 +833,12 @@ app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8080))
-    uvicorn.run("src.web_server:app", host="0.0.0.0", port=port, reload=True)
+    is_fly = "FLY_APP_NAME" in os.environ
+    uvicorn.run(
+        "src.web_server:app",
+        host="0.0.0.0",
+        port=port,
+        reload=not is_fly,
+        timeout_keep_alive=65 if is_fly else 5
+    )
+

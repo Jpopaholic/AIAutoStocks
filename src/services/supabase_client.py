@@ -82,7 +82,7 @@ def update_gemini_key_state(key_hash: str, updates: Dict[str, Any]) -> Any:
     }
     return execute_with_retry(
         lambda: supabase.table("gemini_keys_state")
-        .upsert({ "key_hash": key_hash, **payload })
+        .upsert({ "key_hash": key_hash, **payload }, on_conflict="key_hash")
         .execute()
     )
 

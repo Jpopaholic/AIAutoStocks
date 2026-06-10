@@ -100,14 +100,23 @@ def _validate_trading_limits(action: str, price: float, quantity: float) -> None
             )
 
 _shioaji_api = None
+_shioaji_login_time = 0.0
 _shioaji_lock = threading.Lock()
 
 def _get_shioaji_api():
     """
     延遲載入並登入永豐證券 Shioaji SDK 實體
     """
-    global _shioaji_api
+    global _shioaji_api, _shioaji_login_time
     with _shioaji_lock:
+        if _shioaji_api is not None and (time.time() - _shioaji_login_time > 12 * 3600):
+            log_system_event("INFO", "Shioaji 連線已超過 12 小時，主動登出以防 Token 過期...")
+            try:
+                _shioaji_api.logout()
+            except Exception:
+                pass
+            _shioaji_api = None
+
         if _shioaji_api is None:
             log_system_event("INFO", "正在初始化永豐證券 Shioaji SDK...")
             try:
@@ -136,6 +145,7 @@ def _get_shioaji_api():
                 # 初始化 API (實盤下單模式使用 simulation=False)
                 api = sj.Shioaji(simulation=False)
                 api.login(api_key=api_key, secret_key=secret_key)
+                _shioaji_login_time = time.time()
                 log_system_event("INFO", "永豐證券 API 帳號登入成功。")
                 
                 # 啟用 CA 憑證
@@ -349,6 +359,14 @@ def place_order(stock_code: str, action: str, price: float, quantity: float) -> 
                 return db_result
             except Exception as e:
                 log_system_event("ERROR", f"真實下單委託異常失敗: {str(e)}")
+                # 斷線或異常時，清空全域 API 實例，確保下次嘗試時會重新登入
+                global _shioaji_api
+                try:
+                    if _shioaji_api is not None:
+                        _shioaji_api.logout()
+                except Exception:
+                    pass
+                _shioaji_api = None
                 # 判定是否為系統級故障
                 err_msg = str(e).lower()
                 systemic_keywords = ["login", "ca_path", "passwd", "cert", "connection", "timeout", "network", "auth", "invalid credential"]
@@ -541,6 +559,14 @@ def sync_broker_orders() -> None:
                 
     except Exception as e:
         log_system_event("ERROR", f"[對帳同步] 對帳同步任務執行失敗: {str(e)}")
+        # 發生異常時清空快取的 API 實例，確保下次能自動重新登入
+        global _shioaji_api
+        try:
+            if _shioaji_api is not None:
+                _shioaji_api.logout()
+        except Exception:
+            pass
+        _shioaji_api = None
 
 def sync_sandbox_orders(sim_date: str) -> None:
     """
