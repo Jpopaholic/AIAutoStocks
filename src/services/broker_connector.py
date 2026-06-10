@@ -436,9 +436,10 @@ def check_and_execute_hard_stop_losses() -> None:
         
         roi = (current_price - avg_price) / avg_price if avg_price > 0 else 0.0
         
-        # 虧損達 8% 或以上觸發停損
-        if roi <= -0.08:
-            msg = f"【硬體停損觸發】偵測到 {stock_code} 虧損達 {roi*100:.2f}% (成本: {avg_price} | 現價: {current_price})，執行強制平倉！"
+        # 虧損達設定比例或以上觸發硬體停損
+        hard_limit = config.limits.hard_stop_loss_pct
+        if roi <= -hard_limit:
+            msg = f"【硬體停損觸發】偵測到 {stock_code} 虧損達 {roi*100:.2f}% (成本: {avg_price} | 現價: {current_price} | 停損閾值: -{hard_limit*100:.1f}%)，執行強制平倉！"
             log_system_event("WARN", msg)
             try:
                 # 執行下單賣出全部股數

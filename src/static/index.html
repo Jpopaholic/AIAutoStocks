@@ -1080,6 +1080,10 @@
                             <input type="number" step="0.01" class="form-control" id="cfg-daily-pct" placeholder="例如: 0.15 代表 15%">
                         </div>
                         <div class="form-row">
+                            <label for="cfg-hard-stop-loss">初始硬停損比例 (HARD_STOP_LOSS_PCT)</label>
+                            <input type="number" step="0.01" class="form-control" id="cfg-hard-stop-loss" placeholder="例如: 0.08 代表 8%">
+                        </div>
+                        <div class="form-row">
                             <label for="cfg-paper">交易模式 (PAPER_TRADING_MODE)</label>
                             <select class="form-control" id="cfg-paper">
                                 <option value="true">模擬交易 (Sandbox / Paper)</option>
@@ -1862,6 +1866,7 @@
                 document.getElementById("cfg-initial-cash").value = data.INITIAL_CASH;
                 document.getElementById("cfg-single-pct").value = data.TRADING_LIMIT_SINGLE_STOCK_PCT;
                 document.getElementById("cfg-daily-pct").value = data.TRADING_LIMIT_DAILY_TOTAL_PCT;
+                document.getElementById("cfg-hard-stop-loss").value = data.HARD_STOP_LOSS_PCT;
                 document.getElementById("cfg-paper").value = data.PAPER_TRADING_MODE;
                 document.getElementById("cfg-model").value = data.GEMINI_MODEL;
                 document.getElementById("cfg-timezone").value = data.TAIWAN_STOCK_TIMEZONE;
@@ -1877,6 +1882,7 @@
             const initialCash = document.getElementById("cfg-initial-cash").value;
             const singlePct = document.getElementById("cfg-single-pct").value;
             const dailyPct = document.getElementById("cfg-daily-pct").value;
+            const hardStopLoss = document.getElementById("cfg-hard-stop-loss").value;
             const paper = document.getElementById("cfg-paper").value;
             const model = document.getElementById("cfg-model").value;
             const sandboxStart = document.getElementById("cfg-sandbox-start").value;
@@ -1891,6 +1897,7 @@
                             INITIAL_CASH: initialCash,
                             TRADING_LIMIT_SINGLE_STOCK_PCT: singlePct,
                             TRADING_LIMIT_DAILY_TOTAL_PCT: dailyPct,
+                            HARD_STOP_LOSS_PCT: hardStopLoss,
                             PAPER_TRADING_MODE: paper,
                             GEMINI_MODEL: model,
                             SANDBOX_START_DATE: sandboxStart,

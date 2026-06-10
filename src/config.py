@@ -336,6 +336,26 @@ class LimitsConfig:
                 pass
         return self._initial_cash
 
+    @property
+    def hard_stop_loss_pct(self) -> float:
+        db_cfg = _get_db_config_cached()
+        val = None
+        if "HARD_STOP_LOSS_PCT" in db_cfg:
+            val = db_cfg["HARD_STOP_LOSS_PCT"]
+        if val is None:
+            val = get_config_val("HARD_STOP_LOSS_PCT")
+        
+        if val is not None and str(val).strip() != "":
+            try:
+                f_val = float(val)
+                f_val = abs(f_val)
+                if f_val > 1.0:
+                    f_val = f_val / 100.0
+                return f_val
+            except (ValueError, TypeError):
+                pass
+        return 0.08
+
 class AppConfig:
     def __init__(self, env: str, port: int, timezone: str, supabase: SupabaseConfig,
                  credentials: CredentialsConfig, gmail: GmailConfig, limits: LimitsConfig,

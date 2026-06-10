@@ -525,6 +525,7 @@ def api_get_config():
         return {
             "TRADING_LIMIT_SINGLE_STOCK_PCT": db_cfg.get("TRADING_LIMIT_SINGLE_STOCK_PCT", str(config.limits.single_stock_pct or "")),
             "TRADING_LIMIT_DAILY_TOTAL_PCT": db_cfg.get("TRADING_LIMIT_DAILY_TOTAL_PCT", str(config.limits.daily_total_pct or "")),
+            "HARD_STOP_LOSS_PCT": db_cfg.get("HARD_STOP_LOSS_PCT", str(config.limits.hard_stop_loss_pct or "")),
             "INITIAL_CASH": db_cfg.get("INITIAL_CASH", str(config.limits.initial_cash)),
             "PAPER_TRADING_MODE": db_cfg.get("PAPER_TRADING_MODE", str(config.limits.is_paper_trading).lower()),
             "TAIWAN_STOCK_TIMEZONE": db_cfg.get("TAIWAN_STOCK_TIMEZONE", config.timezone),
@@ -574,7 +575,7 @@ def api_update_config(payload: ConfigUpdate):
                         existing_config[k] = float(v)
                     except ValueError:
                         existing_config[k] = str(v)
-                elif k in ["TRADING_LIMIT_SINGLE_STOCK_PCT", "TRADING_LIMIT_DAILY_TOTAL_PCT"]:
+                elif k in ["TRADING_LIMIT_SINGLE_STOCK_PCT", "TRADING_LIMIT_DAILY_TOTAL_PCT", "HARD_STOP_LOSS_PCT"]:
                     if v is None or str(v).strip() == "":
                         existing_config[k] = None
                     else:
