@@ -77,19 +77,25 @@ def _merge_decrypted_credentials(cfg: dict):
             if s_creds.get("key"):
                 cfg["SUPABASE_KEY"] = s_creds["key"]
                 
-        # 2. 整合 Gmail 設定
-        if "gmail" in decrypted_creds:
-            g_creds = decrypted_creds["gmail"]
-            if g_creds.get("user"):
-                cfg["GMAIL_USER"] = g_creds["user"]
-            if g_creds.get("appPassword"):
-                cfg["GMAIL_APP_PASSWORD"] = g_creds["appPassword"]
-            if g_creds.get("to"):
-                cfg["EMAIL_TO"] = g_creds["to"]
+
                 
         # 3. 整合 Gemini 金鑰列表
         if "geminiApiKeys" in decrypted_creds and decrypted_creds["geminiApiKeys"]:
             cfg["GEMINI_API_KEYS"] = ",".join(decrypted_creds["geminiApiKeys"])
+
+        # 4. 整合 Discord 設定
+        if "discord" in decrypted_creds:
+            d_creds = decrypted_creds["discord"]
+            if d_creds.get("webhookSandbox"):
+                cfg["DISCORD_WEBHOOK_SANDBOX"] = d_creds["webhookSandbox"]
+            if d_creds.get("webhookLive"):
+                cfg["DISCORD_WEBHOOK_LIVE"] = d_creds["webhookLive"]
+
+        # 5. 整合 Shioaji 模擬設定
+        if "brokerCredentials" in decrypted_creds:
+            bc_creds = decrypted_creds["brokerCredentials"]
+            if bc_creds.get("simulation") is not None:
+                cfg["SHIOAJI_SIMULATION"] = str(bc_creds["simulation"]).lower()
     except Exception:
         pass
 
@@ -171,13 +177,14 @@ def _validate_config():
     if not get_config_val("MASTER_KEY"):
         errors.append("缺少配置: MASTER_KEY (用於解密安全憑證與金鑰管理器的解密主金鑰)")
 
-    # 4. 驗證 Gmail 傳輸配置 (不需架設外部 SMTP 或 Resend，直接利用 Gmail)
-    gmail_user = get_config_val("GMAIL_USER")
-    gmail_app_pass = get_config_val("GMAIL_APP_PASSWORD")
-    if not gmail_user:
-        errors.append("缺少配置: GMAIL_USER (您的 Gmail 帳號/寄件人地址)")
-    if not gmail_app_pass:
-        errors.append("缺少配置: GMAIL_APP_PASSWORD (您的 Gmail 應用程式安全密碼)")
+    # 4. 驗證通知傳輸配置 (強制要求設定 Discord Webhooks)
+    discord_webhook_sandbox = get_config_val("DISCORD_WEBHOOK_SANDBOX")
+    discord_webhook_live = get_config_val("DISCORD_WEBHOOK_LIVE")
+
+    if not discord_webhook_sandbox:
+        errors.append("缺少配置: DISCORD_WEBHOOK_SANDBOX (沙盒/模擬交易的 Discord Webhook 網址)")
+    if not discord_webhook_live:
+        errors.append("缺少配置: DISCORD_WEBHOOK_LIVE (實盤操盤交易的 Discord Webhook 網址)")
 
     # 若有錯誤則主動拋錯中斷執行
     if errors:
@@ -231,11 +238,11 @@ class CredentialsConfig:
     master_key: str
     file_path: str
 
+
 @dataclass(frozen=True)
-class GmailConfig:
-    user: str
-    app_password: str
-    to_addr: str
+class DiscordConfig:
+    webhook_sandbox: str
+    webhook_live: str
 
 class LimitsConfig:
     def __init__(self, single_stock: float, daily_total: float, is_paper_trading: bool,
@@ -358,17 +365,18 @@ class LimitsConfig:
 
 class AppConfig:
     def __init__(self, env: str, port: int, timezone: str, supabase: SupabaseConfig,
-                 credentials: CredentialsConfig, gmail: GmailConfig, limits: LimitsConfig,
-                 gemini_api_keys: List[str], gemini_model: str):
+                 credentials: CredentialsConfig, discord: DiscordConfig, limits: LimitsConfig,
+                 gemini_api_keys: List[str], gemini_model: str, shioaji_simulation: bool):
         self._env = env
         self._port = port
         self._timezone = timezone
         self.supabase = supabase
         self.credentials = credentials
-        self.gmail = gmail
+        self.discord = discord
         self.limits = limits
         self.gemini_api_keys = gemini_api_keys
         self._gemini_model = gemini_model
+        self.shioaji_simulation = shioaji_simulation
 
     @property
     def env(self) -> str:
@@ -460,10 +468,10 @@ except ValueError:
 # 建立密鑰解密路徑
 _credentials_file = get_config_val("CREDENTIALS_FILE_PATH") or str(Path(os.getcwd()) / "credentials.enc")
 
-# 解析 Gmail 配置
-_gmail_user = get_config_val("GMAIL_USER") or ""
-_gmail_app_pass = get_config_val("GMAIL_APP_PASSWORD") or ""
-_gmail_to = get_config_val("EMAIL_TO") or _gmail_user  # 若未特別設定接收信箱，預設寄給自己
+# 解析 Discord 與 Shioaji 模擬配置
+_discord_webhook_sandbox = get_config_val("DISCORD_WEBHOOK_SANDBOX") or ""
+_discord_webhook_live = get_config_val("DISCORD_WEBHOOK_LIVE") or ""
+_shioaji_sim = (get_config_val("SHIOAJI_SIMULATION") or "false").lower() != "false"
 
 _gemini_model = get_config_val("GEMINI_MODEL") or "gemini-1.5-flash"
 
@@ -480,10 +488,9 @@ config = AppConfig(
         master_key=get_config_val("MASTER_KEY") or "",
         file_path=_credentials_file
     ),
-    gmail=GmailConfig(
-        user=_gmail_user,
-        app_password=_gmail_app_pass,
-        to_addr=_gmail_to
+    discord=DiscordConfig(
+        webhook_sandbox=_discord_webhook_sandbox,
+        webhook_live=_discord_webhook_live
     ),
     limits=LimitsConfig(
         single_stock=_limit_single,
@@ -494,7 +501,8 @@ config = AppConfig(
         initial_cash=_initial_cash
     ),
     gemini_api_keys=gemini_api_keys,
-    gemini_model=_gemini_model
+    gemini_model=_gemini_model,
+    shioaji_simulation=_shioaji_sim
 )
 
 # 股票代號至名稱映射對照表 (供 Web 端及 Email 報表使用)

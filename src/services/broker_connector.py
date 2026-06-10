@@ -142,8 +142,8 @@ def _get_shioaji_api():
                 if not api_key or not secret_key:
                     raise ValueError("安全憑證中缺少 apiId 或 apiSecret，無法登入永豐證券")
                 
-                # 初始化 API (實盤下單模式使用 simulation=False)
-                api = sj.Shioaji(simulation=False)
+                # 初始化 API (實盤下單模式或永豐沙盒模式)
+                api = sj.Shioaji(simulation=config.shioaji_simulation)
                 api.login(api_key=api_key, secret_key=secret_key)
                 _shioaji_login_time = time.time()
                 log_system_event("INFO", "永豐證券 API 帳號登入成功。")
@@ -373,13 +373,13 @@ def place_order(stock_code: str, action: str, price: float, quantity: float) -> 
                 if any(kw in err_msg for kw in systemic_keywords):
                     set_system_fault_status("FAULT", str(e))
                     try:
-                        from src.services.email_notifier import send_emergency_email
-                        send_emergency_email(
+                        from src.services.discord_notifier import send_emergency_alert
+                        send_emergency_alert(
                             subject="⚠️ AIAutoStocks 系統下單發生系統級故障！",
                             message=f"系統在執行 {action} {stock_code} 時，偵測到無法排除的系統級故障或網路連線失敗，已自動鎖定全局交易！\n\n錯誤詳情：\n{str(e)}"
                         )
-                    except Exception as email_err:
-                        print(f" [下單連接器] 發送緊急郵件失敗: {str(email_err)}")
+                    except Exception as err:
+                        print(f" [下單連接器] 發送緊急 Discord 警報失敗: {str(err)}")
                 else:
                     # 一般交易性/市場性錯誤（例如限額不足或跌停無法交易）
                     add_pending_liquidation_stock(stock_code)

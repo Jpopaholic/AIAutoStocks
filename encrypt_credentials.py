@@ -107,12 +107,12 @@ def main():
             if not s_creds.get("url") or not s_creds.get("key"):
                 print("⚠️ 警告: 'supabase' 缺少 url 或 key 設定。")
                 
-        if "gmail" not in data:
-            print("⚠️ 警告: credentials.json 缺少 'gmail' 欄位。")
+        if "discord" not in data:
+            print("⚠️ 警告: credentials.json 缺少 'discord' 通知欄位，系統將缺乏通知管道。")
         else:
-            g_creds = data["gmail"]
-            if not g_creds.get("user") or not g_creds.get("appPassword"):
-                print("⚠️ 警告: 'gmail' 缺少 user 或 appPassword 設定。")
+            d_creds = data["discord"]
+            if not d_creds.get("webhookSandbox") or not d_creds.get("webhookLive"):
+                print("⚠️ 提示: 'discord' 缺少 webhookSandbox 或 webhookLive 設定，將無法使用 Discord Webhook 通知。")
 
         if "brokerCredentials" not in data:
             print("⚠️ 警告: credentials.json 缺少 'brokerCredentials' 欄位。")

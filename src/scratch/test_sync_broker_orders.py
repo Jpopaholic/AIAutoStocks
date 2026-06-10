@@ -3,6 +3,10 @@ import sys
 import unittest
 from unittest.mock import patch, MagicMock
 
+# Set mock environment variables before importing config to pass startup validation
+os.environ["DISCORD_WEBHOOK_SANDBOX"] = "https://discord.com/api/webhooks/mock_sandbox"
+os.environ["DISCORD_WEBHOOK_LIVE"] = "https://discord.com/api/webhooks/mock_live"
+
 # Load project path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 

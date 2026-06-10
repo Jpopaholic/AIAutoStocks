@@ -237,20 +237,20 @@
       }
     },
     {
-      "id": "email-notifier",
-      "name": "每日報告電子郵件發送器",
-      "produce": "彙整當日交易明細、目前投資組合淨值、AI 決策歷程與系統日誌，發送精簡且視覺美觀的 HTML 電子郵件報告給使用者",
-      "vibeNotes": "每日報告使用 html 格式，必須包含每筆交易明細與損益比例，便於移動端閱讀",
+      "id": "discord-notifier",
+      "name": "每日報告與警報 Discord 發送器",
+      "produce": "彙整當日交易明細、目前投資組合淨值、AI 決策歷程與系統日誌，以 Rich Embed 格式發送至對應的 Discord Webhook 頻道",
+      "vibeNotes": "每日報告使用 Discord Markdown Embed 格式，包含 diff / ini 文字區塊，支援模式包含沙盒演練、模擬交易、永豐沙盒與實際操盤",
       "dependencies": [
         "config-manager",
         "supabase-client"
       ],
       "synthesis": {
-        "filePath": "src/services/email_notifier.py",
+        "filePath": "src/services/discord_notifier.py",
         "status": "completed",
-        "intentSignal": "利用 smtplib 或 Resend Python SDK 發送 HTML 電子郵件。整合當日交易成果與 AI 明日行情分析為簡潔響應式報告",
+        "intentSignal": "利用 requests POST 傳送 JSON 訊息至 Discord Webhook 網址，支援自動重試與指數退避機制",
         "extractedConstraints": [
-          "HTML 樣式必須為 Inline CSS 以免郵件用戶端排版異常",
+          "未配置或發送失敗時必須直接拋出對應例外錯誤",
           "必須有發送失敗的重試機制與錯誤記錄"
         ]
       },
@@ -294,7 +294,7 @@
         "supabase-client",
         "trading-agent",
         "broker-connector",
-        "email-notifier",
+        "discord-notifier",
         "sandbox-simulator"
       ],
       "synthesis": {

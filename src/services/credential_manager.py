@@ -139,12 +139,6 @@ def load_credentials() -> Dict[str, Any]:
             "key": os.getenv("SUPABASE_KEY") or "MOCK_KEY"
         }
 
-        gmail = {
-            "user": os.getenv("GMAIL_USER") or "mock@gmail.com",
-            "appPassword": os.getenv("GMAIL_APP_PASSWORD") or "mock_app_pass",
-            "to": os.getenv("EMAIL_TO") or os.getenv("GMAIL_USER") or "mock@gmail.com"
-        }
-
         broker_credentials = {
             "apiId": os.getenv("BROKER_API_ID") or "MOCK_API_ID",
             "apiSecret": os.getenv("BROKER_API_SECRET") or "MOCK_API_SECRET",
@@ -156,7 +150,6 @@ def load_credentials() -> Dict[str, Any]:
         _cached_credentials = {
             "geminiApiKeys": gemini_api_keys,
             "supabase": supabase,
-            "gmail": gmail,
             "brokerCredentials": broker_credentials
         }
 

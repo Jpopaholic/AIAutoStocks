@@ -26,7 +26,7 @@ graph TD
     F --> H[trading_memory.py 交易記憶]
     
     A --> I[broker_connector.py 下單連接]
-    A --> J[email_notifier.py 郵件報告]
+    A --> J[discord_notifier.py Discord報告]
 ```
 
 ### 🌟 核心特色
@@ -40,8 +40,8 @@ graph TD
    利用 AES-256-GCM 演算法對敏感憑證（如真實券商憑證、API 密鑰）進行本機加密保存 (`credentials.enc`)，執行時透過環境變數傳入解密主密鑰 (`MASTER_KEY`)，確保憑證不外洩。
 5. **交易限額安全防呆機制 (`broker_connector.py`)**：
    實作單筆交易限額、每日交易總額超限防護、防重複下單鎖定，避免因程式異常造成重大資金損失。
-6. **精美響應式 HTML 郵件報告 (`email_notifier.py`)**：
-   使用符合移動端閱讀的 Inline-CSS HTML 郵件，每日收盤結算後自動發送當日帳戶淨值、持股狀態與 AI 預測。
+6. **精美 Discord Webhook 報告 (`discord_notifier.py`)**：
+   使用富文本 Rich Embed 格式將每日報告發送至 Discord，包含當日交易盈虧、持股狀態與 AI 預測。
 
 ---
 
@@ -55,7 +55,7 @@ AIAutoStocks/
 │   ├── services/
 │   │   ├── broker_connector.py    # 證券商下單連接器 (防呆與超限防護)
 │   │   ├── credential_manager.py  # 安全憑證與金鑰管理器 (AES-GCM 解密)
-│   │   ├── email_notifier.py      # HTML 每日報告發送器
+│   │   ├── discord_notifier.py    # Discord 每日報告與警報發送器
 │   │   ├── gemini_rotator.py      # Gemini API 金鑰輪替與冷卻重試
 │   │   ├── sandbox_simulator.py   # 沙盒回測演練與歷史數據重播
 │   │   ├── stock_fetcher.py       # 台股數據擷取器 (K線與即時報價)
@@ -125,11 +125,10 @@ pip install -r requirements.txt
        "url": "https://your-project-id.supabase.co",
        "key": "your-supabase-anon-or-service-role-key"
      },
-     "gmail": {
-       "user": "your-email@gmail.com",
-       "appPassword": "your-gmail-app-password",
-       "to": "receiver-email@gmail.com"
-     },
+      "discord": {
+        "webhookSandbox": "https://discord.com/api/webhooks/your-sandbox-webhook-url-here",
+        "webhookLive": "https://discord.com/api/webhooks/your-live-webhook-url-here"
+      },
      "brokerCredentials": {
        "apiId": "your-sinopac-api-id",
        "apiSecret": "your-sinopac-api-secret",
@@ -387,6 +386,5 @@ pytest
    ```
    > [!IMPORTANT]
    > - 由於 `credentials.enc` 檔案為安全加密格式，它已在 `Dockerfile` 中設定隨代碼一同打包部署至容器中。
-   > - 容器啟動時，系統會自動使用從 Secrets 傳入的 `MASTER_KEY` 對容器內的 `credentials.enc` 進行解密，並載入 Supabase、Gmail 及永豐證券等連線帳密，無須額外設定明文變數。
+   > - 容器啟動時，系統會自動使用從 Secrets 傳入的 `MASTER_KEY` 對容器內的 `credentials.enc` 進行解密，並載入 Supabase、Discord 及永豐證券等連線帳密，無須額外設定明文變數。
 3. 設定每日盤後定時執行排程任務。
-

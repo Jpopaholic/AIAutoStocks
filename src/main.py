@@ -46,7 +46,7 @@ def run_live_trading_job(stock_codes: List[str]) -> None:
     supabase_client.log_system_event("INFO", msg)
 
     # 延遲載入以防循環依賴
-    from src.services import stock_fetcher, sandbox_simulator, broker_connector, email_notifier
+    from src.services import stock_fetcher, sandbox_simulator, broker_connector, discord_notifier
     from src.agents import trading_agent
 
     # 0. 優先執行券商對帳同步任務
@@ -237,12 +237,12 @@ def run_live_trading_job(stock_codes: List[str]) -> None:
                 print(f" [排程引擎] {err_msg}")
                 supabase_client.log_system_event("ERROR", err_msg)
 
-    # E. 彙整今日交易損益與持股，發送每日 HTML 電子郵件報告信
+    # E. 彙整今日交易損益與持股，發送每日報告至 Discord Webhook
     ai_outlook_str = "\n\n".join(ai_outlook_details)
     try:
-        email_notifier.send_daily_report(ai_outlook_str)
+        discord_notifier.send_daily_report(ai_outlook_str)
     except Exception as e:
-        print(f" [排程引擎] 郵件發送失敗: {str(e)}")
+        print(f" [排程引擎] Discord 報告發送失敗: {str(e)}")
 
 def run_sandbox_simulation(stock_codes: List[str], start_date: str, end_date: str, should_stop=None) -> None:
     """
@@ -252,7 +252,7 @@ def run_sandbox_simulation(stock_codes: List[str], start_date: str, end_date: st
     print(f" [排程引擎] 啟動沙盒演練歷史數據模擬。區間: {start_date} 至 {end_date} | 標的: {stock_codes}")
     
     # 延遲載入
-    from src.services import sandbox_simulator, broker_connector, email_notifier
+    from src.services import sandbox_simulator, broker_connector, discord_notifier
     from src.agents import trading_agent
 
     # 0. 合併目前的持股標的（確保持有中的個股也會進入沙盒 AI 決策範疇，可執行賣出）
@@ -427,12 +427,12 @@ def run_sandbox_simulation(stock_codes: List[str], start_date: str, end_date: st
                 except Exception as e:
                     print(f"   [模擬下單失敗]: {str(e)}")
 
-        # 該模擬日交易結束，發送模擬結算報告信
+        # 該模擬日交易結束，發送模擬結算報告至 Discord Webhook
         ai_outlook_str = "\n\n".join(ai_outlook_details)
         try:
-            email_notifier.send_daily_report(ai_outlook_str)
+            discord_notifier.send_daily_report(ai_outlook_str)
         except Exception as e:
-            print(f"   [模擬郵件發送失敗]: {str(e)}")
+            print(f"   [模擬 Discord 報告發送失敗]: {str(e)}")
 
         current_day_idx = sandbox_simulator.get_current_day_index()
         target_day_idx = sandbox_simulator.get_current_target_day_index()
@@ -529,9 +529,9 @@ def run_liquidate_job() -> None:
     print(f"\n [下車引擎] {summary_msg}")
     supabase_client.log_system_event("INFO", summary_msg)
 
-    # 4. 發送電子郵件報告 (下車也發送 Email 回報)
+    # 4. 發送下車報告至 Discord Webhook
     try:
-        from src.services import email_notifier
+        from src.services import discord_notifier
         outlook_text = (
             f"【手動下車平倉回報】\n\n"
             f"使用者已手動觸發一鍵下車平倉指令（目前交易模式: {mode_name}）。\n"
@@ -540,10 +540,10 @@ def run_liquidate_job() -> None:
             f" - 失敗個股數: {fail_count}\n\n"
             f"自動交易開關已同步關閉 (AUTO_TRADING_ACTIVE = false)，系統在手動重啟前不會再執行任何自動交易與買入分析。"
         )
-        email_notifier.send_daily_report(outlook_text, override_orders=liquidated_orders)
-        print(" [下車引擎] 下車結算報告已成功發送電子郵件至信箱。")
+        discord_notifier.send_daily_report(outlook_text, override_orders=liquidated_orders)
+        print(" [下車引擎] 下車結算報告已成功發送至 Discord。")
     except Exception as em_err:
-        print(f" [下車引擎] 警告: 發送下車電子郵件結算報告失敗: {str(em_err)}")
+        print(f" [下車引擎] 警告: 發送下車報告失敗: {str(em_err)}")
 
 def main():
     """
