@@ -4,9 +4,9 @@
 [![Database](https://img.shields.io/badge/Database-Supabase-green.svg)](https://supabase.com/)
 [![LLM Engine](https://img.shields.io/badge/LLM-Gemini_API-orange.svg)](https://ai.google.dev/)
 
-`AIAutoStocks` 是一個基於 Large Language Model (LLM - Google Gemini API) 與 Supabase 的台股自動化量化交易排程系統。它能自動擷取台股歷史 K 線，結合「交易記憶與經驗管理器（Few-Shot Learning）」，由 AI 生成具備具體原因說明的交易決策（買入、賣出、觀望），並在交易完成後發送精美的 HTML 每日郵件報告。
+`AIAutoStocks` 是一個基於 Large Language Model (LLM - Google Gemini API) 與 Supabase 的台股自動化量化交易排程系統。它能自動擷取台股歷史 K 線，結合「交易記憶與經驗管理器（Few-Shot Learning）」，由 AI 生成具備具體原因說明的交易決策（買入、賣出、觀望），並在交易完成後向 Discord Webhook 發送精美的富文本 Embed 每日結算報告。
 
-系統設計支持**實時交易/模擬盤（Live Trading）**以及**歷史數據沙盒回測演練（Sandbox Simulation）**兩大模式。
+系統設計支持**實時交易/模擬盤（Live Trading）**、**永豐沙盒模擬交易（Shioaji Simulation）**以及**歷史數據沙盒回測演練（Sandbox Simulation）**等多種模式。
 
 ---
 
@@ -105,7 +105,7 @@ pip install -r requirements.txt
 > - `MASTER_KEY` 為您自訂的解密主密鑰，用於在系統啟動時解密您的敏感憑證。
 
 ### 3. 配置安全憑證與加密檔案 (`credentials.enc`)
-為了確保真實帳密（如 Supabase 金鑰、Gmail 密碼、Gemini 多組 API Key、永豐證券 Shioaji API Key、身分證字號、CA 憑證密碼等）不外洩或被意外提交至 Git 倉庫，本系統提供憑證加密機制。
+為了確保真實帳密（如 Supabase 金鑰、Discord Webhook 網址、Gemini 多組 API Key、永豐證券 Shioaji API Key、身分證字號、CA 憑證密碼等）不外洩或被意外提交至 Git 倉庫，本系統提供憑證加密機制。
 
 #### 步驟：
 1. **複製憑證範本**：
@@ -361,6 +361,13 @@ python main.py --mode sandbox --stocks 2330,2454 --start-date 2026-06-01 --end-d
 # 執行一鍵下車清空持股
 python main.py --mode liquidate
 ```
+
+### 4. 永豐金證券 API 沙盒模擬交易（永豐沙盒）
+若要在真實交易排程流程中測試與證券商 API 的連接，而不用實彈下單，本系統支援連接永豐金證券 API 的模擬交易伺服器（永豐沙盒）。
+- **啟用方式**：請在您的 `credentials.json` 檔案中，於 `brokerCredentials` 區塊加入 `"simulation": true`。
+- **特點**：
+  - 系統在初始化證券商 API (Shioaji SDK) 時，會帶入 `simulation=True` 以連線至永豐模擬交易主機。
+  - 所有交易通知報告與安全警報均會自動路由至 Discord 的 `webhookSandbox` (沙盒 Webhook)，並在報告中明確標記為 `永豐沙盒` 模式，以與一般回測（沙盒演練）或實際操盤進行區隔。
 
 ---
 
