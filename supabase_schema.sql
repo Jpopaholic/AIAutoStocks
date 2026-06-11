@@ -17,8 +17,6 @@ CREATE INDEX IF NOT EXISTS idx_watchlist_stock_code ON watchlist (stock_code);
 
 -- 啟用 Row Level Security（建議，但 service role key 可繞過）
 ALTER TABLE watchlist ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "service role full access" ON watchlist
-    USING (true) WITH CHECK (true);
 
 -- 初始測試資料（可選，執行後可從前端刪除）
 -- INSERT INTO watchlist (stock_code) VALUES ('2330'), ('2454') ON CONFLICT DO NOTHING;
@@ -41,8 +39,6 @@ CREATE INDEX IF NOT EXISTS idx_holdings_stock_code ON holdings (stock_code);
 CREATE INDEX IF NOT EXISTS idx_holdings_is_paper   ON holdings (is_paper);
 
 ALTER TABLE holdings ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "service role full access" ON holdings
-    USING (true) WITH CHECK (true);
 
 
 -- -----------------------------------------------------------------------------
@@ -69,8 +65,6 @@ CREATE INDEX IF NOT EXISTS idx_trade_orders_executed_at  ON trade_orders (execut
 CREATE INDEX IF NOT EXISTS idx_trade_orders_is_paper     ON trade_orders (is_paper);
 
 ALTER TABLE trade_orders ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "service role full access" ON trade_orders
-    USING (true) WITH CHECK (true);
 
 
 -- -----------------------------------------------------------------------------
@@ -92,8 +86,6 @@ CREATE TABLE IF NOT EXISTS stock_klines (
 CREATE INDEX IF NOT EXISTS idx_stock_klines_stock_date ON stock_klines (stock_code, date DESC);
 
 ALTER TABLE stock_klines ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "service role full access" ON stock_klines
-    USING (true) WITH CHECK (true);
 
 
 -- -----------------------------------------------------------------------------
@@ -113,8 +105,6 @@ CREATE INDEX IF NOT EXISTS idx_system_logs_level      ON system_logs (level);
 CREATE INDEX IF NOT EXISTS idx_system_logs_is_paper   ON system_logs (is_paper);
 
 ALTER TABLE system_logs ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "service role full access" ON system_logs
-    USING (true) WITH CHECK (true);
 
 
 -- -----------------------------------------------------------------------------
@@ -130,8 +120,6 @@ CREATE TABLE IF NOT EXISTS system_config (
 CREATE INDEX IF NOT EXISTS idx_system_config_key ON system_config (key);
 
 ALTER TABLE system_config ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "service role full access" ON system_config
-    USING (true) WITH CHECK (true);
 
 -- 預設動態配置初始值（可從前端覆蓋）
 INSERT INTO system_config (key, value) VALUES
@@ -163,8 +151,6 @@ CREATE TABLE IF NOT EXISTS gemini_keys_state (
 CREATE INDEX IF NOT EXISTS idx_gemini_keys_key_hash ON gemini_keys_state (key_hash);
 
 ALTER TABLE gemini_keys_state ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "service role full access" ON gemini_keys_state
-    USING (true) WITH CHECK (true);
 
 
 -- =============================================================================
