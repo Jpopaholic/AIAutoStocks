@@ -270,8 +270,9 @@ def place_order(stock_code: str, action: str, price: float, quantity: float) -> 
                 
                 account = api.stock_account
                 if not account:
-                    if api.stock_accounts:
-                        account = api.stock_accounts[0]
+                    accounts = api.list_accounts()
+                    if accounts:
+                        account = accounts[0]
                     else:
                         raise RuntimeError("Shioaji 登入成功，但未找到任何可用證券帳戶")
                 

@@ -21,6 +21,9 @@ config.json
 credentials.enc
 credentials.json
 *.enc
+*.pfx
+*.pem
+*.key
 
 # Local Logs & database files
 *.log
