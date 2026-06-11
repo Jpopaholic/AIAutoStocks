@@ -386,15 +386,33 @@ def log_system_event(
         print(f"{log_prefix} {message}")
 
     try:
+        from src.config import config
+        is_paper = config.limits.is_paper_trading
+    except Exception:
+        is_paper = True
+
+    try:
         supabase.table("system_logs").insert({
             "level": level,
             "message": message,
             "details": details,
-            "created_at": timestamp
-            # sim_date 欄位已從資料庫中移除，日誌統一使用實際時間 created_at，模擬訊息已寫在 message 中
+            "created_at": timestamp,
+            "is_paper": is_paper
         }).execute()
     except Exception as err:
-        print(f"[Supabase Log Error] 無法寫入日誌到資料庫: {str(err)}")
+        err_str = str(err)
+        if "column \"is_paper\" of relation \"system_logs\" does not exist" in err_str or "PGRST204" in err_str or "42703" in err_str:
+            try:
+                supabase.table("system_logs").insert({
+                    "level": level,
+                    "message": message,
+                    "details": details,
+                    "created_at": timestamp
+                }).execute()
+            except Exception as retry_err:
+                print(f"[Supabase Log Error] 無法寫入日誌到資料庫 (回退寫入亦失敗): {str(retry_err)}")
+        else:
+            print(f"[Supabase Log Error] 無法寫入日誌到資料庫: {err_str}")
 
 # ==========================================================================
 # 5. 自選股與動態配置 相關資料庫操作 (Web 控制台專用)

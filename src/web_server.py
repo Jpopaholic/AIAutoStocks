@@ -602,8 +602,16 @@ def api_update_config(payload: ConfigUpdate):
 def api_get_logs():
     try:
         from src.services.supabase_client import supabase
-        res = supabase.table("system_logs").select("*").order("created_at", desc=True).limit(40).execute()
-        return res.data
+        is_paper = config.limits.is_paper_trading
+        try:
+            res = supabase.table("system_logs").select("*").eq("is_paper", is_paper).order("created_at", desc=True).limit(40).execute()
+            return res.data
+        except Exception as query_err:
+            err_str = str(query_err)
+            if "column \"is_paper\" of relation \"system_logs\" does not exist" in err_str or "PGRST204" in err_str or "42703" in err_str:
+                res = supabase.table("system_logs").select("*").order("created_at", desc=True).limit(40).execute()
+                return res.data
+            raise query_err
     except Exception as e:
         return [{
             "message": f"無法載入系統日誌 (尚未建立 system_logs 表或連線異常): {str(e)}",
