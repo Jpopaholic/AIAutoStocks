@@ -21,9 +21,11 @@ graph TD
     A --> D[stock_fetcher.py 台股數據]
     A --> E[sandbox_simulator.py 歷史演練]
     A --> F[trading_agent.py AI 決策]
+    A --> K[regime_agent.py 大盤氣候]
     
     F --> G[gemini_rotator.py 金鑰輪替]
     F --> H[trading_memory.py 交易記憶]
+    K --> G
     
     A --> I[broker_connector.py 下單連接]
     A --> J[discord_notifier.py Discord報告]
@@ -31,7 +33,7 @@ graph TD
 
 ### 🌟 核心特色
 1. **多 Gemini API 金鑰輪替與冷卻機制 (`gemini_rotator.py`)**：
-   支援多組免費的 Gemini API 金鑰自動輪替。當某金鑰觸發 429 限制（RPM/RPD）時，系統會自動將其標記為冷卻，並切換至其他可用金鑰，確保決策流暢不中斷。
+   支援多組免費的 Gemini API 金鑰自動輪替。當某金鑰觸發 429 限制（RPM/RPD）時，系統會自動將其標記為冷卻，並切換至其他可用金鑰，確保決策流暢不中斷.
 2. **Few-Shot 交易記憶管理器 (`trading_memory.py`)**：
    自 Supabase 讀取過往的交易損益，自動篩選高收益的「成功交易」與虧損的「失敗交易」作為經驗背景，動態注入 AI Prompt，使 AI 能從歷史經驗中學習。
 3. **無縫切換的數據模擬窗口 (`sandbox_simulator.py`)**：
@@ -42,6 +44,8 @@ graph TD
    實作單筆交易限額、每日交易總額超限防護、防重複下單鎖定，避免因程式異常造成重大資金損失。
 6. **精美 Discord Webhook 報告 (`discord_notifier.py`)**：
    使用富文本 Rich Embed 格式將每日報告發送至 Discord，包含當日交易盈虧、持股狀態與 AI 預測。
+7. **大盤氣候診斷機制 (`regime_agent.py`)**：
+   在進行個股交易決策前，系統會先分析大盤加權指數 (TAIEX) 的近期走勢，利用 AI 判定當前大盤的氣候（多頭、空頭、低波動盤整或高波動震盪），並生成對應的風險限額乘數 (Risk Multiplier) 與交易姿態，以動態限制交易額度，防範大盤系統性風險。
 
 ---
 
@@ -51,6 +55,7 @@ graph TD
 AIAutoStocks/
 ├── src/
 │   ├── agents/
+│   │   ├── regime_agent.py        # 大盤氣候診斷代理 (分析大盤走勢與風險限額乘數)
 │   │   └── trading_agent.py       # AI 交易決策代理 (Prompt 工程與 JSON Schema 輸出)
 │   ├── services/
 │   │   ├── broker_connector.py    # 證券商下單連接器 (防呆與超限防護)
