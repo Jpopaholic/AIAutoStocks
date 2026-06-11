@@ -35,6 +35,45 @@ def _send_discord_webhook(webhook_url: str, payload: dict, retries: int = 3, del
 
 
 
+def _split_text_by_length(text: str, max_len: int = 1000) -> List[str]:
+    """
+    將一段長文字切割成多個符合 Discord 欄位限制 (1024字) 的字串區塊。
+    儘量保留行與段落完整性。
+    """
+    if not text:
+        return []
+    if len(text) <= max_len:
+        return [text]
+        
+    chunks = []
+    lines = text.split("\n")
+    current_chunk = []
+    current_len = 0
+    
+    for line in lines:
+        if len(line) > max_len:
+            if current_chunk:
+                chunks.append("\n".join(current_chunk))
+                current_chunk = []
+                current_len = 0
+            for i in range(0, len(line), max_len):
+                chunks.append(line[i:i+max_len])
+            continue
+            
+        if current_len + len(line) + 1 > max_len:
+            chunks.append("\n".join(current_chunk))
+            current_chunk = [line]
+            current_len = len(line)
+        else:
+            current_chunk.append(line)
+            current_len += len(line) + 1
+            
+    if current_chunk:
+        chunks.append("\n".join(current_chunk))
+        
+    return chunks
+
+
 def send_daily_report(
     ai_outlook: str,
     override_orders: Optional[List[Dict[str, Any]]] = None,
@@ -218,7 +257,7 @@ def send_daily_report(
             holdings_text = f"```diff\n{holdings_text}```"
 
         color = 15679812 if is_liquidation else (3899902 if is_sandbox_mode else 2278750)
-        ai_outlook_display = ai_outlook[:1000] + "..." if len(ai_outlook) > 1000 else ai_outlook
+        ai_outlook_chunks = _split_text_by_length(ai_outlook, max_len=950)
 
         fields = [
             {
@@ -273,13 +312,23 @@ def send_daily_report(
                 "name": "📈 目前持股現況",
                 "value": holdings_text,
                 "inline": False
-            },
-            {
-                "name": "🧠 AI 明日分析預測與反思",
-                "value": ai_outlook_display or "無 AI 預測數據",
-                "inline": False
             }
         ])
+
+        if not ai_outlook_chunks:
+            fields.append({
+                "name": "🧠 AI 明日分析預測與反思",
+                "value": "無 AI 預測數據",
+                "inline": False
+            })
+        else:
+            for idx, chunk in enumerate(ai_outlook_chunks):
+                title = "🧠 AI 明日分析預測與反思" if idx == 0 else f"🧠 AI 明日分析預測與反思 (續 {idx+1})"
+                fields.append({
+                    "name": title,
+                    "value": chunk,
+                    "inline": False
+                })
 
         discord_payload = {
             "username": "AI 台股自動交易報告",

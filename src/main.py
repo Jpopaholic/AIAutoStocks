@@ -553,6 +553,56 @@ def run_liquidate_job() -> None:
             print(f" [下車引擎] ❌ {err_msg}")
             supabase_client.log_system_event("ERROR", err_msg)
 
+    # 2.5 追蹤下車委託成交狀態（真實實盤需要等待成交）
+    placed_order_ids = [order.get("id") for order in liquidated_orders if order and order.get("id")]
+    if not is_paper and placed_order_ids:
+        print(f"\n [下車引擎] 偵測到實盤交易模式，啟動委託追蹤... 共 {len(placed_order_ids)} 筆賣出單需確認成交。")
+        max_attempts = 120  # 最大等待 10 分鐘 (5s * 120)
+        attempt = 0
+        while attempt < max_attempts:
+            attempt += 1
+            print(f" [下車引擎] 執行對帳同步中 (第 {attempt}/{max_attempts} 次嘗試)...")
+            try:
+                broker_connector.sync_broker_orders()
+            except Exception as sync_err:
+                print(f" [下車引擎] 對帳同步時發生錯誤: {sync_err}")
+
+            # 重新查詢資料庫獲取這批訂單最新狀態
+            try:
+                db_orders = supabase_client.execute_with_retry(
+                    lambda: supabase_client.supabase.table("trade_orders")
+                    .select("id, status, stock_code")
+                    .in_("id", placed_order_ids)
+                    .execute()
+                ).data
+            except Exception as query_err:
+                print(f" [下車引擎] 查詢訂單狀態時發生錯誤: {query_err}")
+                db_orders = []
+
+            pending_stocks = []
+            filled_count = 0
+            failed_cancelled_count = 0
+
+            for o in db_orders:
+                status = o.get("status")
+                if status == "PENDING":
+                    pending_stocks.append(o.get("stock_code"))
+                elif status == "FILLED":
+                    filled_count += 1
+                else:
+                    failed_cancelled_count += 1
+
+            print(f" [下車引擎] 當前進度: 已成交: {filled_count} 筆 | 委託中: {len(pending_stocks)} 筆 | 已取消/失敗: {failed_cancelled_count} 筆")
+
+            if not pending_stocks:
+                print(" [下車引擎] 所有下車委託均已處理完畢（無委託中訂單）。")
+                break
+
+            print(f" [下車引擎] 仍在等待以下股票賣出成交: {pending_stocks}。等待 5 秒後重新同步...")
+            time.sleep(5)
+        else:
+            print(" [下車引擎] 警告：已達到最大等待時間（10分鐘），部分股票仍未完成交易。")
+
     # 3. 總結報告
     summary_msg = f"下車程序執行完畢。成功賣出個股數: {success_count}，失敗個股數: {fail_count}。"
     print(f"\n [下車引擎] {summary_msg}")
