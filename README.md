@@ -269,11 +269,13 @@ CREATE TABLE IF NOT EXISTS system_logs (
     level      TEXT NOT NULL DEFAULT 'INFO',   -- INFO / WARN / ERROR
     message    TEXT NOT NULL,
     details    JSONB,
+    is_paper   BOOLEAN NOT NULL DEFAULT TRUE,  -- TRUE=沙盒模擬, FALSE=實盤
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_system_logs_created_at ON system_logs (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_system_logs_level      ON system_logs (level);
+CREATE INDEX IF NOT EXISTS idx_system_logs_is_paper   ON system_logs (is_paper);
 
 ALTER TABLE system_logs ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "service role full access" ON system_logs
