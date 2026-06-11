@@ -472,6 +472,12 @@ def set_db_config(key: str, value: str) -> None:
         .upsert({"key": key, "value": str(value)}, on_conflict="key")
         .execute()
     )
+    # 每次更新資料庫設定後，主動清除配置快取以防 stale cache
+    try:
+        from src.config import clear_db_config_cache
+        clear_db_config_cache()
+    except Exception as e:
+        print(f" [Supabase] 警告: 清除配置快取失敗: {e}")
 
 def clear_db_sandbox_data() -> None:
     """

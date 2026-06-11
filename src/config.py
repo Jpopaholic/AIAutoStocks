@@ -228,6 +228,15 @@ def _get_db_config_cached() -> dict:
         _db_config_cache_time = now
         return _db_config_cache
 
+def clear_db_config_cache() -> None:
+    """
+    清除資料庫配置快取，強制下一輪讀取時重新從資料庫載入最新設定。
+    """
+    global _db_config_cache, _db_config_cache_time
+    _db_config_cache = None
+    _db_config_cache_time = 0.0
+    print(" [配置管理器] 已成功清除資料庫動態設定快取。")
+
 @dataclass(frozen=True)
 class SupabaseConfig:
     url: str
