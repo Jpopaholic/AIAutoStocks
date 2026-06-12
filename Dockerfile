@@ -25,6 +25,8 @@ COPY src/ ./src/
 # 複製配置檔與加密憑證檔（若存在的話，採 Docker 條件複製語法避免建置失敗）
 COPY config.jso[n] ./
 COPY credentials.en[c] ./
+COPY Sinopac.pf[x] ./
+
 
 
 EXPOSE 8080

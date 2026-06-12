@@ -307,9 +307,10 @@ def place_order(stock_code: str, action: str, price: float, quantity: float) -> 
                 )
                 
                 # 5. 送出委託下單
+                order_lot_name = order_lot.value if hasattr(order_lot, 'value') else str(order_lot)
                 log_system_event(
                     "INFO",
-                    f"【真實交易】向永豐發送委託: {action} {stock_code} | 價格: {price} | 數量: {order_qty} {order_lot.name}"
+                    f"【真實交易】向永豐發送委託: {action} {stock_code} | 價格: {price} | 數量: {order_qty} {order_lot_name}"
                 )
                 
                 trade = api.place_order(contract, order)
@@ -383,7 +384,9 @@ def place_order(stock_code: str, action: str, price: float, quantity: float) -> 
                         print(f" [下單連接器] 發送緊急 Discord 警報失敗: {str(err)}")
                 else:
                     # 一般交易性/市場性錯誤（例如限額不足或跌停無法交易）
-                    add_pending_liquidation_stock(stock_code)
+                    # 僅在賣出平倉失敗時，才將其加入等候平倉（智慧排隊）列表
+                    if action == "SELL":
+                        add_pending_liquidation_stock(stock_code)
                 raise
 
 def _write_raw_order_log(order_detail: Dict[str, Any], response: Dict[str, Any]) -> None:

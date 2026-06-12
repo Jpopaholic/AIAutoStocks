@@ -82,7 +82,8 @@ def generate_market_regime(taiex_klines: List[Dict[str, Any]]) -> Dict[str, Any]
 
     generation_config = {
         "response_mime_type": "application/json",
-        "response_schema": MarketRegimeAssessment
+        "response_schema": MarketRegimeAssessment,
+        "temperature": 0.0
     }
 
     try:

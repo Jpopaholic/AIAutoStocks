@@ -275,7 +275,8 @@ def generate_portfolio_decisions(
     # 5. 調用 Gemini 金鑰輪替調用器，強制使用 Structured Outputs (PortfolioDecision)
     generation_config = {
         "response_mime_type": "application/json",
-        "response_schema": PortfolioDecision
+        "response_schema": PortfolioDecision,
+        "temperature": 0.0
     }
 
     try:
