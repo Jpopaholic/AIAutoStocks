@@ -1,6 +1,11 @@
 # Path: src/services/gemini_rotator.py
 import time
 import hashlib
+import warnings
+# 抑制舊版 Google Generative AI SDK 的未來淘汰警告，避免日誌雜亂
+warnings.filterwarnings("ignore", category=FutureWarning, module="google.generativeai")
+warnings.filterwarnings("ignore", category=FutureWarning, module="google.api_core")
+
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, List
 import google.generativeai as genai

@@ -1,5 +1,5 @@
 # 使用官方輕量版 Python 映像檔
-FROM python:3.10-slim
+FROM python:3.11-slim
 
 # 設定環境變數，防止 Python 生成 pyc 快取，並確保 stdout 輸出不被緩衝以利日誌紀錄
 ENV PYTHONDONTWRITEBYTECODE=1 \
