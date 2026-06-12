@@ -23,6 +23,31 @@ from src.time_manager import get_local_taiwan_midnight_utc_range, get_effective_
 # 全局排他鎖，防止多線程重複下單
 _order_mutex = threading.Lock()
 
+def align_to_tw_tick_size(price: float) -> float:
+    """
+    將價格捨入至符合台灣股市的升降單位 (Tick Size)
+    - 價格小於 10 元: 升降單位為 0.01 元
+    - 價格 10 元至 50 元之間: 升降單位為 0.05 元
+    - 價格 50 元至 100 元之間: 升降單位為 0.1 元
+    - 價格 100 元至 500 元之間: 升降單位為 0.5 元
+    - 價格 500 元至 1000 元之間: 升降單位為 1.0 元
+    - 價格 1000 元以上: 升降單位為 5.0 元
+    """
+    if price <= 0:
+        return 0.0
+    if price < 10.0:
+        return round(price * 100) / 100
+    elif price < 50.0:
+        return round(price * 20) / 20
+    elif price < 100.0:
+        return round(price * 10) / 10
+    elif price < 500.0:
+        return round(price * 2) / 2
+    elif price < 1000.0:
+        return float(round(price))
+    else:
+        return float(round(price / 5.0) * 5.0)
+
 def calculate_fees(action: str, price: float, quantity: float) -> Dict[str, float]:
     """
     計算台股交易手續費與證券交易稅
@@ -179,6 +204,8 @@ def place_order(stock_code: str, action: str, price: float, quantity: float) -> 
     """
     # 取得排他鎖，防止並行/重複下單
     with _order_mutex:
+        # 將價格對齊台灣股市升降單位 (Tick Size)
+        price = align_to_tw_tick_size(price)
         log_system_event("INFO", f"收到下單委託要求: {action} {stock_code} | 價格: {price} | 股數: {quantity}")
         
         # 1. 執行防呆限額檢查

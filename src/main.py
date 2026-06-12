@@ -46,8 +46,23 @@ def run_live_trading_job(stock_codes: List[str]) -> None:
     supabase_client.log_system_event("INFO", msg)
 
     # 延遲載入以防循環依賴
-    from src.services import stock_fetcher, sandbox_simulator, broker_connector, discord_notifier
+    from src.services import stock_fetcher, sandbox_simulator, broker_connector, discord_notifier, health_check
     from src.agents import trading_agent
+
+    # 0. 執行系統健康狀態檢查 (Pre-flight System Diagnostics)
+    healthy, details = health_check.run_preflight_checks()
+    if not healthy:
+        err_msg = f"系統啟動前健康檢查失敗！錯誤詳情: {', '.join(details['errors'])}"
+        print(f" [排程引擎] ❌ {err_msg}")
+        supabase_client.log_system_event("ERROR", err_msg)
+        try:
+            discord_notifier.send_emergency_alert(
+                subject="⚠️ AIAutoStocks 系統健康診斷異常！",
+                message=f"系統健康檢查失敗，自動交易已阻斷！\n\n診斷結果：\n- Supabase 連線: {'✅' if details['supabase'] else '❌'}\n- Gemini API 連線: {'✅' if details['gemini'] else '❌'}\n- 券商連線: {'✅' if details['broker'] else '❌'}\n\n錯誤資訊：\n" + "\n".join([f"• {err}" for err in details['errors']])
+            )
+        except Exception as alert_err:
+            print(f" [排程引擎] 警告: 發送健康診斷 Discord 警報失敗: {alert_err}")
+        return
 
     # 0. 優先執行券商對帳同步任務
     try:
@@ -243,6 +258,27 @@ def run_live_trading_job(stock_codes: List[str]) -> None:
         )
 
         if action in ("BUY", "SELL") and quantity > 0:
+            # 委託下單前審查 (Pre-order Safety Audit)
+            is_valid, audit_msg = health_check.audit_proposed_order(
+                stock_code=stock_code,
+                action=action,
+                price=price,
+                quantity=quantity,
+                regime_assessment=regime_assessment
+            )
+            if not is_valid:
+                warn_msg = f"下單前審查攔截：股票 {display_code} 的 {action} 委託未通過安全審核！原因: {audit_msg}"
+                print(f" [排程引擎] ⚠️ {warn_msg}")
+                supabase_client.log_system_event("WARN", warn_msg)
+                try:
+                    discord_notifier.send_emergency_alert(
+                        subject=f"⚠️ AIAutoStocks 下單防禦性攔截 ({stock_code})",
+                        message=f"已成功攔截並阻止一筆異常交易委託：\n- 標的: {display_code}\n- 動作: {action}\n- 價格: {price} 元\n- 數量: {quantity:.0f} 股\n- 攔截原因: {audit_msg}\n\n系統已自動跳過此筆委託，繼續處理其他標的。"
+                    )
+                except Exception as alert_err:
+                    print(f" [排程引擎] 警告: 發送攔截 Discord 警報失敗: {alert_err}")
+                continue
+
             try:
                 broker_connector.place_order(
                     stock_code=stock_code,
@@ -446,6 +482,23 @@ def run_sandbox_simulation(stock_codes: List[str], start_date: str, end_date: st
             )
 
             if action in ("BUY", "SELL") and quantity > 0:
+                # 委託下單前審查 (Pre-order Safety Audit)
+                from src.services import health_check
+                quote = sandbox_simulator.fetch_realtime_quote(stock_code)
+                sim_close = float(quote.get("price")) if (quote and quote.get("price")) else price
+                
+                is_valid, audit_msg = health_check.audit_proposed_order(
+                    stock_code=stock_code,
+                    action=action,
+                    price=price,
+                    quantity=quantity,
+                    regime_assessment=regime_assessment,
+                    close_price=sim_close
+                )
+                if not is_valid:
+                    print(f"   [模擬下單攔截]: 股票 {display_code} 的 {action} 委託未通過安全審核！原因: {audit_msg}")
+                    continue
+
                 try:
                     broker_connector.place_order(
                         stock_code=stock_code,
