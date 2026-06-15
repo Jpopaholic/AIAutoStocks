@@ -1364,6 +1364,12 @@
             return new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD', maximumFractionDigits: 0 }).format(val);
         }
 
+        // 格式化價格（保留兩位小數以符合台股零股/低價股報價）
+        function formatPrice(val) {
+            if (val === null || val === undefined || isNaN(val)) return "--";
+            return new Intl.NumberFormat('zh-TW', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(val);
+        }
+
         // 獲取狀態資料
         async function fetchStatus() {
             try {
@@ -1495,8 +1501,8 @@
                         row.innerHTML = `
                             <td class="stock-tag-td"><span>${h.stock_code}${h.stock_name ? ' ' + h.stock_name : ''}</span></td>
                             <td class="price-td">${h.quantity.toLocaleString()} 股</td>
-                            <td class="price-td">${formatCurrency(h.average_price)}</td>
-                            <td class="price-td">${formatCurrency(h.current_price)}</td>
+                            <td class="price-td">${formatPrice(h.average_price)}</td>
+                            <td class="price-td">${formatPrice(h.current_price)}</td>
                             <td class="price-td" style="font-weight:600;">${formatCurrency(h.market_value)}</td>
                             <td style="text-align: right;">
                                 <span class="pnl-badge ${pnlClass}">
@@ -1548,14 +1554,14 @@
 
                         const execPriceVal = o.execution_price;
                         const execPriceDisplay = (statusVal === "FILLED" && execPriceVal !== null && execPriceVal !== undefined)
-                            ? formatCurrency(execPriceVal)
+                            ? formatPrice(execPriceVal)
                             : "--";
 
                         row.innerHTML = `
                             <td style="font-size:12px; color:var(--text-secondary);">${formattedTime}</td>
                             <td class="stock-tag-td"><span>${o.stock_code}${o.stock_name ? ' ' + o.stock_name : ''}</span></td>
                             <td><span class="pnl-badge ${actionClass}">${actionLabel}</span></td>
-                            <td class="price-td">${formatCurrency(o.price)}</td>
+                            <td class="price-td">${formatPrice(o.price)}</td>
                             <td class="price-td">${execPriceDisplay}</td>
                             <td class="price-td">${parseInt(o.quantity).toLocaleString()} 股</td>
                             <td class="price-td" style="color:var(--text-muted);">${formatCurrency(o.fee)}</td>

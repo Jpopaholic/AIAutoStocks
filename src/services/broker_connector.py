@@ -314,13 +314,23 @@ def place_order(stock_code: str, action: str, price: float, quantity: float) -> 
                 # 3. 判斷交易單位與數量換算
                 sj_action = SjAction.Buy if action == "BUY" else SjAction.Sell
                 
-                # 台灣市場：整股為 1000 股的整數倍，不足 1000 股需走盤中零股 (IntradayOdd)
+                # 台灣市場：整股為 1000 股的整數倍，不足 1000 股需走零股交易
                 if quantity % 1000 == 0 and quantity >= 1000:
                     order_lot = StockOrderLot.Common
                     order_qty = int(quantity / 1000)  # Common 委託數量為張數 (張)
                 else:
-                    order_lot = StockOrderLot.IntradayOdd
                     order_qty = int(quantity)          # 零股委託數量為股數 (股)
+                    
+                    # 根據台灣時間自動判定使用盤中零股 (IntradayOdd) 還是盤後零股 (Odd)
+                    from src.time_manager import get_local_taiwan_datetime
+                    from datetime import time as dt_time
+                    tw_now = get_local_taiwan_datetime()
+                    current_time = tw_now.time()
+                    
+                    if dt_time(13, 40) <= current_time <= dt_time(14, 30):
+                        order_lot = StockOrderLot.Odd
+                    else:
+                        order_lot = StockOrderLot.IntradayOdd
                 
                 # 4. 建立委託物件 (預設使用限價 LMT 與當日有效單 ROD)
                 order = api.Order(
@@ -341,6 +351,13 @@ def place_order(stock_code: str, action: str, price: float, quantity: float) -> 
                 )
                 
                 trade = api.place_order(contract, order)
+                
+                # 檢查委託是否立即失敗
+                from shioaji import OrderStatus
+                if trade.status and trade.status.status == OrderStatus.Failed:
+                    msg = trade.status.msg or "未知原因"
+                    status_code = trade.status.status_code or "無"
+                    raise RuntimeError(f"永豐證券下單失敗：{msg} (代碼: {status_code})")
                 
                 # 6. 處理與記錄成交資訊
                 realized_pnl = 0.0
@@ -526,7 +543,14 @@ def sync_broker_orders() -> None:
                 
             trade = trade_map[order_id]
             status_val = trade.status.status
-            status_name = status_val.name if hasattr(status_val, 'name') else str(status_val)
+            
+            # 兼容處理：真實 Shioaji 的 OrderStatus 與單元測試 Mock 物件
+            if not isinstance(status_val, str) and hasattr(status_val, 'name'):
+                status_name = status_val.name
+            elif hasattr(status_val, 'value'):
+                status_name = status_val.value
+            else:
+                status_name = str(status_val)
             
             log_system_event("INFO", f"[對帳同步] 正在同步訂單 {order_id} ({stock_code} {action}) | 券商狀態: {status_name}")
             

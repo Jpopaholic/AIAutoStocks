@@ -42,8 +42,30 @@ def fetch_stock_klines(stock_code: str, date_str: str = None) -> List[Dict[str, 
         data = response.json()
 
         if data.get("stat") != "OK" or "data" not in data:
-            print(f" [數據擷取器] 無法取得 {stock_code} 的 K 線數據，證交所回應: {data.get('stat')}")
-            return []
+            # 證交所 API 常在當日資料未準備好或尚未整理完成時回傳「查詢日期小於99年1月4日」等錯誤。
+            # 若發生錯誤且傳入日期為今天，嘗試退回前一日重新查詢以載入整月至昨日的歷史數據。
+            from datetime import timedelta
+            fallback_date_str = None
+            try:
+                dt = datetime.strptime(date_str, "%Y%m%d")
+                fallback_dt = dt - timedelta(days=1)
+                fallback_date_str = fallback_dt.strftime("%Y%m%d")
+            except Exception:
+                pass
+                
+            if fallback_date_str:
+                print(f" [數據擷取器] 查詢 {stock_code} 回應 {data.get('stat')}，嘗試回退至前一日 {fallback_date_str} 重新擷取...")
+                _apply_rate_limit()
+                url = f"https://www.twse.com.tw/exchangeReport/STOCK_DAY?response=json&date={fallback_date_str}&stockNo={stock_code}"
+                response = requests.get(url, timeout=10, headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                })
+                response.raise_for_status()
+                data = response.json()
+
+            if data.get("stat") != "OK" or "data" not in data:
+                print(f" [數據擷取器] 無法取得 {stock_code} 的 K 線數據，證交所回應: {data.get('stat')}")
+                return []
 
         klines = []
         for row in data["data"]:
