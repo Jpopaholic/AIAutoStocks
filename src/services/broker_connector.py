@@ -2,7 +2,7 @@
 import threading
 import time
 from datetime import datetime, date
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from src.config import config
 from src.services.supabase_client import (
     get_holdings,
@@ -23,18 +23,30 @@ from src.time_manager import get_local_taiwan_midnight_utc_range, get_effective_
 # 全局排他鎖，防止多線程重複下單
 _order_mutex = threading.Lock()
 
-def align_to_tw_tick_size(price: float) -> float:
+def align_to_tw_tick_size(price: float, stock_code: Optional[str] = None) -> float:
     """
     將價格捨入至符合台灣股市的升降單位 (Tick Size)
-    - 價格小於 10 元: 升降單位為 0.01 元
-    - 價格 10 元至 50 元之間: 升降單位為 0.05 元
-    - 價格 50 元至 100 元之間: 升降單位為 0.1 元
-    - 價格 100 元至 500 元之間: 升降單位為 0.5 元
-    - 價格 500 元至 1000 元之間: 升降單位為 1.0 元
-    - 價格 1000 元以上: 升降單位為 5.0 元
+    - 若為 ETF (代號以 '00' 開頭):
+      - 未滿 50 元: 0.01 元
+      - 50 元以上: 0.05 元
+    - 若為一般股票:
+      - 價格小於 10 元: 升降單位為 0.01 元
+      - 價格 10 元至 50 元之間: 升降單位為 0.05 元
+      - 價格 50 元至 100 元之間: 升降單位為 0.1 元
+      - 價格 100 元至 500 元之間: 升降單位為 0.5 元
+      - 價格 500 元至 1000 元之間: 升降單位為 1.0 元
+      - 價格 1000 元以上: 升降單位為 5.0 元
     """
     if price <= 0:
         return 0.0
+
+    # 判斷是否為 ETF (台股 ETF 代號以 '00' 開頭)
+    if stock_code and isinstance(stock_code, str) and stock_code.strip().startswith("00"):
+        if price < 50.0:
+            return round(price * 100.0) / 100.0
+        else:
+            return round(price * 20.0) / 20.0
+
     if price < 10.0:
         return round(price * 100) / 100
     elif price < 50.0:
@@ -205,7 +217,7 @@ def place_order(stock_code: str, action: str, price: float, quantity: float) -> 
     # 取得排他鎖，防止並行/重複下單
     with _order_mutex:
         # 將價格對齊台灣股市升降單位 (Tick Size)
-        price = align_to_tw_tick_size(price)
+        price = align_to_tw_tick_size(price, stock_code)
         log_system_event("INFO", f"收到下單委託要求: {action} {stock_code} | 價格: {price} | 股數: {quantity}")
         
         # 1. 執行防呆限額檢查
@@ -314,23 +326,26 @@ def place_order(stock_code: str, action: str, price: float, quantity: float) -> 
                 # 3. 判斷交易單位與數量換算
                 sj_action = SjAction.Buy if action == "BUY" else SjAction.Sell
                 
+                # 判斷是否處於台灣股市當日盤後定價與盤後零股交易時間 (13:40 ~ 14:30)
+                from src.time_manager import get_local_taiwan_datetime
+                from datetime import time as dt_time
+                tw_now = get_local_taiwan_datetime()
+                current_time = tw_now.time()
+                is_after_hours_window = (dt_time(13, 40) <= current_time <= dt_time(14, 30))
+
                 # 台灣市場：整股為 1000 股的整數倍，不足 1000 股需走零股交易
                 if quantity % 1000 == 0 and quantity >= 1000:
-                    order_lot = StockOrderLot.Common
-                    order_qty = int(quantity / 1000)  # Common 委託數量為張數 (張)
+                    order_qty = int(quantity / 1000)  # 整股委託數量為張數 (張)
+                    if is_after_hours_window:
+                        order_lot = StockOrderLot.Fixing  # 盤後定價交易 (同一天 14:30 撮合)
+                    else:
+                        order_lot = StockOrderLot.Common  # 盤中整股 (或預約次日單)
                 else:
                     order_qty = int(quantity)          # 零股委託數量為股數 (股)
-                    
-                    # 根據台灣時間自動判定使用盤中零股 (IntradayOdd) 還是盤後零股 (Odd)
-                    from src.time_manager import get_local_taiwan_datetime
-                    from datetime import time as dt_time
-                    tw_now = get_local_taiwan_datetime()
-                    current_time = tw_now.time()
-                    
-                    if dt_time(13, 40) <= current_time <= dt_time(14, 30):
-                        order_lot = StockOrderLot.Odd
+                    if is_after_hours_window:
+                        order_lot = StockOrderLot.Odd      # 盤後零股交易 (同一天 14:30 撮合)
                     else:
-                        order_lot = StockOrderLot.IntradayOdd
+                        order_lot = StockOrderLot.IntradayOdd  # 盤中零股 (或預約次日單)
                 
                 # 4. 建立委託物件 (預設使用限價 LMT 與當日有效單 ROD)
                 order = api.Order(

@@ -98,7 +98,7 @@ def audit_proposed_order(
         return False, f"委託價格 {price} 偏離最新收盤價 {close_price} 達 {price_deviation*100:.2f}%，超出台股 ±10% 漲跌幅限制"
 
     # 3. 檢查價格是否符合台股升降單位 (Tick Size)
-    aligned_price = align_to_tw_tick_size(price)
+    aligned_price = align_to_tw_tick_size(price, stock_code)
     # 浮點數比對加上極小容許誤差
     if abs(price - aligned_price) > 0.0001:
         return False, f"委託價格 {price} 不符合台股升降單位規範，應調整為 {aligned_price}"
