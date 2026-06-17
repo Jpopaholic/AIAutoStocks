@@ -104,6 +104,29 @@ def fetch_stock_klines(stock_code: str, date_str: str = None) -> List[Dict[str, 
                 # 遇到解析錯誤時跳過該行，保證最終產出資料的完整性
                 continue
 
+        # 如果是查詢今天（即沒有指定 date_str），且回傳的 K 線中最後一筆日期不是今天，
+        # 則嘗試透過即時報價補建今天的 K 線（適用於證交所 STOCK_DAY API 尚未更新，但今天確實為交易日的情況）
+        if not date_str:
+            try:
+                today_str = get_local_taiwan_date_str()
+                latest_k_date = klines[-1]["date"] if klines else None
+                if latest_k_date != today_str:
+                    quote = fetch_realtime_quote(stock_code)
+                    if quote and quote.get("date") == today_str:
+                        if not any(k["date"] == today_str for k in klines):
+                            klines.append({
+                                "stockCode": stock_code,
+                                "date": today_str,
+                                "open": quote["open"],
+                                "high": quote["high"],
+                                "low": quote["low"],
+                                "close": quote["price"],
+                                "volume": quote["volume"]
+                            })
+                            print(f" [數據擷取器] 從即時報價補建今日 ({today_str}) K 線數據: 開={quote['open']}, 收={quote['price']}, 量={quote['volume']}")
+            except Exception as quote_err:
+                print(f" [數據擷取器] 嘗試補建今日 {stock_code} 的 K 線時發生異常: {quote_err}")
+
         return klines
     except Exception as e:
         print(f" [數據擷取器] 擷取 K 線數據時發生異常: {str(e)}")
@@ -172,6 +195,12 @@ def fetch_realtime_quotes_batch(stock_codes: List[str]) -> Dict[str, Dict[str, A
                     if price <= 0.0:
                         continue
 
+                    # 解析即時成交日期，例如 "20260617" -> "2026-06-17"
+                    d_val = info.get("d", "")
+                    quote_date = ""
+                    if len(d_val) == 8:
+                        quote_date = f"{d_val[:4]}-{d_val[4:6]}-{d_val[6:]}"
+
                     quote = {
                         "stockCode": code,
                         "price": price,
@@ -181,7 +210,8 @@ def fetch_realtime_quotes_batch(stock_codes: List[str]) -> Dict[str, Dict[str, A
                         "volume": volume,
                         "bids": bids[:5],
                         "asks": asks[:5],
-                        "timestamp": get_utc_now().isoformat().replace("+00:00", "Z")
+                        "timestamp": get_utc_now().isoformat().replace("+00:00", "Z"),
+                        "date": quote_date
                     }
                     _QUOTE_CACHE[code] = (quote, now)
                     results[code] = quote
@@ -206,6 +236,43 @@ def fetch_realtime_quote(stock_code: str) -> Dict[str, Any]:
     """
     batch_res = fetch_realtime_quotes_batch([stock_code])
     return batch_res.get(stock_code, {})
+
+def fetch_taiex_realtime_quote() -> Dict[str, Any]:
+    """
+    獲取大盤加權指數的即時點數與日期資訊 (對應 tse_t00.tw)
+    """
+    _apply_rate_limit()
+    url = "https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_t00.tw"
+    try:
+        response = requests.get(url, timeout=10, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        })
+        response.raise_for_status()
+        data = response.json()
+        if "msgArray" in data and len(data["msgArray"]) > 0:
+            info = data["msgArray"][0]
+            price = float(info.get("z", info.get("y", 0.0)))
+            open_val = float(info.get("o", 0.0))
+            high_val = float(info.get("h", 0.0))
+            low_val = float(info.get("l", 0.0))
+            d_val = info.get("d", "")
+            quote_date = ""
+            if len(d_val) == 8:
+                quote_date = f"{d_val[:4]}-{d_val[4:6]}-{d_val[6:]}"
+            
+            if price > 0.0:
+                return {
+                    "stockCode": "TAIEX",
+                    "price": price,
+                    "open": open_val,
+                    "high": high_val,
+                    "low": low_val,
+                    "volume": 0,
+                    "date": quote_date
+                }
+    except Exception as e:
+        print(f" [數據擷取器] 獲取大盤即時指數失敗: {str(e)}")
+    return {}
 
 def fetch_taiex_klines(date_str: str = None) -> List[Dict[str, Any]]:
     """
@@ -261,6 +328,29 @@ def fetch_taiex_klines(date_str: str = None) -> List[Dict[str, Any]]:
                 })
             except (ValueError, IndexError):
                 continue
+
+        # 如果是查詢今天（即沒有指定 date_str），且回傳的 K 線中最後一筆日期不是今天，
+        # 則嘗試透過即時報價補建今天的大盤 K 線
+        if not date_str:
+            try:
+                today_str = get_local_taiwan_date_str()
+                latest_k_date = klines[-1]["date"] if klines else None
+                if latest_k_date != today_str:
+                    quote = fetch_taiex_realtime_quote()
+                    if quote and quote.get("date") == today_str:
+                        if not any(k["date"] == today_str for k in klines):
+                            klines.append({
+                                "stockCode": "TAIEX",
+                                "date": today_str,
+                                "open": quote["open"],
+                                "high": quote["high"],
+                                "low": quote["low"],
+                                "close": quote["price"],
+                                "volume": 0
+                            })
+                            print(f" [數據擷取器] 從即時報價補建今日 ({today_str}) 大盤 K 線數據: 開={quote['open']}, 收={quote['price']}")
+            except Exception as quote_err:
+                print(f" [數據擷取器] 嘗試補建今日大盤 K 線時發生異常: {quote_err}")
 
         return klines
     except Exception as e:
