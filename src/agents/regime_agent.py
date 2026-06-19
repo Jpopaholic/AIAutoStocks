@@ -63,8 +63,8 @@ def generate_market_regime(taiex_klines: List[Dict[str, Any]]) -> Dict[str, Any]
         ma20_str = f"{k['ma20']:.2f}" if k.get('ma20') is not None else "N/A"
         ma60_str = f"{k['ma60']:.2f}" if k.get('ma60') is not None else "N/A"
         rsi_str = f"{k['rsi14']:.2f}" if k.get('rsi14') is not None else "N/A"
-        macd_str = f"(快線:{k['macd']:.2f}, 慢線:{k['macd_signal']:.2f}, 柱狀圖:{k['macd_hist']:.2f})" if k.get('macd') is not None else "N/A"
-        dmi_str = f"(+DI:{k['plus_di']:.1f}, -DI:{k['minus_di']:.1f}, ADX:{k['adx']:.1f})" if k.get('adx') is not None else "N/A"
+        macd_str = f"(快線:{k['macd']:.2f}, 慢線:{k['macd_signal']:.2f}, 柱狀圖:{k['macd_hist']:.2f})" if (k.get('macd') is not None and k.get('macd_signal') is not None and k.get('macd_hist') is not None) else "N/A"
+        dmi_str = f"(+DI:{k['plus_di']:.1f}, -DI:{k['minus_di']:.1f}, ADX:{k['adx']:.1f})" if (k.get('adx') is not None and k.get('plus_di') is not None and k.get('minus_di') is not None) else "N/A"
         
         taiex_lines.append(
             f"  日期: {k.get('date', '')} | 開盤: {float(o_price):.2f} | 最高: {float(h_price):.2f} | 最低: {float(l_price):.2f} | 收盤: {float(c_price):.2f} | "

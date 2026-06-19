@@ -380,8 +380,8 @@
             gap: 4px;
         }
 
-        .metric-change.positive { color: var(--color-success); }
-        .metric-change.negative { color: var(--color-danger); }
+        .metric-change.positive { color: var(--color-danger); }
+        .metric-change.negative { color: var(--color-success); }
         .metric-change.neutral { color: var(--text-muted); }
 
         /* 主要內容排版：持股與控制面板雙欄 */
@@ -483,13 +483,13 @@
         }
 
         .pnl-badge.positive {
-            background: var(--color-success-glow);
-            color: var(--color-success);
+            background: var(--color-danger-glow);
+            color: var(--color-danger);
         }
 
         .pnl-badge.negative {
-            background: var(--color-danger-glow);
-            color: var(--color-danger);
+            background: var(--color-success-glow);
+            color: var(--color-success);
         }
 
         .status-badge-item {
@@ -1033,10 +1033,21 @@
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"></path></svg>
                             自選監控標的 (Watchlist)
                         </span>
-                        <button class="btn btn-secondary" id="btn-clear-watchlist" onclick="clearWatchlist()" style="padding: 4px 10px; font-size: 11px; color: var(--color-danger); border-color: rgba(244,63,94,0.3); background: rgba(244,63,94,0.08);" title="清除全部自選股">
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:3px"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4h6v2"></path></svg>
-                            全部清除
-                        </button>
+                        <div style="display: flex; gap: 6px; align-items: center;">
+                            <input type="file" id="import-watchlist-file" style="display:none" onchange="handleWatchlistImport(event)" accept=".json">
+                            <button class="btn btn-secondary" onclick="triggerWatchlistImport()" style="padding: 4px 10px; font-size: 11px;" title="匯入自選股 JSON 檔案">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:3px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                                匯入
+                            </button>
+                            <button class="btn btn-secondary" onclick="exportWatchlist()" style="padding: 4px 10px; font-size: 11px;" title="匯出為 JSON 檔案">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:3px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                                匯出
+                            </button>
+                            <button class="btn btn-secondary" id="btn-clear-watchlist" onclick="clearWatchlist()" style="padding: 4px 10px; font-size: 11px; color: var(--color-danger); border-color: rgba(244,63,94,0.3); background: rgba(244,63,94,0.08);" title="清除全部自選股">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:3px"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4h6v2"></path></svg>
+                                全部清除
+                            </button>
+                        </div>
                     </div>
                     
                     <div class="watchlist-container" id="watchlist-tags">
@@ -1829,6 +1840,129 @@
                 }
             } catch (err) {
                 console.error(err);
+            }
+        }
+
+        // 觸發自選股匯入檔案選擇
+        function triggerWatchlistImport() {
+            document.getElementById("import-watchlist-file").click();
+        }
+
+        // 處理自選股匯入且進行型態檢查
+        async function handleWatchlistImport(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            // 重置 input 以利重複選擇
+            event.target.value = "";
+            
+            const reader = new FileReader();
+            reader.onload = async function(e) {
+                try {
+                    const content = e.target.result;
+                    const parsed = JSON.parse(content);
+                    
+                    // 1. 檢查是否為陣列 (Array type validation)
+                    if (!Array.isArray(parsed)) {
+                        showToast("匯入失敗：JSON 格式必須為陣列 (例如: [\"2330\", \"2454\"])", "error");
+                        return;
+                    }
+                    
+                    const regex = /^[0-9a-zA-Z]{4,6}$/;
+                    const validCodes = [];
+                    const invalidCodes = [];
+                    
+                    // 2. 逐項檢查型態與格式 (Element type and pattern validation)
+                    parsed.forEach(item => {
+                        if (typeof item === 'string') {
+                            const cleanItem = item.trim();
+                            if (regex.test(cleanItem)) {
+                                validCodes.push(cleanItem);
+                            } else {
+                                invalidCodes.push(cleanItem);
+                            }
+                        } else if (typeof item === 'number') {
+                            const stringItem = String(item).trim();
+                            if (regex.test(stringItem)) {
+                                validCodes.push(stringItem);
+                            } else {
+                                invalidCodes.push(stringItem);
+                            }
+                        } else {
+                            invalidCodes.push(String(item));
+                        }
+                    });
+                    
+                    if (validCodes.length === 0) {
+                        showToast("匯入失敗：未找到任何有效的股票代號！", "error");
+                        return;
+                    }
+                    
+                    let msg = `偵測到 ${validCodes.length} 支有效自選股。`;
+                    if (invalidCodes.length > 0) {
+                        msg += `（忽略了無效代號：${invalidCodes.slice(0, 5).join("、")}${invalidCodes.length > 5 ? '...' : ''}）`;
+                    }
+                    
+                    if (!confirm(msg + "\n\n確定要將這些自選股匯入並寫入系統嗎？（將會與目前的清單合併，重疊者將自動忽略）")) {
+                        return;
+                    }
+                    
+                    // 批次新增
+                    let addedCount = 0;
+                    let skippedCount = 0;
+                    let failCount = 0;
+                    
+                    for (const code of validCodes) {
+                        if (currentWatchlist.includes(code)) {
+                            skippedCount++;
+                            continue;
+                        }
+                        
+                        try {
+                            const response = await authFetch(`${API_BASE}/api/watchlist`, {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ stock_code: code })
+                            });
+                            if (response.ok) {
+                                addedCount++;
+                            } else {
+                                failCount++;
+                            }
+                        } catch (err) {
+                            failCount++;
+                        }
+                    }
+                    
+                    showToast(`匯入完成！成功新增 ${addedCount} 支，忽略重複 ${skippedCount} 支，失敗 ${failCount} 支。`, "success");
+                    fetchWatchlist();
+                    fetchStatus();
+                } catch (err) {
+                    showToast("解析檔案失敗，請確保是正確的 JSON 格式檔案！", "error");
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        // 匯出自選股
+        function exportWatchlist() {
+            if (currentWatchlist.length === 0) {
+                showToast("自選股清單為空，無法匯出", "info");
+                return;
+            }
+            try {
+                const dataStr = JSON.stringify(currentWatchlist, null, 2);
+                const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+                
+                const exportFileDefaultName = `watchlist_export_${new Date().toISOString().slice(0,10).replace(/-/g,'')}.json`;
+                
+                const linkElement = document.createElement('a');
+                linkElement.setAttribute('href', dataUri);
+                linkElement.setAttribute('download', exportFileDefaultName);
+                linkElement.click();
+                showToast("自選股已成功匯出！", "success");
+            } catch (err) {
+                showToast("匯出失敗：" + err.message, "error");
             }
         }
 

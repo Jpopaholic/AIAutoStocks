@@ -21,6 +21,22 @@ def _apply_rate_limit():
         time.sleep(MIN_REQUEST_INTERVAL - elapsed)
     _LAST_REQUEST_TIME = time.time()
 
+def _get_with_retry(url: str, retries: int = 3, timeout: float = 10.0) -> requests.Response:
+    last_err = None
+    for attempt in range(1, retries + 1):
+        _apply_rate_limit()
+        try:
+            response = requests.get(url, timeout=timeout, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            })
+            response.raise_for_status()
+            return response
+        except (requests.exceptions.RequestException, requests.exceptions.Timeout) as err:
+            last_err = err
+            print(f" [數據擷取器] 請求失敗 (第 {attempt}/{retries} 次嘗試): {err}。將在 3 秒後重試...")
+            time.sleep(3.0)
+    raise last_err
+
 def fetch_stock_klines(stock_code: str, date_str: str = None) -> List[Dict[str, Any]]:
     """
     從台灣證券交易所 (TWSE) 獲取指定個股當月 (或指定日期所在月份) 的歷史 K 線數據
@@ -28,17 +44,13 @@ def fetch_stock_klines(stock_code: str, date_str: str = None) -> List[Dict[str, 
     :param date_str: 格式為 YYYYMMDD 的日期字串 (若為 None 則預設為今天)
     :returns: 清理與格式化後的台股 K 線數據列表
     """
-    _apply_rate_limit()
     if not date_str:
         date_str = get_local_taiwan_date_str().replace("-", "")
 
     url = f"https://www.twse.com.tw/exchangeReport/STOCK_DAY?response=json&date={date_str}&stockNo={stock_code}"
 
     try:
-        response = requests.get(url, timeout=10, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        })
-        response.raise_for_status()
+        response = _get_with_retry(url)
         data = response.json()
 
         if data.get("stat") != "OK" or "data" not in data:
@@ -55,12 +67,8 @@ def fetch_stock_klines(stock_code: str, date_str: str = None) -> List[Dict[str, 
                 
             if fallback_date_str:
                 print(f" [數據擷取器] 查詢 {stock_code} 回應 {data.get('stat')}，嘗試回退至前一日 {fallback_date_str} 重新擷取...")
-                _apply_rate_limit()
                 url = f"https://www.twse.com.tw/exchangeReport/STOCK_DAY?response=json&date={fallback_date_str}&stockNo={stock_code}"
-                response = requests.get(url, timeout=10, headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                })
-                response.raise_for_status()
+                response = _get_with_retry(url)
                 data = response.json()
 
             if data.get("stat") != "OK" or "data" not in data:
@@ -158,9 +166,6 @@ def fetch_realtime_quotes_batch(stock_codes: List[str]) -> Dict[str, Dict[str, A
     if not missing_codes:
         return results
 
-    # Apply rate limit for the network request
-    _apply_rate_limit()
-
     # Build the ex_ch parameter containing both tse and otc for all missing stocks
     ex_ch_list = []
     for code in missing_codes:
@@ -171,10 +176,7 @@ def fetch_realtime_quotes_batch(stock_codes: List[str]) -> Dict[str, Dict[str, A
     url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch={ex_ch_str}"
 
     try:
-        response = requests.get(url, timeout=10, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        })
-        response.raise_for_status()
+        response = _get_with_retry(url)
         data = response.json()
 
         if "msgArray" in data and len(data["msgArray"]) > 0:
@@ -241,13 +243,9 @@ def fetch_taiex_realtime_quote() -> Dict[str, Any]:
     """
     獲取大盤加權指數的即時點數與日期資訊 (對應 tse_t00.tw)
     """
-    _apply_rate_limit()
     url = "https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_t00.tw"
     try:
-        response = requests.get(url, timeout=10, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        })
-        response.raise_for_status()
+        response = _get_with_retry(url)
         data = response.json()
         if "msgArray" in data and len(data["msgArray"]) > 0:
             info = data["msgArray"][0]
@@ -280,17 +278,13 @@ def fetch_taiex_klines(date_str: str = None) -> List[Dict[str, Any]]:
     :param date_str: 格式為 YYYYMMDD 的日期字串 (若為 None 則預設為今天)
     :returns: 清理與格式化後的大盤 K 線數據列表 (以 stockCode 'TAIEX' 表示)
     """
-    _apply_rate_limit()
     if not date_str:
         date_str = get_local_taiwan_date_str().replace("-", "")
 
     url = f"https://www.twse.com.tw/indicesReport/MI_5MINS_HIST?response=json&date={date_str}"
 
     try:
-        response = requests.get(url, timeout=10, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        })
-        response.raise_for_status()
+        response = _get_with_retry(url)
         data = response.json()
 
         if data.get("stat") != "OK" or "data" not in data:

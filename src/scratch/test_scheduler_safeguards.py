@@ -232,18 +232,22 @@ class TestSchedulerSafeguards(unittest.TestCase):
         # 驗證有儲存到資料庫
         self.assertEqual(mock_save.call_count, 2)
 
+    @patch("src.main.supabase_client.get_holdings")
     @patch("src.main.supabase_client.get_stock_klines")
     @patch("src.main.supabase_client.save_stock_klines")
     @patch("src.services.stock_fetcher.fetch_stock_klines")
     @patch("src.services.stock_fetcher.fetch_taiex_klines")
     @patch("src.main.config")
     @patch("src.main.supabase_client.log_system_event")
-    def test_run_live_trading_job_backfill(self, mock_log, mock_config, mock_fetch_taiex, mock_fetch_stock, mock_save, mock_get_klines):
+    def test_run_live_trading_job_backfill(self, mock_log, mock_config, mock_fetch_taiex, mock_fetch_stock, mock_save, mock_get_klines, mock_get_holdings):
         """
         測試實盤自動交易中，當資料庫歷史 K 線筆數小於 80 筆時，會觸發回溯補建邏輯。
         """
         from src.main import run_live_trading_job
         from datetime import datetime
+        
+        # 0. 模擬持股為空
+        mock_get_holdings.return_value = []
         
         # 1. 模擬自動交易已開啟
         mock_config.is_auto_trading_active = True
