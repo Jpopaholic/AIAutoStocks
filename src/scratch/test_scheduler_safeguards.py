@@ -232,6 +232,60 @@ class TestSchedulerSafeguards(unittest.TestCase):
         # 驗證有儲存到資料庫
         self.assertEqual(mock_save.call_count, 2)
 
+    @patch("src.main.supabase_client.get_stock_klines")
+    @patch("src.main.supabase_client.save_stock_klines")
+    @patch("src.services.stock_fetcher.fetch_stock_klines")
+    @patch("src.services.stock_fetcher.fetch_taiex_klines")
+    @patch("src.main.config")
+    @patch("src.main.supabase_client.log_system_event")
+    def test_run_live_trading_job_backfill(self, mock_log, mock_config, mock_fetch_taiex, mock_fetch_stock, mock_save, mock_get_klines):
+        """
+        測試實盤自動交易中，當資料庫歷史 K 線筆數小於 80 筆時，會觸發回溯補建邏輯。
+        """
+        from src.main import run_live_trading_job
+        from datetime import datetime
+        
+        # 1. 模擬自動交易已開啟
+        mock_config.is_auto_trading_active = True
+        
+        # 2. 模擬今日日期 (並非週末)
+        tw_now = datetime(2026, 6, 10, 14, 0, 0)
+        
+        # 3. 模擬基準股 2330 已經有今日最新資料 (不跳過休市自檢)
+        # 第一個 call 是休市自檢 fetch_stock_klines("2330")
+        mock_fetch_stock.return_value = [
+            {"stockCode": "2330", "date": "2026-06-10", "open": 610.0, "high": 610.0, "low": 610.0, "close": 610.0, "volume": 100}
+        ]
+        
+        # 4. 模擬資料庫獲取 K 線
+        # 依序呼叫 get_stock_klines:
+        # - get_stock_klines("TAIEX", limit=120) -> 回傳 10 筆 (少於 80，觸發 TAIEX 補建)
+        # - get_stock_klines("2330", limit=120) -> 回傳 20 筆 (少於 80，觸發 2330 補建)
+        # - get_stock_klines("2330", limit=100) -> 載入完整 100 筆
+        # - get_stock_klines("TAIEX", limit=100) -> 載入 TAIEX 100 筆
+        mock_get_klines.side_effect = [
+            [{"stock_code": "TAIEX", "date": "2026-06-10", "open": 16000.0, "high": 16000.0, "low": 16000.0, "close": 16000.0, "volume": 0}] * 10,
+            [{"stock_code": "2330", "date": "2026-06-10", "open": 610.0, "high": 610.0, "low": 610.0, "close": 610.0, "volume": 100}] * 20,
+            [{"stock_code": "2330", "date": "2026-06-10", "open": 610.0, "high": 610.0, "low": 610.0, "close": 610.0, "volume": 100}] * 100,
+            [{"stock_code": "TAIEX", "date": "2026-06-10", "open": 16000.0, "high": 16000.0, "low": 16000.0, "close": 16000.0, "volume": 0}] * 100
+        ]
+        
+        # 5. 執行實盤交易排程
+        # 為了避免進入後續真實決策/網路 API 呼叫，Mock trading_agent.generate_portfolio_decisions
+        with patch("src.main.get_taiwan_time", return_value=tw_now), \
+             patch("src.agents.trading_agent.generate_portfolio_decisions") as mock_decision, \
+             patch("src.agents.regime_agent.generate_market_regime") as mock_regime:
+             
+            mock_regime.return_value = {"regime": "BULLISH", "posture": "LONG", "risk_multiplier": 1.0}
+            run_live_trading_job(["2330"])
+            
+        # 驗證補建：TAIEX 應呼叫 fetch_taiex_klines 共 5 次，2330 應呼叫 fetch_stock_klines 共 5 次 (排除第一次的休市自檢)
+        self.assertEqual(mock_fetch_taiex.call_count, 5)
+        # 第一個 call 是休市自檢，後面應再呼叫 5 次進行補抓 (共 6 次)
+        self.assertEqual(mock_fetch_stock.call_count, 6)
+        # 驗證 save_stock_klines 寫入資料庫
+        mock_save.assert_called()
+
 if __name__ == "__main__":
     unittest.main()
 

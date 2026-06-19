@@ -110,18 +110,38 @@ def run_live_trading_job(stock_codes: List[str]) -> None:
     # A-0. 抓取大盤加權指數 (TAIEX) 的最新 K 線歷史數據並儲存
     from datetime import timedelta
     try:
-        print(" [排程引擎] 正在獲取大盤加權指數 (TAIEX) 的最新 K 線歷史數據...")
-        taiex_klines = stock_fetcher.fetch_taiex_klines()
-        # 同步抓取前一個月以避免月份交替時的資料斷層
-        prev_date = (tw_now - timedelta(days=30)).strftime("%Y%m%d")
-        prev_taiex_klines = stock_fetcher.fetch_taiex_klines(prev_date)
-        all_taiex = taiex_klines + prev_taiex_klines
+        print(" [排程引擎] 正在檢查大盤加權指數 (TAIEX) 的資料庫歷史數據量...")
+        db_klines_taiex = supabase_client.get_stock_klines("TAIEX", limit=120)
         
-        if all_taiex:
-            supabase_client.save_stock_klines(all_taiex)
-            print(f" [排程引擎] 成功儲存 {len(all_taiex)} 筆大盤 K 線數據至資料庫")
+        if len(db_klines_taiex) < 80:
+            print(f" [排程引擎] 偵測到 TAIEX 的歷史 K 線不足 ({len(db_klines_taiex)} 筆)，將自動向後補建前 4 個月的資料...")
+            fetched_months = set()
+            all_fetched = []
+            for i in range(5):
+                check_dt = tw_now - timedelta(days=30 * i)
+                month_str = check_dt.strftime("%Y%m01")
+                if month_str not in fetched_months:
+                    fetched_months.add(month_str)
+                    print(f"   [補建機制] 正在下載 TAIEX 在 {check_dt.strftime('%Y-%m')} 的 K 線...")
+                    klines = stock_fetcher.fetch_taiex_klines(month_str)
+                    if klines:
+                        all_fetched.extend(klines)
+            if all_fetched:
+                supabase_client.save_stock_klines(all_fetched)
+                print(f"   [補建機制] 成功下載並寫入 {len(all_fetched)} 筆 TAIEX K 線數據至資料庫")
         else:
-            print(" [排程引擎] 警告: 未能獲取大盤加權指數的最新 K 線。")
+            print(" [排程引擎] 正在獲取大盤加權指數 (TAIEX) 的最新 K 線歷史數據...")
+            taiex_klines = stock_fetcher.fetch_taiex_klines()
+            # 同步抓取前一個月以避免月份交替時的資料斷層
+            prev_date = (tw_now - timedelta(days=30)).strftime("%Y%m%d")
+            prev_taiex_klines = stock_fetcher.fetch_taiex_klines(prev_date)
+            all_taiex = taiex_klines + prev_taiex_klines
+            
+            if all_taiex:
+                supabase_client.save_stock_klines(all_taiex)
+                print(f" [排程引擎] 成功儲存 {len(all_taiex)} 筆大盤 K 線數據至資料庫")
+            else:
+                print(" [排程引擎] 警告: 未能獲取大盤加權指數的最新 K 線。")
     except Exception as taiex_err:
         print(f" [排程引擎] 警告: 獲取大盤 K 線數據時發生異常: {str(taiex_err)}")
 
@@ -130,13 +150,33 @@ def run_live_trading_job(stock_codes: List[str]) -> None:
     # A. 抓取所有股票的最新日 K 線數據，並自資料庫載入完整的歷史 K 線 (最新 100 筆)
     for stock_code in stock_codes:
         try:
-            print(f" [排程引擎] 正在獲取 {stock_code} 的最新 K 線歷史數據...")
-            klines = stock_fetcher.fetch_stock_klines(stock_code)
-            if klines:
-                # 將最新 K 線儲存至 Supabase 作為歷史備份
-                supabase_client.save_stock_klines(klines)
+            print(f" [排程引擎] 正在檢查 {stock_code} 的資料庫歷史數據量...")
+            db_klines_exist = supabase_client.get_stock_klines(stock_code, limit=120)
+            
+            if len(db_klines_exist) < 80:
+                print(f" [排程引擎] 偵測到 {stock_code} 的歷史 K 線不足 ({len(db_klines_exist)} 筆)，將自動向後補建前 4 個月的資料...")
+                fetched_months = set()
+                all_fetched = []
+                for i in range(5):
+                    check_dt = tw_now - timedelta(days=30 * i)
+                    month_str = check_dt.strftime("%Y%m01")
+                    if month_str not in fetched_months:
+                        fetched_months.add(month_str)
+                        print(f"   [補建機制] 正在下載 {stock_code} 在 {check_dt.strftime('%Y-%m')} 的 K 線...")
+                        klines = stock_fetcher.fetch_stock_klines(stock_code, month_str)
+                        if klines:
+                            all_fetched.extend(klines)
+                if all_fetched:
+                    supabase_client.save_stock_klines(all_fetched)
+                    print(f"   [補建機制] 成功下載並寫入 {len(all_fetched)} 筆 {stock_code} K 線數據至資料庫")
             else:
-                print(f" [排程引擎] 警告: 未能自 API 獲取 {stock_code} 的 K 線，將嘗試僅從資料庫載入歷史。")
+                print(f" [排程引擎] 正在獲取 {stock_code} 的最新 K 線歷史數據...")
+                klines = stock_fetcher.fetch_stock_klines(stock_code)
+                if klines:
+                    # 將最新 K 線儲存至 Supabase 作為歷史備份
+                    supabase_client.save_stock_klines(klines)
+                else:
+                    print(f" [排程引擎] 警告: 未能自 API 獲取 {stock_code} 的 K 線，將嘗試僅從資料庫載入歷史。")
 
             # 從資料庫載入完整 100 筆 K 線以防月份交替斷層
             db_klines = supabase_client.get_stock_klines(stock_code, limit=100)
