@@ -10,6 +10,12 @@ from src.time_manager import get_local_taiwan_date_str, get_utc_now
 _LAST_REQUEST_TIME = 0.0
 MIN_REQUEST_INTERVAL = 3.0
 
+# 熔斷降級狀態變數
+_NETWORK_DISABLED_UNTIL = 0.0
+_CONSECUTIVE_FAILURES = 0
+MAX_CONSECUTIVE_FAILURES = 2  # 連續失敗幾次就觸發熔斷
+DISABLE_DURATION = 300.0      # 熔斷時間 (秒)
+
 def _apply_rate_limit():
     """
     確保請求間隔符合規定，遵守外部 API 的呼叫頻率限制
@@ -22,6 +28,15 @@ def _apply_rate_limit():
     _LAST_REQUEST_TIME = time.time()
 
 def _get_with_retry(url: str, retries: int = 3, timeout: float = 10.0) -> requests.Response:
+    global _LAST_REQUEST_TIME, _NETWORK_DISABLED_UNTIL, _CONSECUTIVE_FAILURES
+    
+    # 檢查是否處於熔斷降級狀態
+    now = time.time()
+    if now < _NETWORK_DISABLED_UNTIL:
+        remaining = int(_NETWORK_DISABLED_UNTIL - now)
+        print(f" [數據擷取器] 外部網路請求目前處於熔斷狀態 (剩餘 {remaining} 秒)，直接跳過外部請求: {url}")
+        raise requests.exceptions.RequestException("外部網路請求因超時/限制已啟動防禦性熔斷，暫停連線中。")
+
     last_err = None
     for attempt in range(1, retries + 1):
         _apply_rate_limit()
@@ -30,11 +45,33 @@ def _get_with_retry(url: str, retries: int = 3, timeout: float = 10.0) -> reques
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             })
             response.raise_for_status()
+            
+            # 成功時重置連續失敗計數
+            _CONSECUTIVE_FAILURES = 0
             return response
         except (requests.exceptions.RequestException, requests.exceptions.Timeout) as err:
             last_err = err
+            
+            # 判斷是否為嚴重網路問題（超時或 403 Forbidden 或 429 Too Many Requests）
+            is_critical = False
+            if isinstance(err, requests.exceptions.Timeout):
+                is_critical = True
+            elif hasattr(err, 'response') and err.response is not None:
+                if err.response.status_code in [403, 429]:
+                    is_critical = True
+
+            if is_critical:
+                _CONSECUTIVE_FAILURES += 1
+                
             print(f" [數據擷取器] 請求失敗 (第 {attempt}/{retries} 次嘗試): {err}。將在 3 秒後重試...")
+            
+            if _CONSECUTIVE_FAILURES >= MAX_CONSECUTIVE_FAILURES:
+                _NETWORK_DISABLED_UNTIL = time.time() + DISABLE_DURATION
+                print(f" [數據擷取器] 偵測到連續 {MAX_CONSECUTIVE_FAILURES} 次網路異常/超時，啟動熔斷防禦機制，將暫停外部 API 請求 {int(DISABLE_DURATION/60)} 分鐘以保護 IP。")
+                break
+                
             time.sleep(3.0)
+            
     raise last_err
 
 def fetch_stock_klines(stock_code: str, date_str: str = None) -> List[Dict[str, Any]]:
