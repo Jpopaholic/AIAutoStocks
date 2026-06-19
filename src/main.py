@@ -327,10 +327,69 @@ def _run_sandbox_simulation_internal(stock_codes: List[str], start_date: str, en
     except Exception as h_err:
         print(f" [排程引擎] 警告: 獲取目前持股以合併沙盒分析標的時發生異常: {str(h_err)}")
 
-    # 1. 從 Supabase 中獲取基礎股票的交易日作為模擬時間軸基準
-    db_klines = supabase_client.get_stock_klines(stock_codes[0], limit=500)
+    # 1. 針對模擬區間進行資料完整性預抓取 (Pre-fetch)
+    # 確保基礎股票 (stock_codes[0]) 與大盤 (TAIEX) 在整個模擬區間 [start_date, end_date] 的 K 線資料皆已存在於資料庫中。
+    try:
+        from src.services import stock_fetcher
+        from datetime import datetime
+        
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+        
+        # 找出區間內所有的月份
+        months_to_check = []
+        curr_dt = start_dt
+        while curr_dt <= end_dt:
+            month_str = curr_dt.strftime("%Y-%m")
+            api_date_str = curr_dt.strftime("%Y%m01")
+            months_to_check.append((month_str, api_date_str))
+            if curr_dt.month == 12:
+                curr_dt = curr_dt.replace(year=curr_dt.year + 1, month=1, day=1)
+            else:
+                curr_dt = curr_dt.replace(month=curr_dt.month + 1, day=1)
+                
+        # 取得資料庫中已有的資料以進行比對
+        base_code = stock_codes[0]
+        db_klines_base = supabase_client.get_stock_klines(base_code, limit=1000)
+        db_klines_taiex = supabase_client.get_stock_klines("TAIEX", limit=1000)
+        
+        need_reload_base = False
+        
+        for month_str, api_date_str in months_to_check:
+            # 檢查基礎股票
+            base_count = sum(1 for k in db_klines_base if k["date"].startswith(month_str))
+            if base_count < 3:
+                print(f" [排程引擎] 偵測到資料庫中缺乏 {base_code} 在 {month_str} 的 K 線資料，嘗試從網路預抓取...")
+                fetched = stock_fetcher.fetch_stock_klines(base_code, api_date_str)
+                if fetched:
+                    supabase_client.save_stock_klines(fetched)
+                    print(f" [排程引擎] 成功預抓取 {base_code} 在 {month_str} 的 K 線共 {len(fetched)} 筆並儲存")
+                    need_reload_base = True
+                else:
+                    print(f" [排程引擎] 無法從網路取得 {base_code} 在 {month_str} 的 K 線")
+            
+            # 檢查大盤 TAIEX
+            taiex_count = sum(1 for k in db_klines_taiex if k["date"].startswith(month_str))
+            if taiex_count < 3:
+                print(f" [排程引擎] 偵測到資料庫中缺乏 TAIEX 在 {month_str} 的 K 線資料，嘗試從網路預抓取...")
+                fetched = stock_fetcher.fetch_taiex_klines(api_date_str)
+                if fetched:
+                    supabase_client.save_stock_klines(fetched)
+                    print(f" [排程引擎] 成功預抓取 TAIEX 在 {month_str} 的 K 線共 {len(fetched)} 筆並儲存")
+                else:
+                    print(f" [排程引擎] 無法從網路取得 TAIEX 在 {month_str} 的 K 線")
+                    
+        if need_reload_base:
+            db_klines = supabase_client.get_stock_klines(base_code, limit=1000)
+        else:
+            db_klines = db_klines_base
+            
+    except Exception as prefetch_err:
+        print(f" [排程引擎] 警告: 執行沙盒演練資料預抓取時發生異常 (將使用現有資料庫資料): {prefetch_err}")
+        db_klines = supabase_client.get_stock_klines(stock_codes[0], limit=1000)
+
     if not db_klines:
-        print(" [排程引擎] 錯誤: Supabase 資料庫中無歷史 K 線數據，請先在 live 模式下執行資料擷取持久化。")
+        print(" [排程引擎] 錯誤: Supabase 資料庫中無歷史 K 線數據，且無法自動補建。")
         return
 
     # 篩選在 [start_date, end_date] 範圍內的交易日期

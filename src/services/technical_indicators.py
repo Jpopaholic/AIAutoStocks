@@ -206,6 +206,7 @@ def compute_all_indicators(klines: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     # 價格均線
     ma5 = calculate_sma(closes, 5)
     ma20 = calculate_sma(closes, 20)
+    ma60 = calculate_sma(closes, 60)
     
     # 成交量均線
     vol_ma5 = calculate_sma(volumes, 5)
@@ -223,6 +224,7 @@ def compute_all_indicators(klines: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     for i, k in enumerate(klines):
         k["ma5"] = ma5[i]
         k["ma20"] = ma20[i]
+        k["ma60"] = ma60[i]
         k["vol_ma5"] = vol_ma5[i]
         k["vol_ma20"] = vol_ma20[i]
         k["rsi14"] = rsi14[i]

@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 from src.config import config
 from src.services.gemini_rotator import call_gemini_with_rotation
+from src.services.technical_indicators import compute_all_indicators
 
 # 1. 定義大盤氣候診斷模型
 class MarketRegimeAssessment(BaseModel):
@@ -40,6 +41,12 @@ def generate_market_regime(taiex_klines: List[Dict[str, Any]]) -> Dict[str, Any]
             "reason": "無可用的大盤 K 線數據，自動退回到預設正常盤整狀態。"
         }
 
+    # 計算大盤的所有技術指標（包含 MA5、MA20、RSI、MACD、DMI）
+    try:
+        compute_all_indicators(taiex_klines)
+    except Exception as taiex_ind_err:
+        print(f" [Regime Layer] 警告: 計算大盤技術指標失敗: {taiex_ind_err}")
+
     # 僅取最近 30 天的大盤 K 線，避免 context 長度過長
     recent_taiex = taiex_klines[-30:]
     
@@ -52,18 +59,26 @@ def generate_market_regime(taiex_klines: List[Dict[str, Any]]) -> Dict[str, Any]
         c_price = k.get("close") or k.get("closePrice") or 0.0
         volume = k.get("volume") or 0
         
+        ma5_str = f"{k['ma5']:.2f}" if k.get('ma5') is not None else "N/A"
+        ma20_str = f"{k['ma20']:.2f}" if k.get('ma20') is not None else "N/A"
+        ma60_str = f"{k['ma60']:.2f}" if k.get('ma60') is not None else "N/A"
+        rsi_str = f"{k['rsi14']:.2f}" if k.get('rsi14') is not None else "N/A"
+        macd_str = f"(快線:{k['macd']:.2f}, 慢線:{k['macd_signal']:.2f}, 柱狀圖:{k['macd_hist']:.2f})" if k.get('macd') is not None else "N/A"
+        dmi_str = f"(+DI:{k['plus_di']:.1f}, -DI:{k['minus_di']:.1f}, ADX:{k['adx']:.1f})" if k.get('adx') is not None else "N/A"
+        
         taiex_lines.append(
-            f"  日期: {k.get('date', '')} | 開盤: {float(o_price):.2f} | 最高: {float(h_price):.2f} | "
-            f"最低: {float(l_price):.2f} | 收盤: {float(c_price):.2f} | 成交量: {int(volume):,}"
+            f"  日期: {k.get('date', '')} | 開盤: {float(o_price):.2f} | 最高: {float(h_price):.2f} | 最低: {float(l_price):.2f} | 收盤: {float(c_price):.2f} | "
+            f"成交量: {int(volume):,} | MA5: {ma5_str} | MA20: {ma20_str} | MA60 (季線): {ma60_str} | RSI: {rsi_str} | MACD: {macd_str} | DMI: {dmi_str}"
         )
     taiex_text = "\n".join(taiex_lines)
 
     system_instruction = (
         "你是一個資深的台股宏觀市場分析專家，擅長透過大盤指數走勢、成交量變化、均線排列與波動趨勢來判斷當前的市場狀態 (Market Regime)。\n"
         "你的任務是分析給定的大盤指數 K 線數據，判定目前的市場狀態 (Regime)、應採取的交易姿態 (Posture) 與風險限額乘數 (Risk Multiplier)。\n\n"
+        "數據中已為您計算好了 MA5、MA20 (月線)、MA60 (季線)、RSI、MACD 與 DMI 等指標，請務必將這些指標作為您的重要評判依據！\n\n"
         "市場狀態 (regime) 定義：\n"
-        "- 'BULLISH_TREND': 大盤均線呈現多頭排列，或收盤價高於移動平均線，且近期呈現明顯上漲趨勢。\n"
-        "- 'BEARISH_TREND': 大盤均線呈現空頭排列，或收盤價低於移動平均線，且近期呈現明顯下跌趨勢。\n"
+        "- 'BULLISH_TREND': 大盤均線呈現多頭排列，或收盤價高於月線 MA20 與季線 MA60 (例如 MA5 > MA20 > MA60，且收盤價站穩在 MA20/MA60 上)，且近期呈現明顯上漲趨勢。\n"
+        "- 'BEARISH_TREND': 大盤均線呈現空頭排列，或收盤價低於月線 MA20 或季線 MA60 (例如 MA5 < MA20 < MA60，且收盤價跌破 MA20 或 MA60)，且近期呈現明顯下跌趨勢。\n"
         "- 'CALM_RANGE': 大盤無明顯趨勢，價格在一定區間內窄幅波動，成交量偏低，波動率低。\n"
         "- 'VOLATILE_RANGE': 大盤波動劇烈，單日大漲大跌，方向不明，市場情緒恐慌或極度不穩定。\n\n"
         "交易姿態 (posture) 與風險乘數 (risk_multiplier) 建議指引：\n"
@@ -75,7 +90,7 @@ def generate_market_regime(taiex_klines: List[Dict[str, Any]]) -> Dict[str, Any]
     )
 
     user_prompt = (
-        f"請根據以下大盤加權指數 (TAIEX) 最近 30 天日 K 線數據，分析當前的市場狀態與風險限額乘數：\n\n"
+        f"請根據以下大盤加權指數 (TAIEX) 最近 30 天日 K 線數據與預估技術指標，分析當前的市場狀態與風險限額乘數：\n\n"
         f"【大盤加權指數 (TAIEX) 最近 30 天數據 (最下方為最新一日行情)】：\n"
         f"{taiex_text}\n"
     )

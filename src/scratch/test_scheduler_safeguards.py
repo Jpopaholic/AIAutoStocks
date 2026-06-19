@@ -190,6 +190,48 @@ class TestSchedulerSafeguards(unittest.TestCase):
         mock_fetch_taiex.assert_called_once()
         mock_save.assert_called_once()
 
+    @patch("src.main.supabase_client.get_stock_klines")
+    @patch("src.main.supabase_client.save_stock_klines")
+    @patch("src.services.stock_fetcher.fetch_stock_klines")
+    @patch("src.services.stock_fetcher.fetch_taiex_klines")
+    @patch("src.services.sandbox_simulator.initialize_simulation")
+    def test_run_sandbox_simulation_prefetch(self, mock_init, mock_fetch_taiex, mock_fetch_stock, mock_save, mock_get_klines):
+        """
+        測試沙盒模擬啟動時的預抓取邏輯。
+        當資料庫缺乏區間內的資料時，應呼叫 stock_fetcher 抓取並儲存。
+        """
+        from src.main import _run_sandbox_simulation_internal
+        
+        # 1. 模擬資料庫缺乏 2026-04 月的資料 (回傳 K 線很少，代表不完整)
+        # 第一個呼叫是 get_stock_klines("2330")，第二個是 get_stock_klines("TAIEX")
+        mock_get_klines.side_effect = [
+            # 第一次檢查：資料庫中 2330 只有 1 筆在 2026-04 的資料 (小於 3 筆，觸發預抓)
+            [{"stock_code": "2330", "date": "2026-04-01", "open": 500, "high": 500, "low": 500, "close": 500, "volume": 100}],
+            # 第二次檢查：資料庫中 TAIEX 有 0 筆在 2026-04 的資料 (小於 3 筆，觸發預抓)
+            [],
+            # 重新載入時的回傳
+            [{"stock_code": "2330", "date": "2026-04-01", "open": 500, "high": 500, "low": 500, "close": 500, "volume": 100},
+             {"stock_code": "2330", "date": "2026-04-02", "open": 505, "high": 505, "low": 505, "close": 505, "volume": 100}]
+        ]
+        
+        # 模擬 fetcher 回傳
+        mock_fetch_stock.return_value = [
+            {"stockCode": "2330", "date": "2026-04-02", "open": 505, "high": 505, "low": 505, "close": 505, "volume": 100}
+        ]
+        mock_fetch_taiex.return_value = [
+            {"stockCode": "TAIEX", "date": "2026-04-02", "open": 16000, "high": 16000, "low": 16000, "close": 16000, "volume": 0}
+        ]
+        
+        # 為了不真正跑完 while 循環，Mock sandbox_simulator.is_simulation_active 回傳 False
+        with patch("src.services.sandbox_simulator.is_simulation_active", return_value=False):
+            _run_sandbox_simulation_internal(["2330"], "2026-04-01", "2026-04-05")
+            
+        # 驗證 fetchers 被呼叫
+        mock_fetch_stock.assert_called_with("2330", "20260401")
+        mock_fetch_taiex.assert_called_with("20260401")
+        # 驗證有儲存到資料庫
+        self.assertEqual(mock_save.call_count, 2)
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -239,12 +239,13 @@ def generate_portfolio_decisions(
         for k in taiex_recent:
             ma5_str = f"{k['ma5']:.2f}" if k.get('ma5') is not None else "N/A"
             ma20_str = f"{k['ma20']:.2f}" if k.get('ma20') is not None else "N/A"
+            ma60_str = f"{k['ma60']:.2f}" if k.get('ma60') is not None else "N/A"
             rsi_str = f"{k['rsi14']:.2f}" if k.get('rsi14') is not None else "N/A"
             macd_str = f"(快線:{k['macd']:.2f}, 慢線:{k['macd_signal']:.2f}, 柱狀圖:{k['macd_hist']:.2f})" if k.get('macd') is not None else "N/A"
             dmi_str = f"(+DI:{k['plus_di']:.1f}, -DI:{k['minus_di']:.1f}, ADX:{k['adx']:.1f})" if k.get('adx') is not None else "N/A"
             
             taiex_lines.append(
-                f"  日期: {k['date']} | 收盤指數: {k['close']:.2f} | MA5: {ma5_str} | MA20: {ma20_str} | RSI: {rsi_str} | MACD: {macd_str} | DMI: {dmi_str}"
+                f"  日期: {k['date']} | 收盤指數: {k['close']:.2f} | MA5: {ma5_str} | MA20: {ma20_str} | MA60 (季線): {ma60_str} | RSI: {rsi_str} | MACD: {macd_str} | DMI: {dmi_str}"
             )
         taiex_text = "\n".join(taiex_lines)
         taiex_info = f"【大盤加權指數 (TAIEX) 最近 30 天日 K 線數據 (最下方為最新一日行情，供您判定大盤走勢)】：\n{taiex_text}"
@@ -262,6 +263,7 @@ def generate_portfolio_decisions(
         for k in recent_klines:
             ma5_str = f"{k['ma5']:.2f}" if k.get('ma5') is not None else "N/A"
             ma20_str = f"{k['ma20']:.2f}" if k.get('ma20') is not None else "N/A"
+            ma60_str = f"{k['ma60']:.2f}" if k.get('ma60') is not None else "N/A"
             rsi_str = f"{k['rsi14']:.2f}" if k.get('rsi14') is not None else "N/A"
             vol_ma5_str = f"{k['vol_ma5']:,.0f}" if k.get('vol_ma5') is not None else "N/A"
             vol_ma20_str = f"{k['vol_ma20']:,.0f}" if k.get('vol_ma20') is not None else "N/A"
@@ -269,7 +271,7 @@ def generate_portfolio_decisions(
             dmi_str = f"(+DI:{k['plus_di']:.1f}, -DI:{k['minus_di']:.1f}, ADX:{k['adx']:.1f})" if k.get('adx') is not None else "N/A"
             
             klines_lines.append(
-                f"  日期: {k['date']} | 開盤: {k['open']} | 最高: {k['high']} | 最低: {k['low']} | 收盤: {k['close']} | MA5: {ma5_str} | MA20: {ma20_str} | RSI: {rsi_str} | "
+                f"  日期: {k['date']} | 開盤: {k['open']} | 最高: {k['high']} | 最低: {k['low']} | 收盤: {k['close']} | MA5: {ma5_str} | MA20: {ma20_str} | MA60 (季線): {ma60_str} | RSI: {rsi_str} | "
                 f"成交量: {k['volume']:,.0f} (VOL_MA5: {vol_ma5_str}, VOL_MA20: {vol_ma20_str}) | MACD: {macd_str} | DMI: {dmi_str}"
             )
         klines_text = "\n".join(klines_lines)
