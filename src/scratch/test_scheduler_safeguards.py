@@ -108,5 +108,89 @@ class TestSchedulerSafeguards(unittest.TestCase):
             any_skip_log = any(len(args) > 1 and "自動跳過今日任務" in args[1] for args, kwargs in mock_log.call_args_list)
             self.assertTrue(any_skip_log)
 
+    @patch("src.services.sandbox_simulator.config")
+    def test_is_simulation_active_safeguard(self, mock_config):
+        """
+        測試當 config 設為實盤模式時，is_simulation_active 必須強制回傳 False，且能自動重設內部狀態
+        """
+        from src.services.sandbox_simulator import is_simulation_active, set_simulation_mode
+        
+        # 設為模擬模式
+        mock_config.limits.is_paper_trading = True
+        set_simulation_mode(True)
+        self.assertTrue(is_simulation_active())
+        
+        # 切換至實盤模式
+        mock_config.limits.is_paper_trading = False
+        self.assertFalse(is_simulation_active())
+        
+        # 再次切回模擬模式以驗證內部 _simulation_active 已被設為 False
+        mock_config.limits.is_paper_trading = True
+        self.assertFalse(is_simulation_active())
+
+    @patch("src.main._run_sandbox_simulation_internal")
+    def test_run_sandbox_simulation_finally_block(self, mock_run_internal):
+        """
+        測試 run_sandbox_simulation 無論正常結束或遭遇例外，皆會關閉模擬狀態 (finally block)
+        """
+        from src.main import run_sandbox_simulation
+        from src.services.sandbox_simulator import set_simulation_mode, is_simulation_active
+        
+        # 1. 正常執行
+        set_simulation_mode(True)
+        run_sandbox_simulation(["2330"], "2026-06-01", "2026-06-02")
+        self.assertFalse(is_simulation_active())
+        
+        # 2. 拋出例外
+        set_simulation_mode(True)
+        mock_run_internal.side_effect = Exception("Simulated error")
+        with self.assertRaises(Exception):
+            run_sandbox_simulation(["2330"], "2026-06-01", "2026-06-02")
+        
+        self.assertFalse(is_simulation_active())
+
+    @patch("src.services.sandbox_simulator.stock_fetcher.fetch_stock_klines")
+    @patch("src.services.sandbox_simulator.stock_fetcher.fetch_taiex_klines")
+    @patch("src.services.sandbox_simulator.db_get_klines")
+    @patch("src.services.supabase_client.save_stock_klines")
+    def test_fetch_missing_klines_during_simulation(self, mock_save, mock_db_get, mock_fetch_taiex, mock_fetch_stock):
+        """
+        測試在模擬模式下，若資料庫中缺乏當日 K 線，會自動從網路抓取並儲存到資料庫
+        """
+        from src.services.sandbox_simulator import fetch_stock_klines, set_simulation_mode, _current_sim_date
+        
+        # 模擬開啟模擬模式
+        set_simulation_mode(True)
+        
+        # 1. 模擬資料庫缺乏 `_current_sim_date` 的資料
+        mock_db_get.return_value = [
+            {"stock_code": "2330", "date": "2026-04-30", "open": 500, "high": 500, "low": 500, "close": 500, "volume": 100}
+        ]
+        mock_fetch_stock.return_value = [
+            {"stockCode": "2330", "date": _current_sim_date, "open": 510, "high": 515, "low": 508, "close": 512, "volume": 200}
+        ]
+        
+        # 呼叫獲取 K 線
+        fetch_stock_klines("2330")
+        
+        # 驗證是否從網路抓取，且有儲存至資料庫
+        mock_fetch_stock.assert_called_once()
+        mock_save.assert_called_once()
+        
+        # 2. 測試 TAIEX 情況下抓取大盤 API
+        mock_save.reset_mock()
+        mock_db_get.return_value = [
+            {"stock_code": "TAIEX", "date": "2026-04-30", "open": 16000, "high": 16000, "low": 16000, "close": 16000, "volume": 0}
+        ]
+        mock_fetch_taiex.return_value = [
+            {"stockCode": "TAIEX", "date": _current_sim_date, "open": 16100, "high": 16150, "low": 16080, "close": 16120, "volume": 0}
+        ]
+        
+        fetch_stock_klines("TAIEX")
+        mock_fetch_taiex.assert_called_once()
+        mock_save.assert_called_once()
+
 if __name__ == "__main__":
     unittest.main()
+
+

@@ -7,6 +7,7 @@ from src.config import config
 from src.services.gemini_rotator import call_gemini_with_rotation, DailyRateLimitExceeded
 from src.services.trading_memory import get_experience_context
 from src.services.supabase_client import get_orders, get_system_fault_status, get_pending_liquidation_stocks
+from src.services.technical_indicators import compute_all_indicators
 
 # 1. 定義單股交易決策模型
 class StockDecision(BaseModel):
@@ -46,6 +47,9 @@ class PortfolioDecision(BaseModel):
 DEFAULT_TRADING_SKILLS = [
     "均線交叉策略 (Moving Average Cross): 當短線均線 (MA5) 向上突破長線均線 (MA20) 且有量能配合時，視為潛在黃金交叉買點；反之，跌破時視為死亡交叉賣點。",
     "相對強弱指標 (RSI): 評估短期超買與超賣狀態。RSI > 70 視為超買過熱（注意賣出/拉回），RSI < 30 視為超賣超跌（注意買入分批佈局）。",
+    "平滑異同移動平均線 (MACD): 由快線 (DIFF)、慢線 (DEA) 與柱狀圖 (Histogram) 組成。MACD 柱狀圖紅綠柱方向與長短變化是多空動能強弱的重要參考。當快線向上突破慢線且柱狀圖翻紅時，為黃金交叉買點；反之，跌破且翻綠為死亡交叉賣點。",
+    "趨向指標 (DMI): 包含 +DI14、-DI14 與 ADX14。+DI 與 -DI 交叉反映多空力道強弱，ADX 則顯示趨勢強度。當 ADX > 25 代表趨勢顯著，此時若 +DI 向上穿越 -DI，代表多頭強勢；若 -DI 向上穿越 +DI，代表空頭強勢。",
+    "成交量均線 (VOL MA): VOL_MA5 與 VOL_MA20 提供成交量量能放大或萎縮的依據。價漲量增（收盤價高於昨日且成交量高於 VOL_MA5）代表多頭動能強，價漲量縮或放量下跌則屬量價背離，須謹慎防守。",
     "動態風險控制與止損停利 (Dynamic Risk Control & Exit Strategy): 請根據每檔股票當前的波動度 (例如技術面、振幅或支撐壓力位) 靈活且動態地制定合適的止損與止盈出場點，不再拘泥於固定的百分比。你必須在分析理由中詳細說明你的風險控制邏輯，並在到達你設定的退場防線時主動發出 SELL 決策以平倉保護資金。",
     "資金配置策略: 進行多股投資組合分析時，將資金分配給多個標的以分散風險（不要把雞蛋放在同一個籃子裡）。單筆買入之委託總額限制在可用資金之 20% 以內，遵守全局交易防呆上限，禁止單筆重倉孤注一擲。",
     "【停損買回冷卻】：若在「近期帳戶交易歷史」中，某檔股票在當天剛剛執行過賣出 (SELL) 且為虧損平倉（即停損），則今日絕對禁止再次對該檔股票發送買入 (BUY) 決策，避免陷入重複追高殺低。",
@@ -86,6 +90,13 @@ def generate_portfolio_decisions(
             return {"decisions": fallback_decisions}
     except Exception as e:
         print(f" [AI交易代理] 讀取系統故障狀態失敗: {str(e)}")
+
+    # 0.5. 計算所有股票與大盤加權指數的技術指標
+    for code, klines in klines_map.items():
+        try:
+            compute_all_indicators(klines)
+        except Exception as indicator_err:
+            print(f" [AI交易代理] 警告: 計算股票 {code} 的技術指標失敗: {indicator_err}")
 
     # 1. 處理並合併金融技能
     skills = list(DEFAULT_TRADING_SKILLS)
@@ -226,12 +237,17 @@ def generate_portfolio_decisions(
         taiex_recent = taiex_klines[-30:]
         taiex_lines = []
         for k in taiex_recent:
+            ma5_str = f"{k['ma5']:.2f}" if k.get('ma5') is not None else "N/A"
+            ma20_str = f"{k['ma20']:.2f}" if k.get('ma20') is not None else "N/A"
+            rsi_str = f"{k['rsi14']:.2f}" if k.get('rsi14') is not None else "N/A"
+            macd_str = f"(快線:{k['macd']:.2f}, 慢線:{k['macd_signal']:.2f}, 柱狀圖:{k['macd_hist']:.2f})" if k.get('macd') is not None else "N/A"
+            dmi_str = f"(+DI:{k['plus_di']:.1f}, -DI:{k['minus_di']:.1f}, ADX:{k['adx']:.1f})" if k.get('adx') is not None else "N/A"
+            
             taiex_lines.append(
-                f"  日期: {k['date']} | 開盤指數: {k['open']:.2f} | 最高指數: {k['high']:.2f} | "
-                f"最低指數: {k['low']:.2f} | 收盤指數: {k['close']:.2f}"
+                f"  日期: {k['date']} | 收盤指數: {k['close']:.2f} | MA5: {ma5_str} | MA20: {ma20_str} | RSI: {rsi_str} | MACD: {macd_str} | DMI: {dmi_str}"
             )
         taiex_text = "\n".join(taiex_lines)
-        taiex_info = f"【大盤加權指數 (TAIEX) 最近 30 天日 K 線數據 (最下方為最新一日行情，供您計算大盤 MA20)】：\n{taiex_text}"
+        taiex_info = f"【大盤加權指數 (TAIEX) 最近 30 天日 K 線數據 (最下方為最新一日行情，供您判定大盤走勢)】：\n{taiex_text}"
     else:
         taiex_info = "【大盤加權指數 (TAIEX) 最近 30 天日 K 線數據】：目前無可用的歷史大盤加權指數數據。"
 
@@ -244,9 +260,17 @@ def generate_portfolio_decisions(
         recent_klines = klines[-30:]
         klines_lines = []
         for k in recent_klines:
+            ma5_str = f"{k['ma5']:.2f}" if k.get('ma5') is not None else "N/A"
+            ma20_str = f"{k['ma20']:.2f}" if k.get('ma20') is not None else "N/A"
+            rsi_str = f"{k['rsi14']:.2f}" if k.get('rsi14') is not None else "N/A"
+            vol_ma5_str = f"{k['vol_ma5']:,.0f}" if k.get('vol_ma5') is not None else "N/A"
+            vol_ma20_str = f"{k['vol_ma20']:,.0f}" if k.get('vol_ma20') is not None else "N/A"
+            macd_str = f"(快線:{k['macd']:.2f}, 慢線:{k['macd_signal']:.2f}, 柱狀圖:{k['macd_hist']:.2f})" if k.get('macd') is not None else "N/A"
+            dmi_str = f"(+DI:{k['plus_di']:.1f}, -DI:{k['minus_di']:.1f}, ADX:{k['adx']:.1f})" if k.get('adx') is not None else "N/A"
+            
             klines_lines.append(
-                f"  日期: {k['date']} | 開盤: {k['open']} | 最高: {k['high']} | "
-                f"最低: {k['low']} | 收盤: {k['close']} | 成交量: {k['volume']:,.0f}"
+                f"  日期: {k['date']} | 開盤: {k['open']} | 最高: {k['high']} | 最低: {k['low']} | 收盤: {k['close']} | MA5: {ma5_str} | MA20: {ma20_str} | RSI: {rsi_str} | "
+                f"成交量: {k['volume']:,.0f} (VOL_MA5: {vol_ma5_str}, VOL_MA20: {vol_ma20_str}) | MACD: {macd_str} | DMI: {dmi_str}"
             )
         klines_text = "\n".join(klines_lines)
         klines_sections.append(

@@ -303,6 +303,13 @@ def run_sandbox_simulation(stock_codes: List[str], start_date: str, end_date: st
     執行沙盒演練回測模擬。
     利用 Supabase 中的歷史 K 線重播行情，測試 AI 決策表現並模擬交易帳務與每日報告發送。
     """
+    from src.services import sandbox_simulator
+    try:
+        _run_sandbox_simulation_internal(stock_codes, start_date, end_date, should_stop)
+    finally:
+        sandbox_simulator.set_simulation_mode(False)
+
+def _run_sandbox_simulation_internal(stock_codes: List[str], start_date: str, end_date: str, should_stop=None) -> None:
     print(f" [排程引擎] 啟動沙盒演練歷史數據模擬。區間: {start_date} 至 {end_date} | 標的: {stock_codes}")
     
     # 延遲載入

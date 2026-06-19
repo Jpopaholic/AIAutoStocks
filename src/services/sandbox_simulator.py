@@ -18,6 +18,8 @@ _simulation_time_scale: float = 1.0
 _use_time_scaling: bool = True
 _trading_days: List[str] = []
 _current_day_idx: int = 0
+_attempted_fetches = set()  # 保存已嘗試從網路獲取 (stock_code, YYYY-MM) 的紀錄，避免重複請求
+
 
 
 def _as_taiwan_datetime(date_str: str) -> datetime:
@@ -50,6 +52,13 @@ def is_simulation_active() -> bool:
     """
     檢查目前是否處於沙盒模擬演練模式
     """
+    # 如果系統配置已切換為實盤模式，則不論記憶體狀態為何，皆強制關閉模擬模式
+    if not config.limits.is_paper_trading:
+        global _simulation_active
+        if _simulation_active:
+            _simulation_active = False
+            print(" [模擬器] 偵測到交易模式已切換為實盤，自動將模擬模式設為 False。")
+        return False
     return _simulation_active
 
 def get_current_day_index() -> int:
@@ -147,6 +156,34 @@ def fetch_stock_klines(stock_code: str, date_str: Optional[str] = None) -> List[
         # 取得充足數量的 K 線，例如前 200 筆
         klines = db_get_klines(stock_code, limit=200)
         
+        # 檢查資料庫中是否有目前模擬日期的 K 線數據。如果沒有，主動嘗試從網路補建
+        has_sim_date = any(k["date"] == _current_sim_date for k in klines)
+        if not has_sim_date:
+            month_str = _current_sim_date[:7]  # 例如 "2026-05"
+            fetch_key = (stock_code, month_str)
+            global _attempted_fetches
+            if fetch_key not in _attempted_fetches:
+                _attempted_fetches.add(fetch_key)
+                print(f" [模擬器] 偵測到資料庫中缺乏 {stock_code} 在模擬日期 {_current_sim_date} 的 K 線，嘗試從證交所網路抓取...")
+                try:
+                    # 轉化日期格式 YYYY-MM-DD -> YYYYMMDD
+                    api_date = _current_sim_date.replace("-", "")
+                    if stock_code == "TAIEX":
+                        fetched = stock_fetcher.fetch_taiex_klines(api_date)
+                    else:
+                        fetched = stock_fetcher.fetch_stock_klines(stock_code, api_date)
+                        
+                    if fetched:
+                        from src.services.supabase_client import save_stock_klines
+                        save_stock_klines(fetched)
+                        print(f" [模擬器] 成功從網路補建 {stock_code} 的 K 線數據（共 {len(fetched)} 筆）並寫入資料庫")
+                        # 重新載入
+                        klines = db_get_klines(stock_code, limit=200)
+                    else:
+                        print(f" [模擬器] 證交所 API 未能返回 {stock_code} 在 {api_date} 所在的月 K 線數據。")
+                except Exception as fetch_err:
+                    print(f" [模擬器] 警告: 嘗試從網路補建 {stock_code} 的 K 線時出錯（將繼續使用已有資料）: {fetch_err}")
+
         # 轉換資料庫回傳的蛇形命名格式為駝峰式以符合 API 輸出一致性
         formatted_klines = []
         for k in klines:
