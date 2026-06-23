@@ -99,7 +99,17 @@ def generate_portfolio_decisions(
             print(f" [AI交易代理] 警告: 計算股票 {code} 的技術指標失敗: {indicator_err}")
 
     # 1. 處理並合併金融技能
+    single_pct = config.limits.single_stock_pct
+    if single_pct is not None and single_pct > 0:
+        pct_val = single_pct * 100.0 if single_pct <= 1.0 else single_pct
+    else:
+        pct_val = 20.0
+
     skills = list(DEFAULT_TRADING_SKILLS)
+    for idx, s in enumerate(skills):
+        if "可用資金之 20% 以內" in s:
+            skills[idx] = s.replace("可用資金之 20% 以內", f"可用資金之 {pct_val:.0f}% 以內")
+
     if extra_skills:
         skills.extend(extra_skills)
     
