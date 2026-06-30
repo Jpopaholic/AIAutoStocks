@@ -77,7 +77,10 @@ def run_live_trading_job(stock_codes: List[str]) -> None:
         if tsmc_klines:
             latest_market_date = tsmc_klines[-1]["date"]
             today_str = tw_now.strftime("%Y-%m-%d")
-            if latest_market_date != today_str:
+            from datetime import time as dt_time
+            # 證交所 STOCK_DAY API 通常在收盤後（13:30）甚至 13:40~14:00 之後才會更新今日 K 線。
+            # 因此，只有在 13:45 之後，我們才藉由比對今日與最新交易日來判斷是否休市；13:45 之前視為正常交易時段/或尚未更新，不以此自檢進行阻斷。
+            if tw_now.time() >= dt_time(13, 45) and latest_market_date != today_str:
                 msg = f"今日 {today_str} 無最新交易數據（最新交易日為 {latest_market_date}），判斷為國定假日或臨時休市（如颱風假），自動跳過今日任務。"
                 print(f" [排程引擎] {msg}")
                 supabase_client.log_system_event("INFO", msg)
