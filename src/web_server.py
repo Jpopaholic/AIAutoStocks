@@ -314,13 +314,12 @@ def get_status():
         enhanced_holdings = []
         try:
             holdings = get_holdings()
-            from src.services import sandbox_simulator
+            from src.services.stock_fetcher import get_display_price
             for h in holdings:
                 stock_code = h["stock_code"]
                 qty = float(h["quantity"])
                 avg_price = float(h["average_price"])
-                quote = sandbox_simulator.fetch_realtime_quote(stock_code)
-                current_price = float(quote.get("price") or avg_price)
+                current_price = get_display_price(stock_code, fallback_price=avg_price)
                 market_value = qty * current_price
                 cost = qty * avg_price
                 pnl = market_value - cost

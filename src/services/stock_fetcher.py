@@ -388,3 +388,96 @@ def fetch_taiex_klines(date_str: str = None) -> List[Dict[str, Any]]:
         print(f" [數據擷取器] 擷取大盤加權指數 K 線時發生異常: {str(e)}")
         return []
 
+
+_DISPLAY_PRICE_CACHE = {}  # maps stock_code -> (price, timestamp)
+DISPLAY_PRICE_CACHE_TTL = 60.0  # 60 seconds cache
+
+def get_display_price(stock_code: str, fallback_price: float = 0.0) -> float:
+    """
+    依據使用者需求取得網頁面板顯示/市值計算所使用的價格：
+    - 若正在當沖中（台股交易日 09:00~13:30 之前，或當日 13:30 之前），顯示最近一天（昨收/前一交易日）的收盤價。
+    - 若下盤後（13:30 之後）或非交易日，顯示今天（交易完）的收盤價。
+    """
+    from src.services import sandbox_simulator
+    # 1. 判斷是否處於沙盒模擬模式，如果是，直接回傳沙盒報價
+    if sandbox_simulator.is_simulation_active():
+        quote = sandbox_simulator.fetch_realtime_quote(stock_code)
+        return float(quote.get("price") or fallback_price)
+
+    global _DISPLAY_PRICE_CACHE
+    now = time.time()
+    if stock_code in _DISPLAY_PRICE_CACHE:
+        cached_val, timestamp = _DISPLAY_PRICE_CACHE[stock_code]
+        if now - timestamp < DISPLAY_PRICE_CACHE_TTL:
+            return cached_val
+
+    # 2. 取得台灣目前本地時間
+    from src.time_manager import get_local_taiwan_datetime, get_local_taiwan_date_str
+    from datetime import time as dt_time
+    local_dt = get_local_taiwan_datetime()
+    today_str = get_local_taiwan_date_str()
+    
+    # 判斷是否為週一至週五且在 13:30 之前
+    is_trading_hours = (local_dt.weekday() < 5 and local_dt.time() < dt_time(13, 30))
+
+    from src.services import supabase_client
+    try:
+        # 從資料庫載入最新數筆 K 線
+        db_klines = supabase_client.get_stock_klines(stock_code, limit=5)
+    except Exception as e:
+        print(f" [數據擷取器] 無法自資料庫讀取 {stock_code} 的 K 線: {e}")
+        db_klines = []
+
+    price = 0.0
+    if is_trading_hours:
+        # 當沖交易進行中（或開盤前）：顯示最近一天（昨收/前一交易日）的收盤價
+        # 過濾日期小於今天的紀錄
+        past_klines = [k for k in db_klines if k["date"] < today_str]
+        if past_klines:
+            price = float(past_klines[0]["close"])
+        else:
+            # 若本月資料庫中沒有今天之前的 K 線（例如月初），嘗試從 API 補建/查詢
+            try:
+                klines = fetch_stock_klines(stock_code)
+                past_klines = [k for k in klines if k["date"] < today_str]
+                if not past_klines:
+                    # 依然沒有（月初 1 號），嘗試取得 7 天前（前月）的 K 線
+                    from datetime import timedelta
+                    fallback_dt = local_dt - timedelta(days=7)
+                    fallback_date_str = fallback_dt.strftime("%Y%m%d")
+                    prev_klines = fetch_stock_klines(stock_code, fallback_date_str)
+                    past_klines = [k for k in prev_klines if k["date"] < today_str]
+                
+                if past_klines:
+                    price = float(past_klines[-1]["close"])
+            except Exception as fetch_err:
+                print(f" [數據擷取器] 當沖中嘗試向 API 獲取 {stock_code} 歷史收盤價失敗: {fetch_err}")
+
+            if price <= 0.0:
+                # 若都失敗，回退使用實時 API 價格
+                quote = fetch_realtime_quote(stock_code)
+                price = float(quote.get("price") or fallback_price)
+    else:
+        # 下盤後或假日：顯示今天交易完（或最新已收盤）的價格
+        # 我們優先嘗試取得實時報價（這能保證拿到今天交易完的現價，且不依賴證交所歷史 K 線 API 的更新延遲）
+        try:
+            quote = fetch_realtime_quote(stock_code)
+            if quote and quote.get("price"):
+                price = float(quote["price"])
+        except Exception as quote_err:
+            print(f" [數據擷取器] 收盤後嘗試獲取 {stock_code} 實時報價失敗: {quote_err}")
+
+        # 若實時報價失敗，回退使用資料庫中最新的 K 線收盤價
+        if price <= 0.0 and db_klines:
+            price = float(db_klines[0]["close"])
+            
+        if price <= 0.0:
+            price = float(fallback_price)
+
+    # 寫入快取
+    if price > 0.0:
+        _DISPLAY_PRICE_CACHE[stock_code] = (price, now)
+
+    return price
+
+

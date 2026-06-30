@@ -134,14 +134,14 @@ def send_daily_report(
     holdings_value = 0.0
     total_cost = 0.0
     
+    from src.services.stock_fetcher import get_display_price
     for h in holdings:
         stock_code = h["stock_code"]
         qty = float(h["quantity"])
         avg_price = float(h["average_price"])
         
-        # 依據目前是沙盒還是真實模式，動態讀取即時報價
-        quote = sandbox_simulator.fetch_realtime_quote(stock_code)
-        current_price = float(quote.get("price") or avg_price)
+        # 依據全新顯示價格邏輯獲取現價
+        current_price = get_display_price(stock_code, fallback_price=avg_price)
         
         market_value = qty * current_price
         cost = qty * avg_price
@@ -230,13 +230,13 @@ def send_daily_report(
 
         # 建立目前持股現況文字
         holdings_text = ""
+        from src.services.stock_fetcher import get_display_price
         for h in holdings:
             stock_code = h["stock_code"]
             qty = float(h["quantity"])
             avg_price = float(h["average_price"])
             
-            quote = sandbox_simulator.fetch_realtime_quote(stock_code)
-            current_price = float(quote.get("price") or avg_price)
+            current_price = get_display_price(stock_code, fallback_price=avg_price)
             
             market_value = qty * current_price
             cost = qty * avg_price

@@ -27,15 +27,12 @@ def calculate_nav() -> Tuple[float, float, float]:
                 current_price = float(quote.get("price") or h["average_price"])
                 holdings_value += qty * current_price
         else:
-            # 即時/手動實時交易：使用批次查詢加速
-            from src.services.stock_fetcher import fetch_realtime_quotes_batch
-            stock_codes = [h["stock_code"] for h in holdings]
-            quotes_map = fetch_realtime_quotes_batch(stock_codes)
+            # 即時/手動實時交易：使用全新顯示價格邏輯
+            from src.services.stock_fetcher import get_display_price
             for h in holdings:
                 stock_code = h["stock_code"]
                 qty = float(h["quantity"])
-                quote = quotes_map.get(stock_code, {})
-                current_price = float(quote.get("price") or h["average_price"])
+                current_price = get_display_price(stock_code, fallback_price=h["average_price"])
                 holdings_value += qty * current_price
 
     # 2. 計算剩餘現金：
