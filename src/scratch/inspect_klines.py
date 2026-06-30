@@ -11,9 +11,14 @@ def main():
     for k in taiex:
         print(f"Date: {k['date']}, Close: {k['close']}, MA20: {k.get('ma20')}")
 
-    print("\n=== 2330 Latest Klines ===")
-    t2330 = get_stock_klines("2330", limit=5)
-    for k in t2330:
+    print("\n=== 2618 Latest Klines ===")
+    t2618 = get_stock_klines("2618", limit=5)
+    for k in t2618:
+        print(f"Date: {k['date']}, Close: {k['close']}, MA20: {k.get('ma20')}")
+
+    print("\n=== 0050 Latest Klines ===")
+    t0050 = get_stock_klines("0050", limit=5)
+    for k in t0050:
         print(f"Date: {k['date']}, Close: {k['close']}, MA20: {k.get('ma20')}")
 
 if __name__ == "__main__":
