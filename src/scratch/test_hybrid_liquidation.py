@@ -53,28 +53,50 @@ class TestHybridLiquidation(unittest.TestCase):
         mock_get_fault.return_value = {"status": "OK", "detail": ""}
         mock_get_pending.return_value = ["2330"]  # 2330 處於智慧等候平倉排隊中
         
-        # 模擬 Gemini 回傳了 2330 的 BUY 決策，2454 的 HOLD 決策
-        mock_gemini_json = """{
-            "decisions": [
-                {
-                    "stock_code": "2330",
-                    "action": "BUY",
-                    "price": 610.0,
-                    "quantity": 100.0,
-                    "confidence": 0.8,
-                    "reason": "AI 決定買入"
-                },
-                {
-                    "stock_code": "2454",
-                    "action": "HOLD",
-                    "price": 1000.0,
-                    "quantity": 0.0,
-                    "confidence": 0.5,
-                    "reason": "AI 觀望"
-                }
-            ]
-        }"""
-        mock_call_gemini.return_value = mock_gemini_json
+        # 模擬兩次 Gemini 呼叫：第一次回傳分析師評估 (無 price, 無 total_score, 有 confidence)，第二次回傳經理人決策
+        mock_call_gemini.side_effect = [
+            # 呼叫 1: 分析師評估
+            """{
+                "scores": [
+                    {
+                        "stock_code": "2330",
+                        "trend_score": 10,
+                        "momentum_score": 10,
+                        "volume_score": 10,
+                        "safety_score": 10,
+                        "regime_score": 10,
+                        "confidence": 0.9,
+                        "reason": "技術指標尚可"
+                    },
+                    {
+                        "stock_code": "2454",
+                        "trend_score": 12,
+                        "momentum_score": 12,
+                        "volume_score": 12,
+                        "safety_score": 12,
+                        "regime_score": 12,
+                        "confidence": 0.85,
+                        "reason": "均線呈現多頭形態"
+                    }
+                ]
+            }""",
+            # 呼叫 2: 投資組合經理決策
+            """{
+                "ranking_analysis": "2330較強但智慧平倉中，2454觀望",
+                "decisions": [
+                    {
+                        "stock_code": "2330",
+                        "action": "BUY",
+                        "pm_reason": "PM建議買入2330（應被智慧平倉安全過濾強制校正）"
+                    },
+                    {
+                        "stock_code": "2454",
+                        "action": "HOLD",
+                        "pm_reason": "PM建議觀望2454"
+                    }
+                ]
+            }"""
+        ]
         
         stock_codes = ["2330", "2454"]
         klines_map = {
@@ -93,7 +115,7 @@ class TestHybridLiquidation(unittest.TestCase):
         decision_2330 = next(d for d in decisions if d["stock_code"] == "2330")
         decision_2454 = next(d for d in decisions if d["stock_code"] == "2454")
         
-        # 驗證 2330 被強制校正為 HOLD
+        # 驗證 2330 被強制校正為 HOLD (因為無持股庫存且在等候平倉名單)
         self.assertEqual(decision_2330["action"], "HOLD")
         self.assertEqual(decision_2330["quantity"], 0.0)
         

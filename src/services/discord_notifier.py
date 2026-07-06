@@ -256,6 +256,36 @@ def send_daily_report(
         else:
             holdings_text = f"```diff\n{holdings_text}```"
 
+        # 定義長度防禦輔助函數，確保發送至 Discord Embed 欄位的長度皆不超出 1024 限制 (安全防線設為 1000)
+        def safe_val(val: str, max_len: int = 1000) -> str:
+            if not val:
+                return "無"
+            val_str = str(val).strip()
+            if len(val_str) > max_len:
+                return val_str[:max_len - 3] + "..."
+            return val_str
+
+        def safe_code_block_val(val: str, syntax: str, max_len: int = 1000) -> str:
+            if not val:
+                return "無"
+            val_str = str(val).strip()
+            prefix_cb = f"```{syntax}\n"
+            suffix_cb = "```"
+            
+            # 若已經是代碼框格式，先拆解出內容
+            if val_str.startswith("```") and val_str.endswith("```"):
+                content = val_str[len(prefix_cb):-len(suffix_cb)].strip()
+            else:
+                content = val_str
+                
+            overhead = len(prefix_cb) + len(suffix_cb)
+            available_len = max_len - overhead
+            
+            if len(content) > available_len:
+                content = content[:available_len - 3] + "..."
+                
+            return f"{prefix_cb}{content}{suffix_cb}"
+
         color = 15679812 if is_liquidation else (3899902 if is_sandbox_mode else 2278750)
         ai_outlook_chunks = _split_text_by_length(ai_outlook, max_len=950)
 
@@ -288,7 +318,7 @@ def send_daily_report(
             
             fields.append({
                 "name": "🌦️ Market Regime 大盤氣候判定",
-                "value": (
+                "value": safe_val(
                     f"市場狀態: **`{regime_display}`**\n"
                     f"交易姿態: **`{posture}`**\n"
                     f"風險限額乘數: **`{risk_mult:.1f}`**\n"
@@ -300,17 +330,17 @@ def send_daily_report(
         fields.extend([
             {
                 "name": "🟢 今日已完成交易 (實際成交回報)",
-                "value": completed_trades_text,
+                "value": safe_code_block_val(completed_trades_text, "diff"),
                 "inline": False
             },
             {
                 "name": "⏳ 今日盤後 AI 新增委託 (預約明日交易)",
-                "value": pending_trades_text,
+                "value": safe_code_block_val(pending_trades_text, "ini"),
                 "inline": False
             },
             {
                 "name": "📈 目前持股現況",
-                "value": holdings_text,
+                "value": safe_code_block_val(holdings_text, "diff"),
                 "inline": False
             }
         ])

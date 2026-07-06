@@ -57,10 +57,20 @@ def calculate_nav() -> Tuple[float, float, float]:
     net_asset_value = cash_balance + holdings_value
     return cash_balance, holdings_value, net_asset_value
 
+_cached_limits = None
+
+def clear_limits_cache() -> None:
+    """
+    清除動態限額快取。於每日排程工作或沙盒模擬交易日開始時呼叫。
+    """
+    global _cached_limits
+    _cached_limits = None
+    print(" [NAV計算器] 已清除動態交易限額快取。")
+
 def get_dynamic_limits() -> Tuple[float, float]:
     """
     依據比例與當前 NAV 動態計算單筆交易上限及每日累計上限。
-    如果未設定比例或比例小於等於 0，則退回到 config 的絕對數值上限。
+    使用記憶體內快取，確保同一個交易日內決策與審查限額完全一致，防止資料庫延遲造成的安全審查攔截。
     
     比例規則：
     - 若 pct > 1.0，視為百分比 (例如 5.0 代表 5%，轉換為 0.05)
@@ -68,6 +78,10 @@ def get_dynamic_limits() -> Tuple[float, float]:
     
     回傳: (single_limit, daily_limit)
     """
+    global _cached_limits
+    if _cached_limits is not None:
+        return _cached_limits
+
     single_pct = config.limits.single_stock_pct
     daily_pct = config.limits.daily_total_pct
 
@@ -90,7 +104,9 @@ def get_dynamic_limits() -> Tuple[float, float]:
         else:
             daily_limit = config.limits.daily_total
 
-        return single_limit, daily_limit
+        _cached_limits = (single_limit, daily_limit)
+        return _cached_limits
     else:
         # 退回絕對數值限制
-        return config.limits.single_stock, config.limits.daily_total
+        _cached_limits = (config.limits.single_stock, config.limits.daily_total)
+        return _cached_limits

@@ -47,7 +47,11 @@ def run_live_trading_job(stock_codes: List[str]) -> None:
 
     # 延遲載入以防循環依賴
     from src.services import stock_fetcher, sandbox_simulator, broker_connector, discord_notifier, health_check
+    from src.services.nav_calculator import clear_limits_cache
     from src.agents import trading_agent
+
+    # 優先清除今日交易限額快取
+    clear_limits_cache()
 
     # 0. 執行系統健康狀態檢查 (Pre-flight System Diagnostics)
     healthy, details = health_check.run_preflight_checks()
@@ -485,6 +489,10 @@ def _run_sandbox_simulation_internal(stock_codes: List[str], start_date: str, en
 
         last_sim_date = sim_date
         print(f"\n=================== 模擬交易日: {sim_date} ===================")
+        
+        # 優先清除今日模擬交易限額快取
+        from src.services.nav_calculator import clear_limits_cache
+        clear_limits_cache()
         
         # 優先執行模擬對帳同步 (將前一天的 PENDING 模擬單在今天成交)
         try:

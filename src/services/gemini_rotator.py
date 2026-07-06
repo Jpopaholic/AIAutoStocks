@@ -281,7 +281,8 @@ def call_gemini_with_rotation(
             
             response = model.generate_content(
                 prompt,
-                generation_config=generation_config
+                generation_config=generation_config,
+                request_options={"timeout": 60}
             )
             
             # 解析實際消耗的 Tokens 並記錄
