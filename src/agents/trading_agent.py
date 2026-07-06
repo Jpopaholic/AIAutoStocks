@@ -9,51 +9,60 @@ from src.services.trading_memory import get_experience_context
 from src.services.supabase_client import get_orders, get_system_fault_status, get_pending_liquidation_stocks
 from src.services.technical_indicators import compute_all_indicators
 
-# 1. 定義單股交易決策模型
+# # 1. 定義單股交易量化評分模型
 class StockDecision(BaseModel):
     stock_code: str = Field(
         ...,
         description="必須填寫 4 碼股票代號字串，例如 '2330'，不可填寫中文名稱或留空。此欄位必須與輸入的股票列表代號完全一致。"
     )
-    action: str = Field(
-        ..., 
-        description="交易決策，必須限為 'BUY' (買入)、'SELL' (賣出) 或 'HOLD' (觀望/持股)"
+    trend_score: int = Field(
+        ...,
+        description="趨勢得分 (0 到 20 分)。評估均線排列（MA5、MA20、MA60）與價格波段高低點。多頭排列、價格站穩在均線之上得高分；空頭排列或價格跌破均線得低分。"
+    )
+    momentum_score: int = Field(
+        ...,
+        description="動能得分 (0 到 20 分)。評估 RSI、MACD 柱狀圖多空動能強弱與黃金/死亡交叉狀態。動能轉強、柱狀圖翻紅、黃金交叉得高分；動能消退、柱狀圖翻綠、死亡交叉得低分。"
+    )
+    volume_score: int = Field(
+        ...,
+        description="成交量得分 (0 到 20 分)。評估成交量是否價漲量增、量價配合度、VOL_MA5 與 VOL_MA20 關係。放量突破、量價配合得高分；無量盤整或量價背離得低分。"
+    )
+    risk_score: int = Field(
+        ...,
+        description="風險與防守得分 (0 到 20 分)。評估乖離率、過度超買/超賣狀態、下方支撐力道與波動風險。回檔至強支撐、乖離率小得高分；乖離率過大、高檔超買或支撐跌破得低分。"
+    )
+    regime_score: int = Field(
+        ...,
+        description="與大盤一致性得分 (0 到 20 分)。結合當前大盤加權指數狀態與交易姿態。若大盤多頭且個股強於大盤得高分，大盤空頭/防禦或大盤氣候不佳時，根據交易姿態適度調降此得分。"
+    )
+    total_score: int = Field(
+        ...,
+        description="總得分 (0 到 100 分)。必須嚴格等於 trend_score + momentum_score + volume_score + risk_score + regime_score 的加總。"
     )
     price: float = Field(
         ..., 
-        description="建議交易委託價格（新台幣，必須大於 0）。如果是買入(BUY)或賣出(SELL)，委託價格必須以最新收盤價為基準，並落在合理波動範圍內（收盤價的 ±2% 內，且符合台股升降單位/tick size 規則）。絕對禁止為了規避單筆限額或資金限制而故意填寫偏離市價（如低於收盤價 10% 以上）的無效價格。觀望(HOLD)時填最新收盤價。"
-    )
-    quantity: float = Field(
-        ..., 
-        description="建議交易股數（支援零股交易，可為任意正整數，例如 10 代表 10 股；整股為 1000 股）。觀望或不操作時填 0。"
-    )
-    confidence: float = Field(
-        ..., 
-        description="決策置信度，介於 0.0 到 1.0 之間，數值越高代表買點/賣點越明確"
+        description="最新收盤基準價（新台幣，必須大於 0）。用作委託申報的基準價格。"
     )
     reason: str = Field(
         ..., 
-        description="該檔股票的詳細分析理由與決策依據（使用繁體中文）。請結合技術指標與持股成本進行論述。"
+        description="該檔股票的詳細分析理由與評分依據（使用繁體中文）。請條列說明五個評分維度的給分理由與量化數據指標（如 MA、RSI、MACD、成交量等數值）。"
     )
 
-# 2. 定義多股組合決策模型 (強制 Structured Outputs)
+# 2. 定義多股組合評分模型 (強制 Structured Outputs)
 class PortfolioDecision(BaseModel):
     decisions: List[StockDecision] = Field(
         ...,
-        description="多個股票的決策列表。必須包含所有輸入分析的股票，每檔股票各一筆決策。"
+        description="多個股票的評分與分析列表。必須包含所有輸入分析的股票，每檔股票各一筆。"
     )
 
-# 系統預設的金融交易技能清單
+# 系統預設的金融交易技能清單 (引導評分)
 DEFAULT_TRADING_SKILLS = [
-    "均線交叉策略 (Moving Average Cross): 當短線均線 (MA5) 向上突破長線均線 (MA20) 且有量能配合時，視為潛在黃金交叉買點；反之，跌破時視為死亡交叉賣點。",
-    "相對強弱指標 (RSI): 評估短期超買與超賣狀態。RSI > 70 視為超買過熱（注意賣出/拉回），RSI < 30 視為超賣超跌（注意買入分批佈局）。",
-    "平滑異同移動平均線 (MACD): 由快線 (DIFF)、慢線 (DEA) 與柱狀圖 (Histogram) 組成。MACD 柱狀圖紅綠柱方向與長短變化是多空動能強弱的重要參考。當快線向上突破慢線且柱狀圖翻紅時，為黃金交叉買點；反之，跌破且翻綠為死亡交叉賣點。",
-    "趨向指標 (DMI): 包含 +DI14、-DI14 與 ADX14。+DI 與 -DI 交叉反映多空力道強弱，ADX 則顯示趨勢強度。當 ADX > 25 代表趨勢顯著，此時若 +DI 向上穿越 -DI，代表多頭強勢；若 -DI 向上穿越 +DI，代表空頭強勢。",
-    "成交量均線 (VOL MA): VOL_MA5 與 VOL_MA20 提供成交量量能放大或萎縮的依據。價漲量增（收盤價高於昨日且成交量高於 VOL_MA5）代表多頭動能強，價漲量縮或放量下跌則屬量價背離，須謹慎防守。",
-    "動態風險控制與止損停利 (Dynamic Risk Control & Exit Strategy): 請根據每檔股票當前的波動度 (例如技術面、振幅或支撐壓力位) 靈活且動態地制定合適的止損與止盈出場點，不再拘泥於固定的百分比。你必須在分析理由中詳細說明你的風險控制邏輯，並在到達你設定的退場防線時主動發出 SELL 決策以平倉保護資金。",
-    "資金配置策略: 進行多股投資組合分析時，將資金分配給多個標的以分散風險（不要把雞蛋放在同一個籃子裡）。單筆買入之委託總額限制在可用資金之 20% 以內，遵守全局交易防呆上限，禁止單筆重倉孤注一擲。",
-    "【停損買回冷卻】：若在「近期帳戶交易歷史」中，某檔股票在當天剛剛執行過賣出 (SELL) 且為虧損平倉（即停損），則今日絕對禁止再次對該檔股票發送買入 (BUY) 決策，避免陷入重複追高殺低。",
-    "【大盤趨勢防禦】：大盤加權指數 (TAIEX) 是整體市場走向的風向球。若大盤指數收盤跌破其 MA20 (即大盤收盤價最近 20 天的簡單移動平均)，代表大盤已步入弱勢或空頭排列，此時應嚴格採取小額防禦策略，大幅收緊買入標準並降低單次交易規模（僅能小規模買賣，以微量零股做測試性防禦配置），並應主動減持手上已持有的高風險股票以規避市場崩跌風險；若大盤收盤站穩在 MA20 之上，則可正常執行交易與買入評估。"
+    "均線交叉策略 (Moving Average Cross): 當短線均線 (MA5) 向上突破長線均線 (MA20) 且有量能配合時，視為黃金交叉（應給予高趨勢/動能得分）；跌破時為死亡交叉（應降低趨勢/動能得分，提高風險得分並調降總分）。",
+    "相對強弱指標 (RSI): 評估短期超買與超賣狀態。RSI > 70 視為超買過熱（應調低風險/防守得分），RSI < 30 視為超賣超跌（若出現止跌訊號，可調高風險得分代表防守空間大，且分批佈局機會好）。",
+    "平滑異同移動平均線 (MACD): MACD 柱狀圖紅綠柱代表多空動能。柱狀圖翻紅、快線向上突破慢線時動能轉強（應給予高動能得分）；柱狀圖翻綠、快線跌破慢線時動能走弱（應調低動能得分）。",
+    "趨向指標 (DMI): ADX > 25 代表趨勢顯著。+DI 向上穿越 -DI 代表多頭強勢（趨勢/動能得分高）；-DI 向上穿越 +DI 代表空頭強勢（趨勢得分低，風險得分低）。",
+    "成交量均線 (VOL MA): VOL_MA5 與 VOL_MA20 判斷量能配合。價漲量增（收盤價高於昨日且成交量大於 VOL_MA5）代表多頭動能強（成交量得分高），價漲量縮或放量下跌為量價背離（成交量得分低）。",
+    "動態風險控制與止損停利 (Dynamic Risk Control): 評估當前股價相較於支撐線、壓力線或波段低點的距離。若股價接近支撐區且乖離率小，則防守空間好（風險得分高）；若已突破上檔壓力且無支撐，或面臨高檔乖離過大，則防守空間極差（風險得分低）。"
 ]
 
 def generate_portfolio_decisions(
@@ -154,29 +163,30 @@ def generate_portfolio_decisions(
             f"- 交易姿態 (Posture): {regime_assessment.get('posture', 'UNKNOWN')}\n"
             f"- 風險限額乘數 (Multiplier): {regime_assessment.get('risk_multiplier', 1.0)}\n"
             f"- 大腦分析理由 (Reason): {regime_assessment.get('reason', '')}\n"
-            f"請務必將上述大盤氣候（特別是交易姿態與分析理由）以及風險限額乘數作為最高量化風控與「部位/交易規模控制」指令！\n"
-            f"當交易姿態為 DEFENSIVE 時，代表大盤走勢疲弱或劇烈震盪，個股操作應極度防禦保守。此時你仍然可以對具有極強買入信號或特定利多的個股做出買入 (BUY) 決定，但買入金額與股數必須受到經風險限額乘數調整後縮小之限額的嚴格約束，以零股小部位方式進行測試與分散配置，而非直接退縮至完全觀望。\n"
         )
 
     system_instruction = f"""
 你是一個資深的台股量化投資與多股投資組合（Portfolio）配置分析專家。你熟悉台股市場特性、技術線圖分析與風控原則。
-你的任務是分析給定的多個個股的 K 線數據、目前帳戶的所有持股現況與過往的平倉成敗經驗，生成一份標準的多股交易決策 JSON。
+你的任務是分析給定的多個個股的 K 線數據、目前帳戶的所有持股現況與過往的平倉成敗經驗，為每檔股票進行五個維度的量化評分 (0 ~ 20 分)，並計算出總分 (0 ~ 100 分)。
+你的分析必須非常客觀、全面且具有深度，切忌「僅憑單一負面訊號 (例如 MACD 負值或短期震盪) 就直接全盤否定個股價值」的分析師思維。你必須進行多維度的加權平衡評估。
+
 {regime_text}
-你的金融分析技能與風控準則包含：
+
+量化評分維度指引：
+1. 趨勢得分 (trend_score, 0 ~ 20 分)：評估均線排列（MA5、MA20、MA60）與價格波段高低點。多頭排列、價格站穩在均線之上得高分；空頭排列或價格跌破均線得低分。
+2. 動能得分 (momentum_score, 0 ~ 20 分)：評估 RSI、MACD 柱狀圖多空動能強弱與黃金/死亡交叉狀態。動能轉強、柱狀圖翻紅、黃金交叉得高分；動能消退、柱狀圖翻綠、死亡交叉得低分。
+3. 成交量得分 (volume_score, 0 ~ 20 分)：評估成交量是否價漲量增、量價配合度、VOL_MA5 與 VOL_MA20 關係。放量突破、量價配合得高分；無量盤整或量價背離得低分。
+4. 風險與防守得分 (risk_score, 0 ~ 20 分)：評估乖離率、過度超買/超賣狀態、下方支撐力道與波動風險。回檔至強支撐、乖離率小得高分；乖離率過大、高檔超買或支撐跌破得低分。
+5. 大盤一致性得分 (regime_score, 0 ~ 20 分)：結合當前大盤加權指數狀態與交易姿態。若大盤多頭且個股強於大盤得高分，大盤空頭/防禦或大盤氣候不佳時，根據交易姿態適度調降此得分。
+
+你的金融量化分析技能包含：
 {skills_text}
 
-請嚴格遵守以下交易限制與指示：
+請嚴格遵守以下指示：
 1. 你的輸出必須完全符合所規定的 JSON Schema，不可包含額外文字。
-2. 本系統支援「零股交易」，你可以指定任意股數（例如 10 股、100 股或整股 1000 股）。若無操作 (HOLD)，股數必須填 0。
-3. 若你的決策是賣出 (SELL)，委託股數絕對不可以大於目前持有的股數。
-4. 你的分析與理由請一律使用「繁體中文」。
-5. 【金額安全限制與資金配置限制】：
-   - 本帳戶單筆交易最大金額上限為：{single_limit:,.0f} 元新台幣。
-   - 本帳戶每日累計交易最大金額上限為：{daily_limit:,.0f} 元新台幣。
-   - 若你決定對某些股票進行買入 (BUY)，該筆買入委託金額（建議價格 * 建議股數）絕對不可超過單筆上限（{single_limit:,.0f} 元）。
-   - 本次交易的所有買入委託總金額，絕對不可超出可用現金餘額。
-   - 請根據目前多檔股票的走勢，綜合評估相對強弱，合理分配買入額度，以實現資產分散配置（不要把雞蛋放在同一個籃子裡），同時總額不能超出每日限制。
-   - 價格合理性重要規則：委託價格必須符合市場行情（收盤價的 ±2% 內）。若因為單筆上限限制（如 {single_limit:,.0f} 元），導致剩餘額度「不足以合理市價買入該個股之最少單位（1 股）」，你必須對該個股給出 HOLD（觀望）決策，股數填 0，並在理由中說明額度不足。絕對禁止調低委託價格來強行買入！{pending_instruction}
+2. `total_score` 必須嚴格等於 `trend_score + momentum_score + volume_score + risk_score + regime_score` 的加總。
+3. 你的分析與理由請一律使用「繁體中文」。
+4. 價格合理性重要規則：`price` 必須符合市場行情（最新收盤價的 ±2% 內），請填寫最新收盤價。
 """
 
     # 4. 準備 User Prompt 變數
@@ -325,25 +335,23 @@ def generate_portfolio_decisions(
         )
         # 解析返回的 JSON 結構
         decision_data = json.loads(raw_response)
+        raw_decisions = decision_data.get("decisions", [])
         
-        # 進行最後安全覆核 (避免 AI 違反規則)
-        # 例如：賣出股數不得大於持股數
-        decisions = decision_data.get("decisions", [])
-        
-        # 1. 蒐集每個股票代號的特徵（代號與中文名稱）
+        # 1. 蒐集每個股票代號的特徵（代號與中文名稱）以進行模糊匹配
         from src.config import get_stock_name
         stock_info = []
         for c in stock_codes:
-            name = get_stock_name(c)
-            stock_info.append({
-                "code": c,
-                "name": name,
-                "matched": False
-            })
-            
-        # 2. 第一階段：精準匹配（如果決策中的 stock_code 欄位直接是 watchlist 中的某個代號）
+            if c != "TAIEX":
+                name = get_stock_name(c)
+                stock_info.append({
+                    "code": c,
+                    "name": name,
+                    "matched": False
+                })
+
+        # 匹配股票代號
         possible_keys = ["stock_code", "stockCode", "stockcode", "StockCode", "code", "stock"]
-        for d in decisions:
+        for d in raw_decisions:
             resolved_code = None
             for key in possible_keys:
                 if key in d and d[key]:
@@ -358,8 +366,8 @@ def generate_portfolio_decisions(
                         info["matched"] = True
                         break
 
-        # 3. 第二階段：模糊/文字匹配（針對尚未成功設定 stock_code 的決策）
-        for d in decisions:
+        # 模糊/文字匹配尚未成功設定 stock_code 的評分
+        for d in raw_decisions:
             if d.get("stock_code") in stock_codes:
                 continue
                 
@@ -382,36 +390,200 @@ def generate_portfolio_decisions(
                     if info["code"] in combined_text or (info["name"] and info["name"] in combined_text):
                         matched_code = info["code"]
                         break
-                        
             if matched_code:
                 d["stock_code"] = matched_code
 
-        # 4. 第三階段：順序/位置匹配（最安全的防線：如果決策個數跟股票個數一致，且仍有 None）
-        if len(decisions) == len(stock_codes):
-            for i, d in enumerate(decisions):
+        # 順序/位置匹配
+        if len(raw_decisions) == len(stock_codes):
+            for i, d in enumerate(raw_decisions):
                 if d.get("stock_code") not in stock_codes:
                     d["stock_code"] = stock_codes[i]
-                    
-        for d in decisions:
-            code = d.get("stock_code")
-            # 如果是等候平倉的股票，安全防呆：禁止買入 (BUY)
-            if code in pending_stocks and d.get("action") == "BUY":
-                print(f" [AI交易代理] 警報: 股票 {code} 處於等候平倉排隊中，AI 給出買入(BUY)決策，強制校正為 HOLD。")
-                d["action"] = "HOLD"
-                d["quantity"] = 0.0
 
-            if d.get("action") == "SELL":
-                matching_holding = next((h for h in current_holdings if h["stock_code"] == code), None)
-                holding_qty = float(matching_holding.get("quantity", 0)) if matching_holding else 0.0
-                if float(d.get("quantity", 0)) > holding_qty:
-                    print(f" [AI交易代理] 警報: AI 賣出 {code} 股數大於目前持有股數，自動校正為全部賣出。")
-                    d["quantity"] = holding_qty
-                if holding_qty <= 0:
-                    print(f" [AI交易代理] 警報: 帳戶無 {code} 持股，AI 仍決策賣出，自動校正為 HOLD。")
-                    d["action"] = "HOLD"
-                    d["quantity"] = 0
+        # 2. 獲取大盤加權指數的最新日期
+        latest_date = None
+        taiex_klines = klines_map.get("TAIEX", [])
+        if taiex_klines:
+            latest_date = taiex_klines[-1].get("date")
+
+        # 3. 獲取今日已用買入額度與停損冷卻狀態
+        today_buy_sum = 0.0
+        cooldown_stocks = set()
+        all_orders = []
+        try:
+            all_orders = get_orders()
+            for o in all_orders:
+                exec_time = o.get("executed_at", "")
+                order_date = exec_time[:10] if exec_time else ""
+                
+                # 計算今日累計買入金額 (只統計成功或掛單中的 BUY)
+                if latest_date and order_date == latest_date:
+                    if o.get("action") == "BUY" and o.get("status") not in ["CANCELLED", "FAILED"]:
+                        today_buy_sum += float(o.get("total_amount") or 0.0)
                     
-        return decision_data
+                    # 檢查今日停損 (SELL 且 realized_pnl < 0)
+                    if o.get("action") == "SELL" and o.get("status") == "FILLED":
+                        pnl = float(o.get("realized_pnl") or 0.0)
+                        if pnl < 0:
+                            cooldown_stocks.add(o.get("stock_code"))
+        except Exception as e:
+            print(f" [AI交易代理] 讀取訂單與停損冷卻歷史失敗: {str(e)}")
+
+        # 4. 決策轉換與資金配置
+        remaining_cash = cash_balance
+        remaining_daily_limit = max(daily_limit - today_buy_sum, 0.0)
+        
+        final_decisions = []
+        buy_candidates = []
+
+        for d in raw_decisions:
+            code = d.get("stock_code")
+            if not code or code == "TAIEX":
+                continue
+                
+            trend = int(d.get("trend_score", 0))
+            momentum = int(d.get("momentum_score", 0))
+            volume = int(d.get("volume_score", 0))
+            risk = int(d.get("risk_score", 0))
+            regime = int(d.get("regime_score", 0))
+            
+            # 強制加總驗證
+            total_score = trend + momentum + volume + risk + regime
+            d["total_score"] = total_score
+            
+            price = float(d.get("price") or 0.0)
+            reason = d.get("reason", "")
+            
+            matching_holding = next((h for h in current_holdings if h["stock_code"] == code), None)
+            holding_qty = float(matching_holding.get("quantity", 0)) if matching_holding else 0.0
+            
+            # 如果是智慧等候平倉排隊中的股票
+            if code in pending_stocks:
+                if total_score < 70:
+                    action = "SELL"
+                    qty = holding_qty
+                    decision_reason = f"【智慧平倉排隊】總評分 {total_score} 分表現疲弱，維持賣出平倉。{reason}"
+                else:
+                    action = "HOLD"
+                    qty = 0.0
+                    decision_reason = f"【智慧平倉排隊】總評分 {total_score} 分表現回彈，暫緩賣出觀望。{reason}"
+                
+                final_decisions.append({
+                    "stock_code": code,
+                    "action": action,
+                    "price": price,
+                    "quantity": qty,
+                    "confidence": total_score / 100.0,
+                    "reason": decision_reason
+                })
+                continue
+
+            # 已持有倉位
+            if holding_qty > 0:
+                if total_score < 60:
+                    action = "SELL"
+                    qty = holding_qty
+                    decision_reason = f"【量化評分賣出】總分 {total_score} 分低於持有門檻 60 (趨勢: {trend}, 動能: {momentum}, 量能: {volume}, 風險: {risk}, 大盤: {regime})。{reason}"
+                else:
+                    action = "HOLD"
+                    qty = 0.0
+                    decision_reason = f"【量化評分續抱】總分 {total_score} 分維持在持有區間 60~100 (趨勢: {trend}, 動能: {momentum}, 量能: {volume}, 風險: {risk}, 大盤: {regime})。{reason}"
+                
+                final_decisions.append({
+                    "stock_code": code,
+                    "action": action,
+                    "price": price,
+                    "quantity": qty,
+                    "confidence": total_score / 100.0,
+                    "reason": decision_reason
+                })
+            
+            # 未持有倉位
+            else:
+                if code in cooldown_stocks:
+                    final_decisions.append({
+                        "stock_code": code,
+                        "action": "HOLD",
+                        "price": price,
+                        "quantity": 0.0,
+                        "confidence": total_score / 100.0,
+                        "reason": f"【停損買回冷卻】今日已執行過該股虧損平倉（停損），今日禁買。量化總分 {total_score} 分。{reason}"
+                    })
+                elif total_score >= 80:
+                    buy_candidates.append({
+                        "stock_code": code,
+                        "total_score": total_score,
+                        "trend": trend,
+                        "momentum": momentum,
+                        "volume": volume,
+                        "risk": risk,
+                        "regime": regime,
+                        "price": price,
+                        "reason": reason
+                    })
+                else:
+                    final_decisions.append({
+                        "stock_code": code,
+                        "action": "HOLD",
+                        "price": price,
+                        "quantity": 0.0,
+                        "confidence": total_score / 100.0,
+                        "reason": f"【量化評分觀望】總分 {total_score} 分未達買入門檻 80 (趨勢: {trend}, 動能: {momentum}, 量能: {volume}, 風險: {risk}, 大盤: {regime})。{reason}"
+                    })
+
+        # 5. 針對買入候選股進行排序與資金分配
+        # 依總分降序排序
+        buy_candidates.sort(key=lambda x: x["total_score"], reverse=True)
+        
+        for cand in buy_candidates:
+            code = cand["stock_code"]
+            total_score = cand["total_score"]
+            price = cand["price"]
+            reason = cand["reason"]
+            
+            # 剩餘預算限制：不得高於單股限額、可用現金、每日剩餘上限
+            allowed_budget = min(single_limit, remaining_cash, remaining_daily_limit)
+            
+            if allowed_budget >= price:
+                import math
+                qty = math.floor(allowed_budget / price)
+                if qty > 0:
+                    cost = price * qty
+                    final_decisions.append({
+                        "stock_code": code,
+                        "action": "BUY",
+                        "price": price,
+                        "quantity": float(qty),
+                        "confidence": total_score / 100.0,
+                        "reason": f"【量化評分買入】總分 {total_score} 分達到買入門檻 80 (趨勢: {cand['trend']}, 動能: {cand['momentum']}, 量能: {cand['volume']}, 風險: {cand['risk']}, 大盤: {cand['regime']})，分配預算 {cost:,.0f} 元。{reason}"
+                    })
+                    remaining_cash -= cost
+                    remaining_daily_limit -= cost
+                else:
+                    final_decisions.append({
+                        "stock_code": code,
+                        "action": "HOLD",
+                        "price": price,
+                        "quantity": 0.0,
+                        "confidence": total_score / 100.0,
+                        "reason": f"【量化評分觀望】總分 {total_score} 達買入門檻，但剩餘可用額度不足以買入 1 股。{reason}"
+                    })
+            else:
+                if single_limit < price:
+                    limit_desc = f"單股交易限額 {single_limit:,.0f} 元低於股票單價 {price:,.0f} 元"
+                else:
+                    limit_desc = "可用資金或每日限額不足"
+                
+                final_decisions.append({
+                    "stock_code": code,
+                    "action": "HOLD",
+                    "price": price,
+                    "quantity": 0.0,
+                    "confidence": total_score / 100.0,
+                    "reason": f"【量化評分觀望】總分 {total_score} 達到買入門檻，但因 {limit_desc} 無法配置。{reason}"
+                })
+
+        return {"decisions": final_decisions}
+
     except DailyRateLimitExceeded as rpd_err:
         print(f" [AI交易代理] 警報: Gemini API 每日額度 (RPD) 已達上限，鎖定交易: {str(rpd_err)}")
         fallback_decisions = []
