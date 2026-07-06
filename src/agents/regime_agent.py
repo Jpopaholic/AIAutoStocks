@@ -15,11 +15,11 @@ class MarketRegimeAssessment(BaseModel):
     )
     posture: str = Field(
         ...,
-        description="交易姿態，必須限為 'AGGRESSIVE' (積極進攻), 'NORMAL' (正常操作), 'DEFENSIVE' (防禦空倉)"
+        description="交易姿態，必須限為 'AGGRESSIVE' (積極進攻), 'NORMAL' (正常操作), 'DEFENSIVE' (防禦保守)"
     )
     risk_multiplier: float = Field(
         ...,
-        description="風險限額乘數，介於 0.0 到 1.0 之間。0.0 代表完全空手防禦不進行任何新增買入，1.0 代表維持正常交易額度"
+        description="風險限額乘數，介於 0.15 到 1.0 之間。此乘數用來調整買入倉位上限（部位控制），即使在空頭大盤或高波動環境中，最小值也應保持在 0.15 以上（例如 0.15 至 0.25 之間），以允許對具有強烈技術支撐或特大個股利多的標的進行微量/零股配置，而非一刀切完全關閉買入功能。"
     )
     reason: str = Field(
         ...,
@@ -83,9 +83,9 @@ def generate_market_regime(taiex_klines: List[Dict[str, Any]]) -> Dict[str, Any]
         "- 'VOLATILE_RANGE': 大盤波動劇烈，單日大漲大跌，方向不明，市場情緒恐慌或極度不穩定。\n\n"
         "交易姿態 (posture) 與風險乘數 (risk_multiplier) 建議指引：\n"
         "- BULLISH_TREND (多頭): posture = 'AGGRESSIVE' 或 'NORMAL'，risk_multiplier = 0.8 ~ 1.0。\n"
-        "- BEARISH_TREND (空頭): posture = 'DEFENSIVE'，risk_multiplier = 0.0 ~ 0.2。請強烈傾向於 0.0 (空手防守) 除非大盤有極強反彈信號，否則絕不可大於 0.2。\n"
+        "- BEARISH_TREND (空頭): posture = 'DEFENSIVE'，risk_multiplier = 0.15 ~ 0.30。應調降風險乘數以控制部位，但不應為 0.0，以便保留對強勢個股進行零股防禦配置的空間。\n"
         "- CALM_RANGE (盤整): posture = 'NORMAL'，risk_multiplier = 0.5 ~ 0.8。\n"
-        "- VOLATILE_RANGE (劇烈波動): posture = 'DEFENSIVE'，risk_multiplier = 0.1 ~ 0.4。\n\n"
+        "- VOLATILE_RANGE (劇烈波動): posture = 'DEFENSIVE'，risk_multiplier = 0.20 ~ 0.40。\n\n"
         "你的輸出必須完全符合所規規定之 JSON Schema，分析理由與依據請一律使用「繁體中文」。"
     )
 

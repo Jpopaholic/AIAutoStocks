@@ -121,7 +121,7 @@ def generate_portfolio_decisions(
     
     if regime_assessment:
         try:
-            multiplier = float(regime_assessment.get("risk_multiplier", 1.0))
+            multiplier = max(float(regime_assessment.get("risk_multiplier", 1.0)), 0.15)
             single_limit = single_limit * multiplier
             daily_limit = daily_limit * multiplier
         except Exception as mult_err:
@@ -154,8 +154,8 @@ def generate_portfolio_decisions(
             f"- 交易姿態 (Posture): {regime_assessment.get('posture', 'UNKNOWN')}\n"
             f"- 風險限額乘數 (Multiplier): {regime_assessment.get('risk_multiplier', 1.0)}\n"
             f"- 大腦分析理由 (Reason): {regime_assessment.get('reason', '')}\n"
-            f"請務必將上述大盤氣候（特別是交易姿態與分析理由）以及風險限額乘數作為最高量化風控指令！\n"
-            f"如果交易姿態為 DEFENSIVE，代表此時大盤走勢極差或劇烈震盪，你的個股操作應「極度保守且降低規模」，強烈傾向 HOLD 或 SELL 避險。若決定買入 (BUY)，則該股必須有極強的技術支撐或特大個股利多，且買入總金額必須受到已乘以風險乘數後縮小的低限額嚴格約束，執行『買賣小小的』防禦性微量零股配置。\n"
+            f"請務必將上述大盤氣候（特別是交易姿態與分析理由）以及風險限額乘數作為最高量化風控與「部位/交易規模控制」指令！\n"
+            f"當交易姿態為 DEFENSIVE 時，代表大盤走勢疲弱或劇烈震盪，個股操作應極度防禦保守。此時你仍然可以對具有極強買入信號或特定利多的個股做出買入 (BUY) 決定，但買入金額與股數必須受到經風險限額乘數調整後縮小之限額的嚴格約束，以零股小部位方式進行測試與分散配置，而非直接退縮至完全觀望。\n"
         )
 
     system_instruction = f"""

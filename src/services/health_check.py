@@ -110,7 +110,7 @@ def audit_proposed_order(
         
         # 配合大盤氣候風險乘數
         if regime_assessment:
-            multiplier = float(regime_assessment.get("risk_multiplier", 1.0))
+            multiplier = max(float(regime_assessment.get("risk_multiplier", 1.0)), 0.15)
             single_limit *= multiplier
             
         order_amount = price * quantity
