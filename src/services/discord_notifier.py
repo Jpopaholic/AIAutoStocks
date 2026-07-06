@@ -74,6 +74,34 @@ def _split_text_by_length(text: str, max_len: int = 1000) -> List[str]:
     return chunks
 
 
+def _split_into_fields(title_prefix: str, content: str, syntax: Optional[str] = None, max_len: int = 900) -> List[Dict[str, Any]]:
+    """
+    將內容分割成多個 Discord Embed Fields，符合 1024 限制。
+    如果指定了 syntax，則每一個分段內容都會被獨立包裹在 ```代碼框中。
+    """
+    if not content:
+        val = "無"
+        if syntax:
+            val = f"```{syntax}\n{val}```"
+        return [{
+            "name": title_prefix,
+            "value": val,
+            "inline": False
+        }]
+        
+    chunks = _split_text_by_length(content, max_len=max_len)
+    fields = []
+    for idx, chunk in enumerate(chunks):
+        title = title_prefix if idx == 0 else f"{title_prefix} (續 {idx+1})"
+        value_str = f"```{syntax}\n{chunk}```" if syntax else chunk
+        fields.append({
+            "name": title,
+            "value": value_str,
+            "inline": False
+        })
+    return fields
+
+
 def send_daily_report(
     ai_outlook: str,
     override_orders: Optional[List[Dict[str, Any]]] = None,
@@ -203,11 +231,6 @@ def send_daily_report(
                 
                 completed_trades_text += f"{prefix} {action_label} {o['stock_code']}{name_display} | {qty:,.0f} 股 | 委託: {limit_price_display} | 成交: {exec_price_display} (規費: {fee_val:,.0f} 元){pnl_display} - {status_str}\n"
 
-        if not completed_trades_text:
-            completed_trades_text = "今日無已完成交易成交紀錄"
-        else:
-            completed_trades_text = f"```diff\n{completed_trades_text}```"
-
         # 建立未完成委託文字
         pending_trades_text = ""
         for o in today_orders:
@@ -223,14 +246,8 @@ def send_daily_report(
                 
                 pending_trades_text += f"[{action_label}] {o['stock_code']}{name_display} | 數量: {qty:,.0f} 股 | 委託價: {limit_price_display} 元 (預估規費: {fee_val:,.0f} 元)\n"
 
-        if not pending_trades_text:
-            pending_trades_text = "今日無新委託預約單紀錄"
-        else:
-            pending_trades_text = f"```ini\n{pending_trades_text}```"
-
         # 建立目前持股現況文字
         holdings_text = ""
-        from src.services.stock_fetcher import get_display_price
         for h in holdings:
             stock_code = h["stock_code"]
             qty = float(h["quantity"])
@@ -251,12 +268,7 @@ def send_daily_report(
             
             holdings_text += f"{prefix} {stock_code}{name_display} | {qty:,.0f} 股 | 均價: {avg_price:,.2f} | 現價: {current_price:,.2f} | 損益: {pnl_prefix}{unrealized_pnl:,.0f} 元 ({pnl_prefix}{unrealized_roi:.2f}%)\n"
 
-        if not holdings_text:
-            holdings_text = "目前帳戶無持股倉位"
-        else:
-            holdings_text = f"```diff\n{holdings_text}```"
-
-        # 定義長度防禦輔助函數，確保發送至 Discord Embed 欄位的長度皆不超出 1024 限制 (安全防線設為 1000)
+        # 定義長度防禦輔助函數
         def safe_val(val: str, max_len: int = 1000) -> str:
             if not val:
                 return "無"
@@ -264,27 +276,6 @@ def send_daily_report(
             if len(val_str) > max_len:
                 return val_str[:max_len - 3] + "..."
             return val_str
-
-        def safe_code_block_val(val: str, syntax: str, max_len: int = 1000) -> str:
-            if not val:
-                return "無"
-            val_str = str(val).strip()
-            prefix_cb = f"```{syntax}\n"
-            suffix_cb = "```"
-            
-            # 若已經是代碼框格式，先拆解出內容
-            if val_str.startswith("```") and val_str.endswith("```"):
-                content = val_str[len(prefix_cb):-len(suffix_cb)].strip()
-            else:
-                content = val_str
-                
-            overhead = len(prefix_cb) + len(suffix_cb)
-            available_len = max_len - overhead
-            
-            if len(content) > available_len:
-                content = content[:available_len - 3] + "..."
-                
-            return f"{prefix_cb}{content}{suffix_cb}"
 
         color = 15679812 if is_liquidation else (3899902 if is_sandbox_mode else 2278750)
         ai_outlook_chunks = _split_text_by_length(ai_outlook, max_len=950)
@@ -316,34 +307,38 @@ def send_daily_report(
             }
             regime_display = emoji_map.get(regime, regime)
             
-            fields.append({
-                "name": "🌦️ Market Regime 大盤氣候判定",
-                "value": safe_val(
-                    f"市場狀態: **`{regime_display}`**\n"
-                    f"交易姿態: **`{posture}`**\n"
-                    f"風險限額乘數: **`{risk_mult:.1f}`**\n"
-                    f"分析理由: {reason}"
-                ),
-                "inline": False
-            })
+            regime_base_info = (
+                f"市場狀態: **`{regime_display}`**\n"
+                f"交易姿態: **`{posture}`**\n"
+                f"風險限額乘數: **`{risk_mult:.1f}`**\n"
+            )
+            
+            if reason:
+                # 將大盤氣候理由分割成多個欄位
+                reason_chunks = _split_text_by_length(f"分析理由: {reason}", max_len=900)
+                for idx, chunk in enumerate(reason_chunks):
+                    title = "🌦️ Market Regime 大盤氣候判定" if idx == 0 else f"🌦️ Market Regime 大盤氣候判定 (續 {idx+1})"
+                    val = (regime_base_info + chunk) if idx == 0 else chunk
+                    fields.append({
+                        "name": title,
+                        "value": safe_val(val),
+                        "inline": False
+                    })
+            else:
+                fields.append({
+                    "name": "🌦️ Market Regime 大盤氣候判定",
+                    "value": safe_val(regime_base_info),
+                    "inline": False
+                })
 
-        fields.extend([
-            {
-                "name": "🟢 今日已完成交易 (實際成交回報)",
-                "value": safe_code_block_val(completed_trades_text, "diff"),
-                "inline": False
-            },
-            {
-                "name": "⏳ 今日盤後 AI 新增委託 (預約明日交易)",
-                "value": safe_code_block_val(pending_trades_text, "ini"),
-                "inline": False
-            },
-            {
-                "name": "📈 目前持股現況",
-                "value": safe_code_block_val(holdings_text, "diff"),
-                "inline": False
-            }
-        ])
+        # 分割已完成交易至多個 Embed 欄位
+        fields.extend(_split_into_fields("🟢 今日已完成交易 (實際成交回報)", completed_trades_text or "今日無已完成交易成交紀錄", "diff"))
+        
+        # 分割未完成委託至多個 Embed 欄位
+        fields.extend(_split_into_fields("⏳ 今日盤後 AI 新增委託 (預約明日交易)", pending_trades_text or "今日無新委託預約單紀錄", "ini"))
+        
+        # 分割目前持股現況至多個 Embed 欄位
+        fields.extend(_split_into_fields("📈 目前持股現況", holdings_text or "目前帳戶無持股倉位", "diff"))
 
         discord_payload = {
             "username": "AI 台股自動交易報告",
