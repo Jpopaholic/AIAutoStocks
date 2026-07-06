@@ -68,7 +68,11 @@ class PMStockDecision(BaseModel):
     )
     pm_reason: str = Field(
         ..., 
-        description="主動投資組合經理對該檔股票的配置或交易決策理由（使用繁體中文，限 100 字內）。請說明在今日的帳戶資金/持股與大盤狀態下，相對排名做此決定的理由。"
+        description="主動投資組合經理對該檔股票的配置或交易決策理由（使用繁體中文，限 100 字內）。請著重於續抱、賣出或調倉理由，且絕對不要在理由中重述或提到股票的技術評分或總分（例如「評分71分」），因為分數會由系統自動標註與合併。"
+    )
+    allocation_weight: int = Field(
+        ...,
+        description="買入配置權重 (1-5)。1 代表最低配置優先度，5 代表最高配置優先度。若 action 不為 BUY，此值應設定為 0。"
     )
 
 class PortfolioDecision(BaseModel):
@@ -468,7 +472,7 @@ def generate_portfolio_decisions(
 你的任務是基於研究員的「分析師個股技術評估報告」，結合當前的「大盤市場氣候判定」、「帳戶現有持股」、「可用資金餘額」以及「近期交易歷史」，做出今日的最終交易配置決策 (決定各股票的 action 為 BUY, SELL 或 HOLD)。
 
 【主動配置決策原則】：
-1. 橫向對比說明：你在 `ranking_analysis` 中應說明今日資產分配想法、調倉邏輯，以及在目前持股與新選標的中如何進行資金取捨。（注意：買入股票的優先權與總分排序由 Python 程式端主導，你只需解釋決策原因即可）。
+1. 橫向對比說明：你在 `ranking_analysis` 中應說明今日資產分配想法、調倉邏輯，以及在目前持股與新選標的中如何進行資金取捨。（注意：買入股票的優先權與分配權重會融合 Python 程式端與你的權重設定共同決定，你只需解釋決策原因即可）。
 2. 禁止盲目觀望：除非大盤市場判定狀態為 BEARISH_TREND 且交易姿勢 posture=DEFENSIVE，否則禁止因為「等待更明確信號」而讓所有股票皆決策為 HOLD。
 3. 勇敢推薦買入：只要個股技術面沒有重大缺陷（即分析師評分總分高於 50 分底線），你必須依據相對優勢至少選擇 1 檔發出 BUY 決策，即使其絕對分數沒有達到極高的標準（例如僅 60 幾分甚至 55 分），只要它是今日相對最優，即應勇敢推薦配置。
 4. 調倉與賣出審查：
@@ -477,12 +481,16 @@ def generate_portfolio_decisions(
 5. 【智慧平倉與冷卻護欄】：
    - 智慧平倉名單: {', '.join(pending_stocks) if pending_stocks else '無'}。這些股票絕對禁止發出買入 (BUY) 決策！若走勢疲軟請決定 SELL，若有反彈需要觀望請決定 HOLD。
    - 今日停損買回冷卻名單: {', '.join(cooldown_stocks) if cooldown_stocks else '無'}。這些股票今日剛停損，今日絕對禁止發出買入 (BUY) 決策，必須發出 HOLD。
+6. 【買入配置權重】：
+   - 當你對某檔股票做出買入 (BUY) 決策時，你必須為其指定買入配置權重 `allocation_weight` (1 至 5 分)。
+   - 5 分代表極度看好、強力推薦，應分配最高額的資金；1 分代表保守試探、小額試水溫。請根據股票的相對技術優勢與你對該股的信心，拉開權重差距。若 action 不是 BUY，此值設定為 0。
 
 {regime_text}
 
 請嚴格遵守以下指示：
 1. 你的輸出必須完全符合所規定的 JSON Schema (PortfolioDecision)，不可包含任何額外文字。
 2. 你的決策理由請一律使用「繁體中文」。
+3. 在各股票的決策理由 (pm_reason) 中，「絕對不要」重複提及分析師的評分或總分（例如「評分 71 分」等字眼），請著重於續抱、賣出或調倉取捨的商業/邏輯理由，因為評分數據會由程式端自動標註與呈現。
 """
 
     pm_user_prompt = f"""
@@ -738,9 +746,17 @@ def generate_portfolio_decisions(
                         "total_score": total_score
                     })
                 else:
+                    matching_dec = next((dec for dec in raw_decisions if dec.get("stock_code") == code), {})
+                    alloc_weight = int(matching_dec.get("allocation_weight") or 3)
+                    if alloc_weight < 1:
+                        alloc_weight = 1
+                    elif alloc_weight > 5:
+                        alloc_weight = 5
+                        
                     buy_candidates.append({
                         "stock_code": code,
                         "total_score": total_score,
+                        "allocation_weight": alloc_weight,
                         "trend": trend,
                         "momentum": momentum,
                         "volume": volume,
@@ -765,66 +781,118 @@ def generate_portfolio_decisions(
                     "total_score": total_score
                 })
 
-    # 6. Python 程式端主導買入候選股排序與預算分配 (依總分降序排序以進行相對優先分配)
-    buy_candidates.sort(key=lambda x: x["total_score"], reverse=True)
+    # 6. Python 程式端主導買入候選股預算分配 (融合方案 B 與方案 C 的雙重比例加權分配)
+    total_budget = min(remaining_cash, remaining_daily_limit)
     
+    # 計算每檔股票的加權因子
+    for cand in buy_candidates:
+        cand["weight_factor"] = float(cand["total_score"] * cand["allocation_weight"])
+        
+    # 用於分配預算的候選清單
+    alloc_candidates = list(buy_candidates)
+    budgets = {cand["stock_code"]: 0.0 for cand in alloc_candidates}
+    
+    # 1. 執行比例分配且限制單股上限 (Water-filling)
+    remaining_alloc_budget = total_budget
+    uncapped = list(alloc_candidates)
+    
+    while uncapped and remaining_alloc_budget > 0:
+        total_factor = sum(c["weight_factor"] for c in uncapped)
+        if total_factor <= 0:
+            break
+            
+        new_uncapped = []
+        any_capped = False
+        for c in uncapped:
+            share = remaining_alloc_budget * (c["weight_factor"] / total_factor)
+            if share > single_limit:
+                # 達到單股限制，直接設為單股限制
+                budgets[c["stock_code"]] = single_limit
+                remaining_alloc_budget -= single_limit
+                any_capped = True
+            else:
+                new_uncapped.append((c, share))
+                
+        if not any_capped:
+            # 剩餘的股票分配都沒有超限，分配完成
+            for c, share in new_uncapped:
+                budgets[c["stock_code"]] = share
+            break
+        else:
+            # 有部分股票超限被封頂，其餘未超限者在下一輪繼續分配剩餘預算
+            uncapped = [item[0] for item in new_uncapped]
+
+    # 2. 計算初步股數與剩餘零星預算
+    quantities = {}
+    costs = {}
+    for cand in buy_candidates:
+        code = cand["stock_code"]
+        price = cand["price"]
+        allocated = budgets[code]
+        
+        # 初步計算股數
+        qty = math.floor(allocated / price) if price > 0 else 0
+        quantities[code] = qty
+        costs[code] = qty * price
+
+    # 3. 處理因無條件捨去而留下來的零星預算 (leftover)，依加權因子由高到低嘗試補足
+    leftover = total_budget - sum(costs.values())
+    
+    # 依加權因子降序排序，嘗試追加剩餘零星預算
+    leftover_candidates = sorted(buy_candidates, key=lambda x: x["weight_factor"], reverse=True)
+    for cand in leftover_candidates:
+        code = cand["stock_code"]
+        price = cand["price"]
+        if price <= 0:
+            continue
+            
+        # 只要剩餘零星預算還能買 1 股，且加買後不超過單股限制 (single_limit)
+        while leftover >= price and (costs[code] + price) <= single_limit:
+            quantities[code] += 1
+            costs[code] += price
+            leftover -= price
+
+    # 4. 生成最終決策與原因描述
     for cand in buy_candidates:
         code = cand["stock_code"]
         total_score = cand["total_score"]
+        alloc_weight = cand["allocation_weight"]
         price = cand["price"]
         reason = cand["reason"]
+        qty = quantities[code]
+        cost = costs[code]
         
-        # 剩餘預算限制：不得高於單股限額、可用現金、每日剩餘上限
-        allowed_budget = min(single_limit, remaining_cash, remaining_daily_limit)
-        
-        if allowed_budget >= price:
-            qty = math.floor(allowed_budget / price)
-            if qty > 0:
-                cost = price * qty
-                final_decisions.append({
-                    "stock_code": code,
-                    "action": "BUY",
-                    "price": price,
-                    "quantity": float(qty),
-                    "confidence": total_score / 100.0,
-                    "reason": f"【投資組合配置買入】總分 {total_score} 分，依經理人建議與相對排名排序分配預算 {cost:,.0f} 元。{reason}",
-                    "trend_score": cand["trend"],
-                    "momentum_score": cand["momentum"],
-                    "volume_score": cand["volume"],
-                    "safety_score": cand["safety"],
-                    "regime_score": cand["regime"],
-                    "total_score": total_score
-                })
-                remaining_cash -= cost
-                remaining_daily_limit -= cost
-            else:
-                final_decisions.append({
-                    "stock_code": code,
-                    "action": "HOLD",
-                    "price": price,
-                    "quantity": 0.0,
-                    "confidence": total_score / 100.0,
-                    "reason": f"【配置觀望】總分 {total_score} 達到配置標準，但剩餘可用現金或額度不足以買入 1 股。{reason}",
-                    "trend_score": cand["trend"],
-                    "momentum_score": cand["momentum"],
-                    "volume_score": cand["volume"],
-                    "safety_score": cand["safety"],
-                    "regime_score": cand["regime"],
-                    "total_score": total_score
-                })
+        if qty > 0:
+            final_decisions.append({
+                "stock_code": code,
+                "action": "BUY",
+                "price": price,
+                "quantity": float(qty),
+                "confidence": total_score / 100.0,
+                "reason": f"【投資組合加權分配買入】技術評定總分 {total_score} 分，經理人權重 {alloc_weight}，融合分配預算 {cost:,.0f} 元。{reason}",
+                "trend_score": cand["trend"],
+                "momentum_score": cand["momentum"],
+                "volume_score": cand["volume"],
+                "safety_score": cand["safety"],
+                "regime_score": cand["regime"],
+                "total_score": total_score
+            })
+            remaining_cash -= cost
+            remaining_daily_limit -= cost
         else:
+            # 判斷無法配置原因
             if single_limit < price:
                 limit_desc = f"單股交易限額 {single_limit:,.0f} 元低於股票單價 {price:,.0f} 元"
             else:
-                limit_desc = "可用資金或每日限額不足"
-            
+                limit_desc = f"融合分配比例過低且可用資金不足以買入 1 股 (分配額 {budgets[code]:,.0f} 元 < 單價 {price:,.0f} 元)"
+                
             final_decisions.append({
                 "stock_code": code,
                 "action": "HOLD",
                 "price": price,
                 "quantity": 0.0,
                 "confidence": total_score / 100.0,
-                "reason": f"【配置觀望】總分 {total_score} 達到配置標準，但因 {limit_desc} 無法配置。{reason}",
+                "reason": f"【配置觀望】評分 {total_score} 達到配置標準，但因 {limit_desc} 無法配置。{reason}",
                 "trend_score": cand["trend"],
                 "momentum_score": cand["momentum"],
                 "volume_score": cand["volume"],

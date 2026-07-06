@@ -280,7 +280,8 @@ def send_daily_report(
         color = 15679812 if is_liquidation else (3899902 if is_sandbox_mode else 2278750)
         ai_outlook_chunks = _split_text_by_length(ai_outlook, max_len=950)
 
-        fields = [
+        # 1. 建立「投資組合帳戶總覽 & 大盤氣候」欄位與 Payload
+        overview_fields = [
             {
                 "name": "💰 投資組合帳戶總覽",
                 "value": (
@@ -314,40 +315,30 @@ def send_daily_report(
             )
             
             if reason:
-                # 將大盤氣候理由分割成多個欄位
                 reason_chunks = _split_text_by_length(f"分析理由: {reason}", max_len=900)
                 for idx, chunk in enumerate(reason_chunks):
                     title = "🌦️ Market Regime 大盤氣候判定" if idx == 0 else f"🌦️ Market Regime 大盤氣候判定 (續 {idx+1})"
                     val = (regime_base_info + chunk) if idx == 0 else chunk
-                    fields.append({
+                    overview_fields.append({
                         "name": title,
                         "value": safe_val(val),
                         "inline": False
                     })
             else:
-                fields.append({
+                overview_fields.append({
                     "name": "🌦️ Market Regime 大盤氣候判定",
                     "value": safe_val(regime_base_info),
                     "inline": False
                 })
 
-        # 分割已完成交易至多個 Embed 欄位
-        fields.extend(_split_into_fields("🟢 今日已完成交易 (實際成交回報)", completed_trades_text or "今日無已完成交易成交紀錄", "diff"))
-        
-        # 分割未完成委託至多個 Embed 欄位
-        fields.extend(_split_into_fields("⏳ 今日盤後 AI 新增委託 (預約明日交易)", pending_trades_text or "今日無新委託預約單紀錄", "ini"))
-        
-        # 分割目前持股現況至多個 Embed 欄位
-        fields.extend(_split_into_fields("📈 目前持股現況", holdings_text or "目前帳戶無持股倉位", "diff"))
-
-        discord_payload = {
+        overview_payload = {
             "username": "AI 台股自動交易報告",
             "embeds": [
                 {
-                    "title": f"📊 {subject}",
+                    "title": f"💰 帳戶總覽 & 大盤氣候 - {subject}",
                     "description": f"**環境/模式**: `{mode_label}`",
                     "color": color,
-                    "fields": fields,
+                    "fields": overview_fields,
                     "footer": {
                         "text": f"此報告由 AI 自動化交易系統發送。"
                     },
@@ -355,34 +346,85 @@ def send_daily_report(
                 }
             ]
         }
+
+        # 2. 建立「今日交易與預約委託」欄位與 Payload
+        trades_fields = []
+        trades_fields.extend(_split_into_fields("🟢 今日已完成交易 (實際成交回報)", completed_trades_text or "今日無已完成交易成交紀錄", "diff"))
+        trades_fields.extend(_split_into_fields("⏳ 今日盤後 AI 新增委託 (預約明日交易)", pending_trades_text or "今日無新委託預約單紀錄", "ini"))
         
-        success = _send_discord_webhook(webhook_url, discord_payload)
+        trades_payload = {
+            "username": "AI 台股自動交易報告",
+            "embeds": [
+                {
+                    "title": f"🔄 今日交易與預約委託 - {subject}",
+                    "description": f"**環境/模式**: `{mode_label}`",
+                    "color": color,
+                    "fields": trades_fields,
+                    "footer": {
+                        "text": f"此報告由 AI 自動化交易系統發送。"
+                    },
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                }
+            ]
+        }
+
+        # 3. 建立「目前持股現況」欄位與 Payload
+        holdings_fields = []
+        holdings_fields.extend(_split_into_fields("📈 目前持股現況", holdings_text or "目前帳戶無持股倉位", "diff"))
+        
+        holdings_payload = {
+            "username": "AI 台股自動交易報告",
+            "embeds": [
+                {
+                    "title": f"📊 目前持股現況 - {subject}",
+                    "description": f"**環境/模式**: `{mode_label}`",
+                    "color": color,
+                    "fields": holdings_fields,
+                    "footer": {
+                        "text": f"此報告由 AI 自動化交易系統發送。"
+                    },
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                }
+            ]
+        }
+
+        # 發送各區塊報告 (分開多個發送，徹底避免單個 payload 超過 Discord 限制的 6000 字元)
+        success_overview = _send_discord_webhook(webhook_url, overview_payload)
+        success_trades = _send_discord_webhook(webhook_url, trades_payload)
+        success_holdings = _send_discord_webhook(webhook_url, holdings_payload)
+
+        success = success_overview and success_trades and success_holdings
         if success:
             log_system_event("INFO", f"已成功發送 {current_date_label} 每日報告至 Discord Webhook ({mode_label})")
             
-            # 額外獨立發送 AI 決策理由，防止單個 Embed 字數超過 6000 字元被 Discord 阻擋
+            # 額外獨立發送 AI 決策理由 (每 4 個 chunks 作為一個獨立的 Discord 訊息發送，防止超過 6000 字元)
             if ai_outlook_chunks:
-                outlook_fields = []
-                for idx, chunk in enumerate(ai_outlook_chunks):
-                    title = "🧠 AI 投資決策與詳細評分理由" if idx == 0 else f"🧠 AI 投資決策與詳細評分理由 (續 {idx+1})"
-                    outlook_fields.append({
-                        "name": title,
-                        "value": chunk,
-                        "inline": False
-                    })
-                
-                outlook_payload = {
-                    "username": "AI 台股自動交易報告",
-                    "embeds": [
-                        {
-                            "title": f"🧠 {current_date_label} AI 決策理由與量化技術指標評估 ({mode_label})",
-                            "color": 3447003,  # 寶藍色
-                            "fields": outlook_fields,
-                            "timestamp": datetime.now(timezone.utc).isoformat()
-                        }
-                    ]
-                }
-                _send_discord_webhook(webhook_url, outlook_payload)
+                chunk_size = 4
+                for i in range(0, len(ai_outlook_chunks), chunk_size):
+                    sub_chunks = ai_outlook_chunks[i:i+chunk_size]
+                    outlook_fields = []
+                    for idx, chunk in enumerate(sub_chunks):
+                        global_idx = i + idx
+                        title = "🧠 AI 投資決策與詳細評分理由" if global_idx == 0 else f"🧠 AI 投資決策與詳細評分理由 (續 {global_idx+1})"
+                        outlook_fields.append({
+                            "name": title,
+                            "value": chunk,
+                            "inline": False
+                        })
+                    
+                    part_label = f" (第 {i//chunk_size + 1} 部分)" if len(ai_outlook_chunks) > chunk_size else ""
+                    outlook_payload = {
+                        "username": "AI 台股自動交易報告",
+                        "embeds": [
+                            {
+                                "title": f"🧠 {current_date_label} AI 決策理由與量化技術指標評估 ({mode_label}){part_label}",
+                                "color": 3447003,  # 寶藍色
+                                "fields": outlook_fields,
+                                "timestamp": datetime.now(timezone.utc).isoformat()
+                            }
+                        ]
+                    }
+                    _send_discord_webhook(webhook_url, outlook_payload)
         else:
             err_msg = f"發送每日報告至 Discord Webhook 失敗 (網址: {webhook_url})。"
             log_system_event("ERROR", err_msg)
