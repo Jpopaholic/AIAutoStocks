@@ -315,21 +315,6 @@ def send_daily_report(
             }
         ])
 
-        if not ai_outlook_chunks:
-            fields.append({
-                "name": "🧠 AI 明日分析預測與反思",
-                "value": "無 AI 預測數據",
-                "inline": False
-            })
-        else:
-            for idx, chunk in enumerate(ai_outlook_chunks):
-                title = "🧠 AI 明日分析預測與反思" if idx == 0 else f"🧠 AI 明日分析預測與反思 (續 {idx+1})"
-                fields.append({
-                    "name": title,
-                    "value": chunk,
-                    "inline": False
-                })
-
         discord_payload = {
             "username": "AI 台股自動交易報告",
             "embeds": [
@@ -345,9 +330,34 @@ def send_daily_report(
                 }
             ]
         }
+        
         success = _send_discord_webhook(webhook_url, discord_payload)
         if success:
             log_system_event("INFO", f"已成功發送 {current_date_label} 每日報告至 Discord Webhook ({mode_label})")
+            
+            # 額外獨立發送 AI 決策理由，防止單個 Embed 字數超過 6000 字元被 Discord 阻擋
+            if ai_outlook_chunks:
+                outlook_fields = []
+                for idx, chunk in enumerate(ai_outlook_chunks):
+                    title = "🧠 AI 投資決策與詳細評分理由" if idx == 0 else f"🧠 AI 投資決策與詳細評分理由 (續 {idx+1})"
+                    outlook_fields.append({
+                        "name": title,
+                        "value": chunk,
+                        "inline": False
+                    })
+                
+                outlook_payload = {
+                    "username": "AI 台股自動交易報告",
+                    "embeds": [
+                        {
+                            "title": f"🧠 {current_date_label} AI 決策理由與量化技術指標評估 ({mode_label})",
+                            "color": 3447003,  # 寶藍色
+                            "fields": outlook_fields,
+                            "timestamp": datetime.now(timezone.utc).isoformat()
+                        }
+                    ]
+                }
+                _send_discord_webhook(webhook_url, outlook_payload)
         else:
             err_msg = f"發送每日報告至 Discord Webhook 失敗 (網址: {webhook_url})。"
             log_system_event("ERROR", err_msg)

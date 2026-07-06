@@ -451,8 +451,38 @@ def generate_portfolio_decisions(
             d["total_score"] = total_score
             
             price = float(d.get("price") or 0.0)
-            reason = d.get("reason", "")
-            
+            klines = klines_map.get(code, [])
+            if price <= 0.0:
+                if klines:
+                    latest_k = klines[-1]
+                    price = float(latest_k.get("close") or latest_k.get("closePrice") or 0.0)
+                if price <= 0.0:
+                    matching_holding = next((h for h in current_holdings if h["stock_code"] == code), None)
+                    if matching_holding:
+                        price = float(matching_holding.get("average_price") or 10.0)
+                    else:
+                        price = 10.0
+
+            reason = d.get("reason", "").strip()
+            if not reason:
+                reason = f"【系統輔助指標分析】個股目前量化得分為 {total_score} 分 (趨勢: {trend} | 動能: {momentum} | 量能: {volume} | 風險: {risk} | 大盤: {regime})。"
+                if klines:
+                    latest_k = klines[-1]
+                    c_val = latest_k.get("close") or latest_k.get("closePrice") or 0.0
+                    rsi_val = latest_k.get("rsi14") or latest_k.get("rsi_14")
+                    macd_hist = latest_k.get("macd_hist") or latest_k.get("macdHist")
+                    ma5 = latest_k.get("ma5")
+                    ma20 = latest_k.get("ma20")
+                    reason += f" 最新收盤價 {c_val:.2f} 元。"
+                    if ma5 and ma20:
+                        reason += f" 短期五日線 MA5 為 {ma5:.2f} 元，月線 MA20 為 {ma20:.2f} 元（{'短期均線高於月線' if ma5 >= ma20 else '短期均線低於月線'}）。"
+                    if rsi_val is not None:
+                        reason += f" RSI 數值為 {rsi_val:.1f}。"
+                    if macd_hist is not None:
+                        reason += f" MACD 柱狀值為 {macd_hist:.2f}。"
+                else:
+                    reason += " 因無歷史 K 線數據，無法提取具體均線與指標數值。"
+
             matching_holding = next((h for h in current_holdings if h["stock_code"] == code), None)
             holding_qty = float(matching_holding.get("quantity", 0)) if matching_holding else 0.0
             
@@ -461,11 +491,11 @@ def generate_portfolio_decisions(
                 if total_score < 70:
                     action = "SELL"
                     qty = holding_qty
-                    decision_reason = f"【智慧平倉排隊】總評分 {total_score} 分表現疲弱，維持賣出平倉。{reason}"
+                    decision_reason = f"【智慧平倉】{reason}"
                 else:
                     action = "HOLD"
                     qty = 0.0
-                    decision_reason = f"【智慧平倉排隊】總評分 {total_score} 分表現回彈，暫緩賣出觀望。{reason}"
+                    decision_reason = f"【智慧平倉】{reason}"
                 
                 final_decisions.append({
                     "stock_code": code,
@@ -482,11 +512,11 @@ def generate_portfolio_decisions(
                 if total_score < 60:
                     action = "SELL"
                     qty = holding_qty
-                    decision_reason = f"【量化評分賣出】總分 {total_score} 分低於持有門檻 60 (趨勢: {trend}, 動能: {momentum}, 量能: {volume}, 風險: {risk}, 大盤: {regime})。{reason}"
+                    decision_reason = f"【量化賣出】{reason}"
                 else:
                     action = "HOLD"
                     qty = 0.0
-                    decision_reason = f"【量化評分續抱】總分 {total_score} 分維持在持有區間 60~100 (趨勢: {trend}, 動能: {momentum}, 量能: {volume}, 風險: {risk}, 大盤: {regime})。{reason}"
+                    decision_reason = f"【量化續抱】{reason}"
                 
                 final_decisions.append({
                     "stock_code": code,
@@ -506,7 +536,7 @@ def generate_portfolio_decisions(
                         "price": price,
                         "quantity": 0.0,
                         "confidence": total_score / 100.0,
-                        "reason": f"【停損買回冷卻】今日已執行過該股虧損平倉（停損），今日禁買。量化總分 {total_score} 分。{reason}"
+                        "reason": f"【停損禁買】今日已執行過停損交易。{reason}"
                     })
                 elif total_score >= 80:
                     buy_candidates.append({
@@ -527,7 +557,7 @@ def generate_portfolio_decisions(
                         "price": price,
                         "quantity": 0.0,
                         "confidence": total_score / 100.0,
-                        "reason": f"【量化評分觀望】總分 {total_score} 分未達買入門檻 80 (趨勢: {trend}, 動能: {momentum}, 量能: {volume}, 風險: {risk}, 大盤: {regime})。{reason}"
+                        "reason": reason
                     })
 
         # 5. 針對買入候選股進行排序與資金分配
@@ -554,7 +584,7 @@ def generate_portfolio_decisions(
                         "price": price,
                         "quantity": float(qty),
                         "confidence": total_score / 100.0,
-                        "reason": f"【量化評分買入】總分 {total_score} 分達到買入門檻 80 (趨勢: {cand['trend']}, 動能: {cand['momentum']}, 量能: {cand['volume']}, 風險: {cand['risk']}, 大盤: {cand['regime']})，分配預算 {cost:,.0f} 元。{reason}"
+                        "reason": f"【量化買入】已分配預算 {cost:,.0f} 元。{reason}"
                     })
                     remaining_cash -= cost
                     remaining_daily_limit -= cost
@@ -565,13 +595,13 @@ def generate_portfolio_decisions(
                         "price": price,
                         "quantity": 0.0,
                         "confidence": total_score / 100.0,
-                        "reason": f"【量化評分觀望】總分 {total_score} 達買入門檻，但剩餘可用額度不足以買入 1 股。{reason}"
+                        "reason": f"【額度不足】可用金額不足以買入 1 股。{reason}"
                     })
             else:
                 if single_limit < price:
-                    limit_desc = f"單股交易限額 {single_limit:,.0f} 元低於股票單價 {price:,.0f} 元"
+                    limit_desc = f"單股限額 {single_limit:,.0f}元低於單價 {price:,.0f}元"
                 else:
-                    limit_desc = "可用資金或每日限額不足"
+                    limit_desc = "資金或每日限額不足"
                 
                 final_decisions.append({
                     "stock_code": code,
@@ -579,7 +609,7 @@ def generate_portfolio_decisions(
                     "price": price,
                     "quantity": 0.0,
                     "confidence": total_score / 100.0,
-                    "reason": f"【量化評分觀望】總分 {total_score} 達到買入門檻，但因 {limit_desc} 無法配置。{reason}"
+                    "reason": f"【限額不足】因 {limit_desc} 無法配置。{reason}"
                 })
 
         return {"decisions": final_decisions}
