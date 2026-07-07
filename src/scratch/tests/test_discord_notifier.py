@@ -8,7 +8,7 @@ os.environ["DISCORD_WEBHOOK_LIVE"] = "https://discord.com/api/webhooks/mock_live
 from unittest.mock import patch, MagicMock
 
 # Ensure project root is in sys.path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
 
 from src.config import config
 from src.services.discord_notifier import send_daily_report, send_emergency_alert

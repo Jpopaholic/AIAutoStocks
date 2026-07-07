@@ -3,7 +3,7 @@ import sys
 import time
 
 # 載入專案路徑
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
 from src.services.credential_manager import load_credentials
 

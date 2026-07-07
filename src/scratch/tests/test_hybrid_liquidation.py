@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 
 # 載入專案路徑
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
 
 from src.agents.trading_agent import generate_portfolio_decisions
 from src.services.supabase_client import (

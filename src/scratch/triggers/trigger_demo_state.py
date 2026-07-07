@@ -2,7 +2,7 @@ import os
 import sys
 
 # 載入專案路徑
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
 
 from src.services.supabase_client import (
     set_system_fault_status,

@@ -5,7 +5,7 @@ from unittest.mock import patch, MagicMock
 from fastapi import HTTPException
 
 # 載入專案路徑
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
 
 import src.web_server as web_server
 from src.main import run_live_trading_job
