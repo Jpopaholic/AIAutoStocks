@@ -660,9 +660,13 @@ def generate_portfolio_decisions(
                 qty = 0.0
                 decision_reason = f"【智慧平倉安全過濾】無持股庫存，強制觀望。{merged_reason}"
             elif action == "SELL" or total_score < 70:
+                original_action = action
                 action = "SELL"
                 qty = holding_qty
-                decision_reason = f"【智慧平倉排隊】總評分 {total_score} 分表現疲弱，維持賣出平倉。{merged_reason}"
+                if original_action != "SELL" and total_score < 70:
+                    decision_reason = f"【智慧平倉強制賣出】因該股列於等候平倉名單且評分 {total_score} 分低於門檻 70，觸發強制平倉覆寫（經理人原意為：{pm_reason}）。【量化評分: {total_score}分】{analyst_reason}"
+                else:
+                    decision_reason = f"【智慧平倉排隊】總評分 {total_score} 分表現疲弱，維持賣出平倉。{merged_reason}"
             else:
                 action = "HOLD"
                 qty = 0.0
@@ -688,9 +692,13 @@ def generate_portfolio_decisions(
         if holding_qty > 0:
             # 賣出持股
             if action == "SELL" or total_score < 60:
+                original_action = action
                 action = "SELL"
                 qty = holding_qty
-                decision_reason = f"【量化評分賣出】總分 {total_score} 分低於持有門檻 60 (趨勢: {trend}, 動能: {momentum}, 量能: {volume}, 安全: {safety}, 大盤: {regime})。{merged_reason}"
+                if original_action != "SELL" and total_score < 60:
+                    decision_reason = f"【風控強制賣出】總分 {total_score} 分低於持有門檻 60 (趨勢: {trend}, 動能: {momentum}, 量能: {volume}, 安全: {safety}, 大盤: {regime})，觸發風控護欄覆寫（經理人原意為：{pm_reason}）。【量化評分: {total_score}分】{analyst_reason}"
+                else:
+                    decision_reason = f"【量化評分賣出】總分 {total_score} 分低於持有門檻 60 (趨勢: {trend}, 動能: {momentum}, 量能: {volume}, 安全: {safety}, 大盤: {regime})。{merged_reason}"
             else:
                 action = "HOLD"
                 qty = 0.0
