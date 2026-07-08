@@ -4,15 +4,15 @@
 [![Database](https://img.shields.io/badge/Database-Supabase-green.svg)](https://supabase.com/)
 [![LLM Engine](https://img.shields.io/badge/LLM-Gemini_API-orange.svg)](https://ai.google.dev/)
 
-`AIAutoStocks` 是一個基於 Large Language Model (LLM - Google Gemini API) 與 Supabase 的台股自動化量化交易排程系統。它能自動擷取台股歷史 K 線，結合「交易記憶與經驗管理器（Few-Shot Learning）」，由 AI 生成具備具體原因說明的交易決策（買入、賣出、觀望），並在交易完成後向 Discord Webhook 發送精美的富文本 Embed 每日結算報告。
+`AIAutoStocks` 是一個基於 Large Language Model (LLM - Google Gemini API) 與 Supabase 的台股自動化量化交易與排程控制系統。系統設計採用多層級 AI 決策架構，結合「交易記憶與經驗管理器（Few-Shot Learning）」，能自動擷取台股歷史日 K 線與技術指標，生成具備詳細理據的交易決策（買入、賣出、觀望）。
 
-系統設計支持**實時交易/模擬盤（Live Trading）**、**永豐沙盒模擬交易（Shioaji Simulation）**以及**歷史數據沙盒回測演練（Sandbox Simulation）**等多種模式。
+系統支援**實時交易/模擬盤 (Live Trading)**、**永豐沙盒模擬交易 (Shioaji Simulation)**、**歷史數據沙盒回測演練 (Sandbox Simulation)**，並配備一個具備 TOTP 二階段驗證的安全**網頁控制台儀表板**，方便追蹤損益與控制交易流程。
 
 ---
 
 ## 🏗️ 系統架構與特色
 
-本專案採用高度模組化的架構設計，各組件分工明確：
+本專案採用高度模組化、多層級 AI 代理與護欄防衛架構設計：
 
 ```mermaid
 graph TD
@@ -20,32 +20,60 @@ graph TD
     A --> C[supabase_client.py 資料庫]
     A --> D[stock_fetcher.py 台股數據]
     A --> E[sandbox_simulator.py 歷史演練]
-    A --> F[trading_agent.py AI 決策]
-    A --> K[regime_agent.py 大盤氣候]
+    A --> F[trading_agent.py AI 決策 Facade]
     
-    F --> G[gemini_rotator.py 金鑰輪替]
-    F --> H[trading_memory.py 交易記憶]
-    K --> G
+    W[web_server.py API 服務] --> A
+    W --> H1[static/index.html 控制面板]
+    W --> T[totp_service.py 二階驗證]
+    
+    F --> F1[regime_agent.py 大盤氣候]
+    F --> F2[analyst_agent.py 技術分析師]
+    F --> F3[decision_agent.py 投資組合經理]
+    
+    F2 --> G[gemini_rotator.py 金鑰輪替]
+    F2 --> M[trading_memory.py 交易記憶]
+    F3 --> G
+    F3 --> M
     
     A --> I[broker_connector.py 下單連接]
     A --> J[discord_notifier.py Discord報告]
+    A --> H2[health_check.py 系統診斷]
+    A --> N[nav_calculator.py NAV計算器]
+    
+    D --> TI[technical_indicators.py 技術指標]
+    A --> TM[time_manager.py 時間管理]
 ```
 
 ### 🌟 核心特色
-1. **多 Gemini API 金鑰輪替與冷卻機制 (`gemini_rotator.py`)**：
-   支援多組免費的 Gemini API 金鑰自動輪替。當某金鑰觸發 429 限制（RPM/RPD）時，系統會自動將其標記為冷卻，並切換至其他可用金鑰，確保決策流暢不中斷.
-2. **Few-Shot 交易記憶管理器 (`trading_memory.py`)**：
-   自 Supabase 讀取過往的交易損益，自動篩選高收益的「成功交易」與虧損的「失敗交易」作為經驗背景，動態注入 AI Prompt，使 AI 能從歷史經驗中學習。
-3. **無縫切換的數據模擬窗口 (`sandbox_simulator.py`)**：
-   在 `--mode sandbox` 下，模擬器會凍結真實帳戶與資金，利用 Supabase 的歷史 K 線重播行情。交易決策引擎與下單系統無需修改任何程式碼即可直接進行回測。
-4. **安全憑證解密管理器 (`credential_manager.py`)**：
-   利用 AES-256-GCM 演算法對敏感憑證（如真實券商憑證、API 密鑰）進行本機加密保存 (`credentials.enc`)，執行時透過環境變數傳入解密主密鑰 (`MASTER_KEY`)，確保憑證不外洩。
-5. **交易限額安全防呆機制 (`broker_connector.py`)**：
-   實作單筆交易限額、每日交易總額超限防護、防重複下單鎖定，避免因程式異常造成重大資金損失。
-6. **精美 Discord Webhook 報告 (`discord_notifier.py`)**：
-   使用富文本 Rich Embed 格式將每日報告發送至 Discord，包含當日交易盈虧、持股狀態與 AI 預測。
-7. **大盤氣候診斷機制 (`regime_agent.py`)**：
-   在進行個股交易決策前，系統會先分析大盤加權指數 (TAIEX) 的近期走勢，利用 AI 判定當前大盤的氣候（多頭、空頭、低波動盤整或高波動震盪），並生成對應的風險限額乘數 (Risk Multiplier) 與交易姿態，以動態限制交易額度，防範大盤系統性風險。
+
+1. **多層級 AI 智能決策管線**：
+   - **第一層：大盤氣候判定 (`regime_agent.py`)**：分析大盤加權指數 (TAIEX) 的走勢，判定當前氣候（如多頭、空頭、震盪），生成對應的風險限額乘數 (Risk Multiplier) 與交易姿態，防範大盤系統性風險。
+   - **第二層：技術分析師評分 (`analyst_agent.py`)**：為每檔股票在「趨勢、動能、成交量、安全防守、大盤一致性」五個維度進行量化評分 (0 ~ 20 分，滿分 100 分) 並生成技術分析原因。
+   - **第三層：投資組合配置經理 (`decision_agent.py`)**：橫向對比所有分析個股，做出最終的交易建議 (BUY / SELL / HOLD)，並配合 Python 端的「水箱分配演算法 (Water-Filling)」在單股限額與每日交易上限內動態分配買入資金與股數。
+   - **協調門面與故障防衛 (`trading_agent.py`)**：整合分析與決策管線，並在系統處於故障狀態 (SYSTEM FAULT) 時主動阻斷交易，實施安全避險。
+2. **Web UI 儀表板控制台 (`web_server.py` & `src/static/index.html`)**：
+   - 視覺化顯示當前帳戶資產淨值 (NAV)、現金餘額、持股庫存與各部位帳面損益。
+   - 即時編輯監控自選股清單、系統參數（如初始資金、風控限額比例、模擬/實盤模式）。
+   - 提供系統執行日誌 (system_logs) 檢視與手動觸發/停止 AI 交易排程。
+   - 支援手動平倉解鎖、手動庫存同步、以及手動解除全局系統故障鎖。
+3. **二階段驗證安全登入 (TOTP, `totp_service.py`)**：
+   - 網頁端提供 TOTP 安全防衛。若未指定環境變數 `TOTP_SECRET`，系統會基於解密主密鑰 (`MASTER_KEY`) 自動生成一組穩定的 Base32 金鑰。
+   - 登入時會提示您掃描 QR Code 綁定 Authenticator App，大幅提升遠端部署與雲端容器運作的安全性。
+4. **雙時區與虛擬時間軸調度 (`time_manager.py`)**：
+   - 內建台灣時間 (Asia/Taipei) 與 UTC 的日期區間轉換。
+   - 支援在歷史模擬回測時，無縫凍結真實時間、改為驅動虛擬沙盒日期，使回測結果的時間戳與資料庫一致。
+5. **運行前自檢與下單安全預檢 (`health_check.py`)**：
+   - 啟動前進行系統健康檢查 (Pre-flight Diagnostics)，驗證 Supabase、Gemini API、永豐證券 (實盤下) 連線是否順暢。
+   - 下單前進行交易審查 (Pre-order Safety Audit)，嚴格比對台股漲跌幅限制 (±10%)、是否符合台股升降單位 (Tick Size)、以及是否超額。
+6. **多 Gemini API 金鑰輪替與冷卻機制 (`gemini_rotator.py`)**：
+   - 支援多組免費/付費的 Gemini API 金鑰自動輪替。當某金鑰觸發 429 限制（RPM/RPD）時，自動標記冷卻並切換至其他可用金鑰，確保決策不中斷。
+7. **Few-Shot 交易記憶管理器 (`trading_memory.py`)**：
+   - 自 Supabase 讀取過往平倉交易記錄，動態篩選出高收益的「成功交易」與虧損的「失敗交易」作為經驗背景注入 AI Prompt，供 AI 吸取歷史教訓。
+8. **安全憑證解密管理器 (`credential_manager.py`)**：
+   - 利用 AES-256-GCM 演算法將敏感憑證（Supabase Key、Discord Webhooks 網址、Gemini 多組 API Key、證券商 API Key 等）加密保存於 `credentials.enc`。
+   - 執行時透過環境變數傳入主密鑰 `MASTER_KEY` 於記憶體中解密，確保敏感憑證不外洩。
+9. **精美 Discord Webhook 報告 (`discord_notifier.py`)**：
+   - 使用富文本 Embed 格式將每日報告發送至 Discord，包含當日交易盈虧、持股狀態與 AI 預測。
 
 ---
 
@@ -55,26 +83,41 @@ graph TD
 AIAutoStocks/
 ├── src/
 │   ├── agents/
+│   │   ├── analyst_agent.py        # 技術分析師代理 (K線多維度評分與技術指標分析)
+│   │   ├── decision_agent.py       # 投資組合配置經理代理 (水箱預算分配與風控護欄)
 │   │   ├── regime_agent.py        # 大盤氣候診斷代理 (分析大盤走勢與風險限額乘數)
-│   │   └── trading_agent.py       # AI 交易決策代理 (Prompt 工程與 JSON Schema 輸出)
+│   │   └── trading_agent.py       # 雙層 Agent 管線門面 (Facade) 與故障防守機制
 │   ├── services/
-│   │   ├── broker_connector.py    # 證券商下單連接器 (防呆與超限防護)
+│   │   ├── broker_connector.py    # 證券商下單連接器 (防呆、超限防護與模擬下單)
 │   │   ├── credential_manager.py  # 安全憑證與金鑰管理器 (AES-GCM 解密)
 │   │   ├── discord_notifier.py    # Discord 每日報告與警報發送器
 │   │   ├── gemini_rotator.py      # Gemini API 金鑰輪替與冷卻重試
-│   │   ├── sandbox_simulator.py   # 沙盒回測演練與歷史數據重播
-│   │   ├── stock_fetcher.py       # 台股數據擷取器 (K線與即時報價)
-│   │   ├── supabase_client.py     # Supabase 連線與 CRUD 封裝
-│   │   └── trading_memory.py      # 交易記憶與經驗管理器
+│   │   ├── health_check.py        # 運行前診斷與下單安全審查器
+│   │   ├── nav_calculator.py      # 資產淨值 (NAV) 計算與動態限額快取
+│   │   ├── sandbox_simulator.py   # 沙盒回測演練與歷史行情重播器
+│   │   ├── stock_fetcher.py       # 台股與大盤 K 線與即時報價擷取器
+│   │   ├── supabase_client.py     # Supabase 連線與資料庫 CRUD 封裝
+│   │   ├── technical_indicators.py# 價格/成交量指標計算器 (SMA, EMA, RSI, MACD, DMI)
+│   │   ├── totp_service.py        # TOTP 驗證與 Session Token 管理服務
+│   │   └── trading_memory.py      # 交易得失與經驗檢索管理器
+│   ├── static/
+│   │   └── index.html             # Web Dashboard 控制台前端頁面
 │   ├── config.py                  # 配置與環境變數驗證器
-│   └── main.py                    # 系統總入口/命令列排程引擎
+│   ├── main.py                    # 系統總入口/命令列排程引擎
+│   ├── time_manager.py            # 時區與模擬/真實時間軸協調器
+│   └── web_server.py              # FastAPI Web API 與手動交易背景執行服務
 ├── tests/                         # 單元測試 (pytest)
 ├── config.json                    # 本機外部配置檔 (不提交敏感金鑰)
 ├── config.example.json            # 外部配置檔範本
-├── Dockerfile                     # 容器部署配置
+├── credentials.enc                # 加密後的安全憑證檔案 (可安全上傳 Git)
+├── credentials.example.json       # 敏感憑證設定檔範本
+├── encrypt_credentials.py         # 憑證加密與解密測試工具
+├── import_history.py              # 台股歷史 K 線批次下載與導入器
+├── fly.toml                       # Fly.io 容器部署配置
+├── Dockerfile                     # 容器部署 Dockerfile
 ├── requirements.txt               # 專案依賴套件
-├── main.py                        # 根目錄執行檔入口 (簡化指令)
-├── README.md                      # 專案說明文件
+├── main.py                        # 根目錄執行檔入口 (簡化 CLI 指令)
+└── README.md                      # 專案說明文件
 ```
 
 ---
@@ -90,7 +133,7 @@ pip install -r requirements.txt
 ```
 
 ### 2. 配置系統設定檔 (`config.json`)
-將根目錄下的 `config.example.json` 複製並命名為 `config.json`，然後填入您的網頁 UI 與系統參數設定：
+將根目錄下的 `config.example.json` 複製並命名為 `config.json`，然後填入您的系統與帳戶參數設定：
 ```json
 {
   "GEMINI_MODEL": "gemini-1.5-flash",
@@ -106,66 +149,86 @@ pip install -r requirements.txt
 }
 ```
 > [!IMPORTANT]
-> - `config.json` 只保留供前端網頁 UI 調整的安全防呆與模擬參數，敏感的資安金鑰已徹底抽離至加密憑證檔。
-> - `MASTER_KEY` 為您自訂的解密主密鑰，用於在系統啟動時解密您的敏感憑證。
+> - `config.json` 保留給無敏感資訊的安全防呆、時區與模擬起訖設定，敏感密鑰均抽離至加密憑證檔。
+> - `MASTER_KEY` 為您的解密主密鑰，用於解密敏感憑證檔 (`credentials.enc`)，請務必設定複雜且安全的字串。
 
 ### 3. 配置安全憑證與加密檔案 (`credentials.enc`)
-為了確保真實帳密（如 Supabase 金鑰、Discord Webhook 網址、Gemini 多組 API Key、永豐證券 Shioaji API Key、身分證字號、CA 憑證密碼等）不外洩或被意外提交至 Git 倉庫，本系統提供憑證加密機制。
+為了避免真實帳密（如 Supabase 密鑰、Discord Webhooks 網址、Gemini 多組 API Key、證券商 API Key 等）意外上傳至 Git，系統提供憑證加密機制：
 
-#### 步驟：
 1. **複製憑證範本**：
-   將專案根目錄的 `credentials.example.json` 複製並命名為 `credentials.json`：
    ```bash
    cp credentials.example.json credentials.json
    ```
 2. **填寫真實憑證**：
-   開啟 `credentials.json`，填入您的真實敏感設定：
-   ```json
-   {
-     "geminiApiKeys": [
-       "your-gemini-api-key-1",
-       "your-gemini-api-key-2"
-     ],
-     "supabase": {
-       "url": "https://your-project-id.supabase.co",
-       "key": "your-supabase-anon-or-service-role-key"
-     },
-      "discord": {
-        "webhookSandbox": "https://discord.com/api/webhooks/your-sandbox-webhook-url-here",
-        "webhookLive": "https://discord.com/api/webhooks/your-live-webhook-url-here"
-      },
-     "brokerCredentials": {
-       "apiId": "your-sinopac-api-id",
-       "apiSecret": "your-sinopac-api-secret",
-       "password": "your-ca-certificate-password",
-       "certificatePath": "path/to/your/sinopac_ca_cert.pfx",
-       "personId": "your-taiwan-id"
-     }
-   }
-   ```
+   開啟 `credentials.json` 填入您的真實金鑰設定（包含 `geminiApiKeys` 陣列、`supabase`、`discord` 及 `brokerCredentials` 資訊）。
 3. **執行加密工具**：
-   執行加密腳本，將 `credentials.json` 使用 `config.json` 中的 `MASTER_KEY` 加密為安全憑證檔 `credentials.enc`：
    ```bash
    python encrypt_credentials.py
    ```
-   加密完畢後，腳本會詢問您是否要刪除明文的 `credentials.json`，請輸入 `y` 確認刪除以策安全。
+   加密完成後會生成安全憑證檔 `credentials.enc`。腳本會詢問是否刪除明文 `credentials.json`，請確認刪除。
 
-> [!WARNING]
-> - 明文的 `credentials.json` 含有敏感帳密，已自動被加入 `.gitignore` 與 `.dockerignore`，**請絕對不要將其公開或上傳**。
-> - 加密後的 `credentials.enc` 可安全地伴隨代碼上傳或部署。系統啟動時會讀取配置並動態解密合併至記憶體中。
+---
 
+## 🚀 執行模式與指令說明
 
-### 4. Supabase 資料庫建置
-請在您的 Supabase 專案中，前往 **SQL Editor** 執行以下 SQL 語法以建立所需的資料表：
-請在您的 Supabase 專案中，前往 **SQL Editor** 執行專案根目錄下 [supabase_schema.sql](file:///Users/jpopaholic/Documents/AIAutoStocks/supabase_schema.sql) 的全部內容，以建立以下 7 張資料表、對應的加速查詢索引與初始設定值：
+### 1. 實時交易/模擬盤模式 (Live Trading Mode)
+實時獲取自選監控股票的最新歷史 K 線並儲存至 Supabase，接著呼叫 AI 決策代理生成交易訊號，並執行下單。內建跳過週末非交易日邏輯，適合設定為每日 Cron 排程任務。
+```bash
+# 預設模式（以台積電 2330、聯發科 2454 為例）
+python main.py --mode live --stocks 2330,2454
+```
+
+### 2. 沙盒歷史回測模擬模式 (Sandbox Mode)
+根據您指定的起訖時間，重播 Supabase 中已儲存的歷史日 K 線資料，以測試 AI 的交易決策表現與收益率。所有訂單及持股變動均會寫入帶有 `is_paper = true` 的資料表中，且不會觸發真實下單 API。
+```bash
+# 執行指定時間區間的歷史數據沙盒演練
+python main.py --mode sandbox --stocks 2330,2454 --start-date 2026-05-01 --end-date 2026-06-08
+```
+> [!TIP]
+> 進行沙盒回測前，請確保 Supabase 中已存有該時段的 K 線數據（可利用 `import_history.py` 下載）。
+
+### 3. 一鍵下車/清空持股模式 (Liquidate Mode)
+立即獲取當前帳戶模式下的所有持股倉位，自動獲取盤中即時報價對每檔持股送出 `SELL` 委託進行平倉，並同步關閉自動交易開關 (`AUTO_TRADING_ACTIVE = false`)，實現一鍵防禦性平倉。
+```bash
+python main.py --mode liquidate
+```
+
+### 4. 永豐金證券 API 沙盒模擬交易 (永豐沙盒)
+若要在真實排程流程中測試與證券商 API 的連接，而不用實彈下單，請在 `credentials.json` 的 `brokerCredentials` 區塊加入 `"simulation": true`，系統啟動時會連線至永豐模擬交易主機，且報告與安全警報會自動標記 `永豐沙盒` 發送至 Discord。
+
+### 5. 啟動 Web UI 儀表板控制台 (FastAPI Dashboard)
+本系統附帶一個基於 FastAPI 實作的 Web 控制面板，方便視覺化追蹤庫存損益、手動調整自選股與動態參數、檢視日誌、手動執行排程與進行故障解鎖。
+```bash
+python src/web_server.py
+```
+啟動後在瀏覽器開啟 `http://localhost:8080` (預設為 8080 埠，可透過環境變數 `PORT` 修改)。
+
+#### 🔒 二階段登入驗證 (TOTP)
+- 登入網頁需要輸入 6 位數 TOTP 驗證碼。
+- 若未在配置中指定 `TOTP_SECRET`，系統會基於您的 `MASTER_KEY` 自動生成一組穩定的 Base32 金鑰。
+- 在網頁登入介面，首次將提示您使用 Google Authenticator 等應用程式掃描網頁上的 QR Code 綁定。
+
+### 6. 台股歷史數據導入
+若要進行 sandbox 回測演練，資料表必須存有對應時間段的 K 線數據。可利用此批次導入工具：
+```bash
+# 下載指定期間的個股數據與大盤加權指數 (TAIEX) 的歷史日 K 線並寫入 Supabase
+python import_history.py --stocks top5 --start-date 2026-05-01 --end-date 2026-06-08
+```
+
+---
+
+## 🗄️ Supabase 資料庫建置 (SQL Schema)
+
+請在您的 Supabase 專案中，前往 **SQL Editor** 執行專案根目錄下 [supabase_schema.sql](file:///Users/jpopaholic/Documents/AIAutoStocks/supabase_schema.sql) 的全部內容，以建立以下 8 張資料表、加速查詢索引與初始設定值：
 
 1. `watchlist` — 自選監控股票清單（支援 Upsert）
 2. `holdings` — 目前持股明細（支援 Paper Trading / 實盤劃分）
-3. `trade_orders` — 交易訂單歷史紀錄
-4. `stock_klines` — 股票歷史日 K 線數據
-5. `system_logs` — 系統運行日誌
+3. `trade_orders` — 交易訂單歷史紀錄（包含委託狀態 `status`、實際成交價 `execution_price` 與券商委託單號 `order_id`）
+4. `stock_klines` — 股票歷史日 K 線數據（包含自定義技術指標欄位）
+5. `system_logs` — 系統運行日誌（提供網頁端即時查詢，自動 TTL 清理 7 天）
 6. `system_config` — 動態系統配置參數（提供網頁前端進行動態覆蓋）
 7. `gemini_keys_state` — Gemini API 金鑰輪替與冷卻狀態
+8. `daily_analysis` — 每日 AI 分析執行紀錄（記錄大盤氣候、交易姿態與風險乘數）
 
 <details>
 <summary>點擊展開完整的 SQL 建表與初始化語法</summary>
@@ -190,11 +253,6 @@ CREATE INDEX IF NOT EXISTS idx_watchlist_stock_code ON watchlist (stock_code);
 
 -- 啟用 Row Level Security（建議，但 service role key 可繞過）
 ALTER TABLE watchlist ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "service role full access" ON watchlist
-    USING (true) WITH CHECK (true);
-
--- 初始測試資料（可選，執行後可從前端刪除）
--- INSERT INTO watchlist (stock_code) VALUES ('2330'), ('2454') ON CONFLICT DO NOTHING;
 
 
 -- -----------------------------------------------------------------------------
@@ -214,8 +272,6 @@ CREATE INDEX IF NOT EXISTS idx_holdings_stock_code ON holdings (stock_code);
 CREATE INDEX IF NOT EXISTS idx_holdings_is_paper   ON holdings (is_paper);
 
 ALTER TABLE holdings ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "service role full access" ON holdings
-    USING (true) WITH CHECK (true);
 
 
 -- -----------------------------------------------------------------------------
@@ -231,7 +287,10 @@ CREATE TABLE IF NOT EXISTS trade_orders (
     total_amount  NUMERIC(18, 4) NOT NULL,
     realized_pnl  NUMERIC(18, 4) NOT NULL DEFAULT 0,
     is_paper      BOOLEAN NOT NULL DEFAULT TRUE,
-    executed_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    executed_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    execution_price NUMERIC(18, 4),                     -- 實際成交價
+    status        TEXT NOT NULL DEFAULT 'PENDING',    -- 訂單狀態: PENDING, FILLED, CANCELLED, FAILED
+    order_id      TEXT                                -- 券商委託單號
 );
 
 CREATE INDEX IF NOT EXISTS idx_trade_orders_stock_code   ON trade_orders (stock_code);
@@ -239,8 +298,6 @@ CREATE INDEX IF NOT EXISTS idx_trade_orders_executed_at  ON trade_orders (execut
 CREATE INDEX IF NOT EXISTS idx_trade_orders_is_paper     ON trade_orders (is_paper);
 
 ALTER TABLE trade_orders ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "service role full access" ON trade_orders
-    USING (true) WITH CHECK (true);
 
 
 -- -----------------------------------------------------------------------------
@@ -262,8 +319,6 @@ CREATE TABLE IF NOT EXISTS stock_klines (
 CREATE INDEX IF NOT EXISTS idx_stock_klines_stock_date ON stock_klines (stock_code, date DESC);
 
 ALTER TABLE stock_klines ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "service role full access" ON stock_klines
-    USING (true) WITH CHECK (true);
 
 
 -- -----------------------------------------------------------------------------
@@ -283,8 +338,6 @@ CREATE INDEX IF NOT EXISTS idx_system_logs_level      ON system_logs (level);
 CREATE INDEX IF NOT EXISTS idx_system_logs_is_paper   ON system_logs (is_paper);
 
 ALTER TABLE system_logs ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "service role full access" ON system_logs
-    USING (true) WITH CHECK (true);
 
 
 -- -----------------------------------------------------------------------------
@@ -300,8 +353,6 @@ CREATE TABLE IF NOT EXISTS system_config (
 CREATE INDEX IF NOT EXISTS idx_system_config_key ON system_config (key);
 
 ALTER TABLE system_config ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "service role full access" ON system_config
-    USING (true) WITH CHECK (true);
 
 -- 預設動態配置初始值（可從前端覆蓋）
 INSERT INTO system_config (key, value) VALUES
@@ -333,48 +384,29 @@ CREATE TABLE IF NOT EXISTS gemini_keys_state (
 CREATE INDEX IF NOT EXISTS idx_gemini_keys_key_hash ON gemini_keys_state (key_hash);
 
 ALTER TABLE gemini_keys_state ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "service role full access" ON gemini_keys_state
-    USING (true) WITH CHECK (true);
+
+
+-- -----------------------------------------------------------------------------
+-- 8. daily_analysis — 每日 AI 分析執行紀錄
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS daily_analysis (
+    id              BIGSERIAL PRIMARY KEY,
+    analysis_date   DATE NOT NULL,                   -- 台灣當日日期 (e.g. 2026-07-08)
+    is_paper        BOOLEAN NOT NULL DEFAULT TRUE,   -- TRUE=沙盒, FALSE=實盤
+    trigger_type    TEXT NOT NULL DEFAULT 'auto',    -- 'auto' 或 'manual'
+    regime          TEXT,                            -- 大盤氣候狀態 (e.g. 'BULLISH_TREND')
+    posture         TEXT,                            -- 交易姿態 (e.g. 'MODERATE')
+    risk_multiplier NUMERIC(6, 2),                   -- 風險乘數
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_daily_analysis_date    ON daily_analysis (analysis_date DESC);
+CREATE INDEX IF NOT EXISTS idx_daily_analysis_paper   ON daily_analysis (is_paper);
+CREATE INDEX IF NOT EXISTS idx_daily_analysis_trigger ON daily_analysis (trigger_type);
+
+ALTER TABLE daily_analysis ENABLE ROW LEVEL SECURITY;
 ```
 </details>
-
----
-
-## 🚀 執行模式說明
-
-### 1. 實時交易/模擬盤模式 (Live Trading Mode)
-實時獲取目標股票的最新歷史 K 線並儲存至 Supabase，接著呼叫 AI 決策代理生成交易訊號，並執行下單。
-此模式內建**跳過週末非交易日**的邏輯，適合設定為每日 Cron 排程（如配合 Fly.io 或 Github Actions）。
-
-```bash
-# 預設模式（以台積電 2330、聯發科 2454 為例）
-python main.py --mode live --stocks 2330,2454
-```
-
-### 2. 沙盒歷史回測模擬模式 (Sandbox Mode)
-此模式會根據您指定的起訖時間，重播 Supabase 中已持久化的歷史 K 線資料，以測試 AI 的交易決策表現與收益率。所有訂單及持股變動均會寫入帶有 `is_paper = true` 的資料表中，且不會觸發真實下單 API。
-
-```bash
-# 執行 2026/06/01 至 2026/06/08 的歷史數據沙盒演練
-python main.py --mode sandbox --stocks 2330,2454 --start-date 2026-06-01 --end-date 2026-06-08
-```
-> [!TIP]
-> 進行沙盒演練前，請確保 Supabase 中已存有該時段的 K 線數據（可在 `live` 模式下先執行過一次，系統會自動下載並儲存最新的日 K 線歷史）。
-
-### 3. 一鍵下車/清空持股模式 (Liquidate Mode)
-此模式會立即獲取當前帳戶模式下的所有持股倉位（若 `PAPER_TRADING_MODE` 為 `true` 則清空模擬持股；為 `false` 則清空真實實盤持股），並自動獲取最新盤中即時報價（若非交易時間則使用歷史最新收盤價），對每檔股票送出 `SELL` 委託進行平倉，實現一鍵下車防禦。
-
-```bash
-# 執行一鍵下車清空持股
-python main.py --mode liquidate
-```
-
-### 4. 永豐金證券 API 沙盒模擬交易（永豐沙盒）
-若要在真實交易排程流程中測試與證券商 API 的連接，而不用實彈下單，本系統支援連接永豐金證券 API 的模擬交易伺服器（永豐沙盒）。
-- **啟用方式**：請在您的 `credentials.json` 檔案中，於 `brokerCredentials` 區塊加入 `"simulation": true`。
-- **特點**：
-  - 系統在初始化證券商 API (Shioaji SDK) 時，會帶入 `simulation=True` 以連線至永豐模擬交易主機。
-  - 所有交易通知報告與安全警報均會自動路由至 Discord 的 `webhookSandbox` (沙盒 Webhook)，並在報告中明確標記為 `永豐沙盒` 模式，以與一般回測（沙盒演練）或實際操盤進行區隔。
 
 ---
 
@@ -387,18 +419,17 @@ pytest
 ---
 
 ## 🐳 Docker 部署 (以 Fly.io 為例)
-本專案已備妥 `Dockerfile` 並預設安裝 `tzdata` 以設定台灣時區 (UTC+8)。
+本專案已備妥 `Dockerfile` 並預設設定台灣時區 (Asia/Taipei)。
 
 要在 **Fly.io** 上部署：
-1. 配置 Fly.io app：
+1. 初始化並配置 Fly.io app：
    ```bash
    fly launch
    ```
-2. 將包含解密主金鑰 `MASTER_KEY` 的 `config.json` 的全部內容作為 Secret 環境變數傳入：
+2. 將包含解密主密鑰 `MASTER_KEY` 的 `config.json` 內容作為 Secret 環境變數傳入：
    ```bash
    fly secrets set CONFIG_JSON="$(cat config.json)"
    ```
    > [!IMPORTANT]
-   > - 由於 `credentials.enc` 檔案為安全加密格式，它已在 `Dockerfile` 中設定隨代碼一同打包部署至容器中。
-   > - 容器啟動時，系統會自動使用從 Secrets 傳入的 `MASTER_KEY` 對容器內的 `credentials.enc` 進行解密，並載入 Supabase、Discord 及永豐證券等連線帳密，無須額外設定明文變數。
-3. 設定每日盤後定時執行排程任務。
+   > - `credentials.enc` 已隨程式碼封裝在容器中，執行時將自動透過 Secrets 傳入的 `MASTER_KEY` 解密並合併連線憑證。
+3. 在 Fly.io 上設定 Cron Job 定時排程以進行每日自動收盤量化分析交易。

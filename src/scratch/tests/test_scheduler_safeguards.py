@@ -100,7 +100,8 @@ class TestSchedulerSafeguards(unittest.TestCase):
         ]
         
         # 執行任務 (傳入空代號列表避免後續流程報錯)
-        with patch("src.main.get_taiwan_time", return_value=tw_now):
+        with patch("src.main.get_taiwan_time", return_value=tw_now), \
+             patch("src.main.supabase_client.get_daily_analysis_today", return_value=None):
             run_live_trading_job([])
             
             # 驗證日誌中有輸出跳過休市任務的訊息，且沒有執行後續動作
@@ -277,6 +278,7 @@ class TestSchedulerSafeguards(unittest.TestCase):
         # 5. 執行實盤交易排程
         # 為了避免進入後續真實決策/網路 API 呼叫，Mock trading_agent.generate_portfolio_decisions
         with patch("src.main.get_taiwan_time", return_value=tw_now), \
+             patch("src.main.supabase_client.get_daily_analysis_today", return_value=None), \
              patch("src.agents.trading_agent.generate_portfolio_decisions") as mock_decision, \
              patch("src.agents.regime_agent.generate_market_regime") as mock_regime:
              
