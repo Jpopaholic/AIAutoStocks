@@ -26,6 +26,7 @@ def _send_discord_webhook(webhook_url: str, payload: dict, retries: int = 3, del
             if response.status_code in (200, 204):
                 return True
             else:
+                # 💡 重點優化：把 response.text 印出來，看 Discord 到底卡什麼錯誤
                 print(f" [Discord通知器] 警告: 發送失敗 (HTTP {response.status_code}): {response.text}，將在 {delay}s 後重試...")
         except Exception as e:
             print(f" [Discord通知器] 警告: 連線失敗 (第 {attempt} 次嘗試): {str(e)}，將在 {delay}s 後重試...")
@@ -254,7 +255,7 @@ def send_daily_report(
         print(f" [Discord通知器] 警告: 載入停損清單失敗: {e}")
     section3_value = stop_loss_text
 
-    # ── 6. 欄位 4: 第三層買賣決策與原因 ──────────────────────────────────
+# ── 6. 欄位 4: 第三層買賣決策與原因 ──────────────────────────────────
     decisions_text = "今日無 AI 配置決策。"
     if portfolio_decision:
         ranking_analysis = portfolio_decision.get("ranking_analysis", "橫向對比分析中。")
@@ -274,12 +275,12 @@ def send_daily_report(
             qty_str = f" | 數量: {qty:,.0f} 股" if action != "HOLD" else ""
             decision_lines.append(
                 f"**{action_emoji}** {code}{name_display}{qty_str}\n"
-                f"└ *原因*: {reason[:120]}" # 限制字數防止爆版面
+                f"└ *原因*: {reason}" # 💡 移除 [:120] 截斷，保留完整原因，交由後續 _split_into_fields 動態切分欄位
             )
         decisions_text = "\n".join(decision_lines)
     elif ai_outlook:
         # 相容舊模式 (未傳入結構化變數時)
-        decisions_text = ai_outlook[:1000]
+        decisions_text = ai_outlook # 💡 移除 [:1000] 截斷，避免舊模式內容受限
         
     section4_value = decisions_text
 
@@ -315,12 +316,11 @@ def send_daily_report(
         fields.extend(_split_into_fields("🧠 4. 經理人交易配置與理由 (第三層)", section4_value, max_len=950))
 
         # ── Discord Embed 6000 字元限制：拆分多個 Embed 分批發送 ──
-        # 每個 Embed 的 title + description + 所有 fields 總字元不得超過 6000
-        # 每個 Embed 最多 25 個 fields
-        MAX_EMBED_CHARS = 5500  # 保守上限，留 500 字元緩衝
-        MAX_FIELDS_PER_EMBED = 25
+        # 💡 將安全防線降低，留足夠的空間給 Discord 後端緩衝，避免 500 錯誤
+        MAX_EMBED_CHARS = 4000  # 從 5500 調降至 4000，極致安全線
+        MAX_FIELDS_PER_EMBED = 10  # 單個卡片不要塞太多欄位，改為最多 10 個
 
-        base_chars = len(subject) + len(mode_label) + 50  # title + description 固定部分
+        base_chars = len(subject) + len(mode_label) + 100  # 固定寬鬆基底
 
         embeds = []
         current_fields = []
@@ -328,11 +328,19 @@ def send_daily_report(
 
         for field in fields:
             field_chars = len(field.get("name", "")) + len(field.get("value", ""))
-            # 若加入此 field 後超過上限，或 fields 數量已達上限，就先輸出目前 embed
+            
+            # 💡 防禦性檢查：如果單個 field 本身就超過單卡上限（理論上不應該，因為前面限制 950）
+            if field_chars + base_chars > MAX_EMBED_CHARS:
+                # 強制截斷這個極端欄位以保護系統不崩潰
+                field["value"] = field["value"][:(MAX_EMBED_CHARS - base_chars - 50)] + "\n...(因防禦限制截斷)..."
+                field_chars = len(field.get("name", "")) + len(field.get("value", ""))
+
+            # 若加入此 field 後會超過單張卡片上限，就先將目前的打包，並另開一張新卡
             if current_fields and (current_chars + field_chars > MAX_EMBED_CHARS or len(current_fields) >= MAX_FIELDS_PER_EMBED):
                 embeds.append(list(current_fields))
                 current_fields = []
                 current_chars = base_chars
+                
             current_fields.append(field)
             current_chars += field_chars
 
@@ -344,6 +352,8 @@ def send_daily_report(
         for embed_idx, embed_fields in enumerate(embeds):
             is_first = (embed_idx == 0)
             is_last = (embed_idx == len(embeds) - 1)
+            
+            # 💡 建立乾淨標準的 Embed 結構
             embed_obj = {
                 "color": color,
                 "fields": embed_fields,
@@ -352,7 +362,9 @@ def send_daily_report(
                 embed_obj["title"] = subject
                 embed_obj["description"] = f"**環境/模式**: `{mode_label}`"
             else:
-                embed_obj["title"] = f"{subject} (第 {embed_idx + 1} 部分)"
+                embed_obj["title"] = f"{subject} (第 {embed_idx + 1}/{len(embeds)} 部分)"
+                embed_obj["description"] = "*(續前文)*"
+                
             if is_last:
                 embed_obj["footer"] = {"text": "此報告由 AI 三層決策系統自動發送。"}
                 embed_obj["timestamp"] = ts
@@ -368,9 +380,10 @@ def send_daily_report(
                 err_msg = f"發送每日整合報告 (第 {embed_idx+1}/{len(embeds)} 部分) 至 Discord Webhook 失敗 (網址: {webhook_url})。"
                 log_system_event("ERROR", err_msg)
                 raise RuntimeError(err_msg)
-            # 若還有後續 embed，稍等 0.5s 避免 Discord 速率限制
+                
+            # 若還有後續 embed，延長等待時間至 1.0s，防止打爆 Discord API Rate Limit
             if not is_last:
-                time.sleep(0.5)
+                time.sleep(1.0)
 
         if all_success:
             log_system_event("INFO", f"已成功發送 {current_date_label} 每日整合報告至 Discord Webhook ({mode_label})，共 {len(embeds)} 個 Embed 訊息。")

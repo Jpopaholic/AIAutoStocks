@@ -684,10 +684,11 @@ def delete_orders_today() -> None:
     try:
         utc_start, utc_end = get_local_taiwan_midnight_utc_range()
         execute_with_retry(
-            lambda: supabase.table("orders")
+            lambda: supabase.table("trade_orders")
             .delete()
-            .gte("created_at", utc_start)
-            .lte("created_at", utc_end)
+            .eq("status","PENDING")
+            .gte("executed_at", utc_start)
+            .lte("executed_at", utc_end)
             .execute()
         )
         log_system_event("INFO", "手動重啟分析：已成功自 Supabase 清空今日所有交易訂單紀錄。")
