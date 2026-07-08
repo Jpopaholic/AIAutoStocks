@@ -27,11 +27,15 @@ def run_live_trading_job(stock_codes: List[str], is_manual: bool = False) -> Non
 
     tw_now = get_taiwan_time()
 
-    # 自動清理 7 天前的舊日誌
+    # 自動清理 7 天前的舊日誌 / 30 天前的舊分析紀錄
     try:
         supabase_client.prune_old_db_logs(days=7)
     except Exception as prune_err:
         print(f" [排程引擎] 警告: 自動清理舊日誌失敗: {prune_err}")
+    try:
+        supabase_client.prune_old_daily_analysis(days=30)
+    except Exception as prune_err:
+        print(f" [排程引擎] 警告: 自動清理舊分析紀錄失敗: {prune_err}")
         
     # 1. 跳過週末非交易日
     if tw_now.weekday() in (5, 6):
@@ -39,6 +43,62 @@ def run_live_trading_job(stock_codes: List[str], is_manual: bool = False) -> Non
         print(f" [排程引擎] {msg}")
         supabase_client.log_system_event("INFO", msg)
         return
+
+    # 1a. 自動分析排程時間視窗防護（手動分析不受限制）
+    # 自動分析必須在以下合法時段內才會執行：
+    #   1. 14:00 - 14:30 (盤後定僷/盤後零股交易)
+    #   2. 15:00 - 17:00 (次日盤中預約單)
+    if not is_manual:
+        from datetime import time as dt_time
+        tw_time_check = tw_now.time()
+        in_window = (
+            dt_time(14, 0) <= tw_time_check <= dt_time(14, 30)
+            or dt_time(15, 0) <= tw_time_check <= dt_time(17, 0)
+        )
+        if not in_window:
+            msg = (
+                f"自動分析時間視窗防護：目前時間 {tw_now.strftime('%H:%M:%S')} "
+                f"不在合法排程時段 (14:00-14:30 或 15:00-17:00)，跳過本次自動分析。"
+            )
+            print(f" [排程引擎] {msg}")
+            supabase_client.log_system_event("INFO", msg)
+            return
+
+        # 自動分析去重：若 daily_analysis 今日已有紀錄，直接跳過
+        existing_analysis = supabase_client.get_daily_analysis_today()
+        if existing_analysis:
+            msg = (
+                f"今日 ({existing_analysis.get('analysis_date')}) 已有 AI 分析紀錄（"
+                f"觸發類型: {existing_analysis.get('trigger_type')} | "
+                f"大盤: {existing_analysis.get('regime')} | "
+                f"更新時間: {existing_analysis.get('updated_at')}），"
+                f"跳過本次自動分析。"
+            )
+            print(f" [排程引擎] {msg}")
+            supabase_client.log_system_event("INFO", msg)
+            return
+
+    # 1b. 國定假日與臨時休市 (如颱風假) 自檢
+    # 透過比對中證道 TWSE API 最新交易日期來判斷今日是否應地前檢
+    # 手動分析同樣屬於盤後作業，同樣需要對實際開盤狀態全面防護
+    try:
+        from src.services import stock_fetcher as _sf_holiday
+        _tsmc_klines = _sf_holiday.fetch_stock_klines("2330")
+        if _tsmc_klines:
+            _latest_market_date = _tsmc_klines[-1]["date"]
+            _today_str = tw_now.strftime("%Y-%m-%d")
+            from datetime import time as _dt_time
+            # 證交所 STOCK_DAY API 通常在收盤後 (13:30) 甚至 14:00 之後才會更新今日 K 線
+            # 因此只有在 13:45 之後，才藉由比對今日與最新交易日來判斷是否休市
+            if tw_now.time() >= _dt_time(13, 45) and _latest_market_date != _today_str:
+                msg = f"今日 {_today_str} 無最新交易數據（最新交易日為 {_latest_market_date}），判斷為國定假日或臨時休市（如颱風假），自動跳過今日任務。"
+                print(f" [排程引擎] {msg}")
+                supabase_client.log_system_event("INFO", msg)
+                return
+        else:
+            print(" [排程引擎] 警告: 無法獲取基準股 (2330) 的 K 線，跳過休市自檢。")
+    except Exception as _holiday_err:
+        print(f" [排程引擎] 警告: 執行基準股休市自檢時發生異常: {_holiday_err}")
 
     if is_manual:
         msg = f"啟動盤後手動交易流程 (時間: {tw_now.strftime('%Y-%m-%d %H:%M:%S')})"
@@ -87,24 +147,7 @@ def run_live_trading_job(stock_codes: List[str], is_manual: bool = False) -> Non
         print(f" [排程引擎] 警告: 執行對帳同步任務時發生異常: {str(sync_err)}")
         supabase_client.log_system_event("WARN", f"對帳同步任務發生異常: {str(sync_err)}")
 
-    # 1b. 國定假日與臨時休市 (如颱風假) 自檢
-    try:
-        tsmc_klines = stock_fetcher.fetch_stock_klines("2330")
-        if tsmc_klines:
-            latest_market_date = tsmc_klines[-1]["date"]
-            today_str = tw_now.strftime("%Y-%m-%d")
-            from datetime import time as dt_time
-            # 證交所 STOCK_DAY API 通常在收盤後（13:30）甚至 13:40~14:00 之後才會更新今日 K 線。
-            # 因此，只有在 13:45 之後，我們才藉由比對今日與最新交易日來判斷是否休市；13:45 之前視為正常交易時段/或尚未更新，不以此自檢進行阻斷。
-            if tw_now.time() >= dt_time(13, 45) and latest_market_date != today_str:
-                msg = f"今日 {today_str} 無最新交易數據（最新交易日為 {latest_market_date}），判斷為國定假日或臨時休市（如颱風假），自動跳過今日任務。"
-                print(f" [排程引擎] {msg}")
-                supabase_client.log_system_event("INFO", msg)
-                return
-        else:
-            print(" [排程引擎] 警告: 無法獲取基準股 (2330) 的 K 線，跳過休市自檢。")
-    except Exception as check_err:
-        print(f" [排程引擎] 警告: 執行基準股休市自檢時發生異常: {check_err}")
+    # [已移對] 國定假日與臨時休市自檢已移至函式最前端（週末判斷之後，所有 side effects 之前執行）。
 
     # 確保關閉模擬時間軸模式，使用即時數據窗口
     sandbox_simulator.set_simulation_mode(False)
@@ -374,6 +417,19 @@ def run_live_trading_job(stock_codes: List[str], is_manual: bool = False) -> Non
         )
     except Exception as e:
         print(f" [排程引擎] Discord 報告發送失敗: {str(e)}")
+
+    # F. 分析全部完成後，寫入 daily_analysis 執行紀錄
+    # 只有在分析流程完整跑完（包含 Discord 報告發送）才記錄，
+    # 若中途崩潰則不會留紀錄，下次排程可正常重新執行。
+    try:
+        from src.time_manager import get_local_taiwan_date_str
+        supabase_client.save_daily_analysis(
+            analysis_date=get_local_taiwan_date_str(),
+            trigger_type="manual" if is_manual else "auto",
+            regime_assessment=regime_assessment,
+        )
+    except Exception as e:
+        print(f" [排程引擎] 警告: 寫入分析完成紀錄至 Supabase 失敗: {str(e)}")
 
 def run_sandbox_simulation(stock_codes: List[str], start_date: str, end_date: str, should_stop=None) -> None:
     """

@@ -695,4 +695,87 @@ def delete_orders_today() -> None:
         print(f" [Supabase] 清空今日交易紀錄失敗: {str(e)}")
 
 
+# ==========================================================================
+# 8. 每日 AI 分析結果快取 相關資料庫操作
+# ==========================================================================
 
+def save_daily_analysis(
+    analysis_date: str,
+    trigger_type: str,
+    regime_assessment: Optional[Dict[str, Any]] = None,
+    portfolio_decision: Optional[Dict[str, Any]] = None,
+) -> None:
+    """
+    新增一筆 AI 分析執行紀錄至 daily_analysis 資料表（每次執行都是新的一行）。
+    :param analysis_date: 台灣當日日期字串，格式 'YYYY-MM-DD'
+    :param trigger_type: 'auto' 或 'manual'
+    :param regime_assessment: 大盤氣候評估字典（可選，用於記錄摘要）
+    :param portfolio_decision: 保留相容性，實際不使用
+    """
+    is_paper = config.limits.is_paper_trading
+    record: Dict[str, Any] = {
+        "analysis_date": analysis_date,
+        "is_paper": is_paper,
+        "trigger_type": trigger_type,
+        "created_at": _get_current_time_iso(),
+    }
+    if regime_assessment:
+        record["regime"] = regime_assessment.get("regime")
+        record["posture"] = regime_assessment.get("posture")
+        record["risk_multiplier"] = regime_assessment.get("risk_multiplier")
+
+    try:
+        execute_with_retry(
+            lambda: supabase.table("daily_analysis")
+            .insert(record)
+            .execute()
+        )
+        print(f" [Supabase] 已新增 {analysis_date} ({trigger_type}) 分析執行紀錄至 daily_analysis。")
+    except Exception as e:
+        print(f" [Supabase] 警告: 寫入每日分析執行紀錄失敗: {str(e)}")
+
+
+def get_daily_analysis_today() -> Optional[Dict[str, Any]]:
+    """
+    查詢今日是否已有 AI 分析執行紀錄（依台灣時間日期）。
+    auto 和 manual 都計入去重判斷：
+    - 若今日已有 auto 紀錄 → 自動排程跳過
+    - 若今日已有 manual 紀錄 → 代表人工已介入處理，自動排程同樣跳過
+    回傳最新一筆紀錄或 None。
+    """
+    from src.time_manager import get_local_taiwan_date_str
+    is_paper = config.limits.is_paper_trading
+    today_str = get_local_taiwan_date_str()
+    try:
+        res = execute_with_retry(
+            lambda: supabase.table("daily_analysis")
+            .select("id, analysis_date, trigger_type, regime, posture, risk_multiplier, created_at")
+            .eq("analysis_date", today_str)
+            .eq("is_paper", is_paper)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return res[0] if res else None
+    except Exception as e:
+        print(f" [Supabase] 警告: 查詢今日分析紀錄失敗: {str(e)}")
+        return None
+
+
+
+def prune_old_daily_analysis(days: int = 30) -> None:
+    """
+    定期清理過舊的分析執行紀錄，預設保留最近 30 天。
+    """
+    from datetime import datetime, timedelta
+    cutoff_time = (datetime.utcnow() - timedelta(days=days)).isoformat() + "Z"
+    try:
+        execute_with_retry(
+            lambda: supabase.table("daily_analysis")
+            .delete()
+            .lt("created_at", cutoff_time)
+            .execute()
+        )
+        print(f" [日誌管理器] 已成功清理 {cutoff_time} 之前的舊分析執行紀錄（保留最近 {days} 天）。")
+    except Exception as e:
+        print(f" [日誌管理器] 警告: 清理舊分析執行紀錄失敗: {str(e)}")

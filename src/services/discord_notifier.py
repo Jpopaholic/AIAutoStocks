@@ -187,9 +187,13 @@ def send_daily_report(
 
     climate_header = (
         f"• **市場狀態**: `{regime_display}` | **交易姿態**: `{posture}`\n"
-        f"• **風險乘數**: `{risk_mult:.1f}` | **氣候分析**: {climate_reason[:80]}...\n"
+        f"• **風險乘數**: `{risk_mult:.1f}`\n"
+    )
+
+    account_header = (
         f"• **帳戶淨值 (NAV)**: **`{net_asset_value:,.0f}`** 元 (`{net_asset_roi:+.2f}%`)\n"
-        f"• **現金餘額**: `{cash_balance:,.0f}` 元 | **今日實現損益**: **`{today_realized_pnl:+,.0f}`** 元\n"
+        f"• **現金餘額**: `{cash_balance:,.0f}` 元\n"
+        f"• **今日實現損益**: **`{today_realized_pnl:+,.0f}`** 元\n"
     )
 
     # 交易列表 (使用 diff 美化)
@@ -300,8 +304,12 @@ def send_daily_report(
         
         # 動態分割長文字為多個 Embed Fields，以符合 Discord 的 1024 字元限制並防止截斷
         fields = []
-        fields.extend(_split_into_fields("🌦️ 1a. 大盤氣候 & 帳戶狀態", climate_header, max_len=950))
-        fields.extend(_split_into_fields("💸 1b. 本日交易明細", trades_text, syntax="diff", max_len=950))
+        fields.extend(_split_into_fields("🌦️ 1a. 大盤氣候狀態", climate_header, max_len=950))
+        # 氣候分析理由單獨作為一個可自動拆分的欄位，避免超過 1024 字元限制
+        if climate_reason:
+            fields.extend(_split_into_fields("📋 1b. 大盤氣候分析理由", climate_reason, max_len=950))
+        fields.extend(_split_into_fields("💰 1c. 帳戶資金狀態", account_header, max_len=950))
+        fields.extend(_split_into_fields("💸 1d. 本日交易明細", trades_text, syntax="diff", max_len=950))
         fields.extend(_split_into_fields("📈 2. 評分與相對排名 (第二層)", section2_value, max_len=950))
         fields.extend(_split_into_fields("🚨 3. 今日停損警告清單", section3_value, max_len=950))
         fields.extend(_split_into_fields("🧠 4. 經理人交易配置與理由 (第三層)", section4_value, max_len=950))

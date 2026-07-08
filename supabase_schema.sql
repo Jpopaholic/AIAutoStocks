@@ -153,6 +153,28 @@ CREATE INDEX IF NOT EXISTS idx_gemini_keys_key_hash ON gemini_keys_state (key_ha
 ALTER TABLE gemini_keys_state ENABLE ROW LEVEL SECURITY;
 
 
+-- -----------------------------------------------------------------------------
+-- 8. daily_analysis — 每日 AI 分析執行紀錄
+-- 用於記錄每次執行自動/手動分析的紀錄，每次執行都是新的一行
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS daily_analysis (
+    id              BIGSERIAL PRIMARY KEY,
+    analysis_date   DATE NOT NULL,                   -- 台灣當日日期 (e.g. 2026-07-08)
+    is_paper        BOOLEAN NOT NULL DEFAULT TRUE,   -- TRUE=沙盒, FALSE=實盤
+    trigger_type    TEXT NOT NULL DEFAULT 'auto',    -- 'auto' 或 'manual'
+    regime          TEXT,                            -- 大盤氣候狀態 (e.g. 'BULLISH_TREND')
+    posture         TEXT,                            -- 交易姿態 (e.g. 'MODERATE')
+    risk_multiplier NUMERIC(6, 2),                   -- 風險乘數
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_daily_analysis_date    ON daily_analysis (analysis_date DESC);
+CREATE INDEX IF NOT EXISTS idx_daily_analysis_paper   ON daily_analysis (is_paper);
+CREATE INDEX IF NOT EXISTS idx_daily_analysis_trigger ON daily_analysis (trigger_type);
+
+ALTER TABLE daily_analysis ENABLE ROW LEVEL SECURITY;
+
+
 -- =============================================================================
--- 完成！以上 7 張資料表即為 AIAutoStocks 系統的完整 Schema。
+-- 完成！以上 8 張資料表即為 AIAutoStocks 系統的完整 Schema。
 -- =============================================================================
