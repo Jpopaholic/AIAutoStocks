@@ -70,7 +70,7 @@ def on_startup():
             with is_running_lock:
                 if not is_running:
                     is_running = True
-                    t = threading.Thread(target=run_trading_job_in_background, daemon=True)
+                    t = threading.Thread(target=run_trading_job_in_background, args=(True,), daemon=True)
                     t.start()
                     print(" [啟動任務] 已成功在背景自動重新啟動實時交易定時排程引擎 (永動機)。")
     except Exception as auto_err:
@@ -135,7 +135,50 @@ class WatchlistItem(BaseModel):
 class ConfigUpdate(BaseModel):
     settings: Dict[str, Any]
 
-def run_trading_job_in_background():
+def resolve_current_stock_codes() -> List[str]:
+    """
+    動態獲取當前自選股與持股（優先 Supabase，回退本機 watchlist.json，並強制合併持股標的）
+    """
+    from src.services.supabase_client import get_db_watchlist, get_holdings, log_system_event
+    import os
+    import json as _json
+
+    stock_codes = []
+    try:
+        stock_codes = get_db_watchlist()
+        if stock_codes:
+            log_system_event("INFO", f"[對帳同步] 已成功自 Supabase 載入最新自選股: {stock_codes}")
+    except Exception as err:
+        log_system_event("WARN", f"[對帳同步] 無法自 Supabase 載入自選股: {str(err)}，嘗試讀取本機 watchlist.json")
+
+    if not stock_codes:
+        _wl_path = os.path.join(os.getcwd(), "watchlist.json")
+        if os.path.exists(_wl_path):
+            try:
+                with open(_wl_path, "r", encoding="utf-8") as _f:
+                    _local = _json.load(_f)
+                    if isinstance(_local, list) and _local:
+                        stock_codes = _local
+                        log_system_event("INFO", f"[對帳同步] 已自本機 watchlist.json 載入自選股: {stock_codes}")
+            except Exception as _fe:
+                log_system_event("WARN", f"[對帳同步] 讀取本機 watchlist.json 失敗: {str(_fe)}")
+
+    try:
+        current_holdings = get_holdings()
+        held_codes = [h["stock_code"] for h in current_holdings if h.get("stock_code")]
+        added_from_holdings = [c for c in held_codes if c not in stock_codes]
+        if added_from_holdings:
+            stock_codes = stock_codes + added_from_holdings
+            log_system_event("INFO", f"[對帳同步] 已將目前持股強制合併至分析標的: {added_from_holdings} → 總標的: {stock_codes}")
+        if not stock_codes and held_codes:
+            stock_codes = held_codes
+            log_system_event("INFO", f"[對帳同步] 自選股為空，以目前持股作為分析標的: {stock_codes}")
+    except Exception as h_err:
+        log_system_event("WARN", f"[對帳同步] 獲取目前持股失敗，僅以自選股為準: {str(h_err)}")
+
+    return stock_codes
+
+def run_trading_job_in_background(is_startup: bool = False):
     global is_running, last_run_status, last_run_time, stop_requested
     try:
         from src.services.supabase_client import log_system_event, prune_old_db_logs
@@ -156,42 +199,8 @@ def run_trading_job_in_background():
         stop_requested = False  # 每次啟動前重置停止旗標
         start_mode_is_paper = config.limits.is_paper_trading
         
-        # 1. 獲取當前自選股（優先 Supabase，回退本機 watchlist.json）
-        stock_codes = []
-        try:
-            stock_codes = get_db_watchlist()
-            if stock_codes:
-                log_system_event("INFO", f"已成功自 Supabase 載入自選股: {stock_codes}")
-        except Exception as err:
-            log_system_event("WARN", f"無法自 Supabase 載入自選股: {str(err)}，嘗試讀取本機 watchlist.json")
-
-        if not stock_codes:
-            # 回退讀本機 watchlist.json（不再使用寫死的預設股票）
-            import json as _json
-            _wl_path = os.path.join(os.getcwd(), "watchlist.json")
-            if os.path.exists(_wl_path):
-                try:
-                    with open(_wl_path, "r", encoding="utf-8") as _f:
-                        _local = _json.load(_f)
-                        if isinstance(_local, list) and _local:
-                            stock_codes = _local
-                            log_system_event("INFO", f"已自本機 watchlist.json 載入自選股: {stock_codes}")
-                except Exception as _fe:
-                    log_system_event("WARN", f"讀取本機 watchlist.json 失敗: {str(_fe)}")
-
-        # 1b. 強制合併目前的持股標的（持倉股永遠進入 AI 決策範疇，確保能執行賣出）
-        try:
-            current_holdings = get_holdings()
-            held_codes = [h["stock_code"] for h in current_holdings if h.get("stock_code")]
-            added_from_holdings = [c for c in held_codes if c not in stock_codes]
-            if added_from_holdings:
-                stock_codes = stock_codes + added_from_holdings
-                log_system_event("INFO", f"已將目前持股強制合併至分析標的: {added_from_holdings} → 總標的: {stock_codes}")
-            if not stock_codes and held_codes:
-                stock_codes = held_codes
-                log_system_event("INFO", f"自選股為空，以目前持股作為分析標的: {stock_codes}")
-        except Exception as h_err:
-            log_system_event("WARN", f"獲取目前持股失敗，僅以自選股為準: {str(h_err)}")
+        # 1. 獲取當前自選股與持股
+        stock_codes = resolve_current_stock_codes()
 
         if not stock_codes:
             log_system_event("WARN", "自選股與持股均為空，本輪交易任務取消。")
@@ -215,12 +224,16 @@ def run_trading_job_in_background():
             from src.main import run_live_trading_job
             from src.time_manager import get_local_taiwan_datetime
             
-            # 第一步：手動觸發時，立即執行第一輪實盤交易任務
-            log_system_event("INFO", "[永動機] 手動觸發啟動：立即執行第一輪實盤交易任務")
-            run_live_trading_job(stock_codes)
+            last_run_date_memory = None
+
+            if is_startup:
+                log_system_event("INFO", "[永動機] 伺服器重啟/重新部署自檢完成，進入等待排程狀態（無立即執行）。")
+            else:
+                log_system_event("INFO", "[永動機] 手動觸發啟動：立即執行第一輪實盤交易任務 (手動分析重置模式)")
+                run_live_trading_job(stock_codes, is_manual=True)
+                last_run_date_memory = get_local_taiwan_datetime().date()
             
-            last_run_date = get_local_taiwan_datetime().date()
-            log_system_event("INFO", f"[永動機] 已完成初始交易輪次。進入每日定時自動交易循環 (目標時間: 每日 14:00-14:30 盤後 或 15:00-17:00 預約，排除週末)")
+            log_system_event("INFO", f"[永動機] 進入每日定時自動交易循環 (目標時間: 每日 14:00-14:30 盤後 或 15:00-17:00 預約，排除週末)")
             
             # 進入永動機定時排程循環
             while not stop_requested:
@@ -244,37 +257,43 @@ def run_trading_job_in_background():
                 tw_now = get_local_taiwan_datetime()
                 current_date = tw_now.date()
                 
-                # 若跨天
-                if current_date > last_run_date:
-                    # 判斷是否在合法的自動下單時段內：
-                    # 1. 14:00 - 14:30 (當日盤後定價/盤後零股交易，撮合在 14:30)
-                    # 2. 15:00 - 17:00 (次日盤中交易預約單)
-                    # 避開 14:30 - 15:00 券商非委託空窗期，防止下單失敗被阻斷
-                    from datetime import time as dt_time
-                    tw_time = tw_now.time()
-                    in_after_hours_window = (dt_time(14, 0) <= tw_time <= dt_time(14, 30))
-                    in_pre_order_window = (dt_time(15, 0) <= tw_time <= dt_time(17, 0))
-                    
-                    if in_after_hours_window or in_pre_order_window:
-                        # 排除週末 (週六是 5, 週日是 6)
-                        if tw_now.weekday() not in (5, 6):
-                            log_system_event("INFO", f"[永動機] 跨天偵測觸發：開始執行當日 ({current_date}) 實盤自動交易...")
+                # 判斷是否在合法的自動下單時段內：
+                # 1. 14:00 - 14:30 (當日盤後定價/盤後零股交易，撮合在 14:30)
+                # 2. 15:00 - 17:00 (次日盤中交易預約單)
+                # 避開 14:30 - 15:00 券商非委託空窗期，防止下單失敗被阻斷
+                from datetime import time as dt_time
+                tw_time = tw_now.time()
+                in_after_hours_window = (dt_time(14, 0) <= tw_time <= dt_time(14, 30))
+                in_pre_order_window = (dt_time(15, 0) <= tw_time <= dt_time(17, 0))
+                
+                if (in_after_hours_window or in_pre_order_window) and tw_now.weekday() not in (5, 6):
+                    # 若今日尚未執行過 (記憶體層級判斷)
+                    if last_run_date_memory != current_date:
+                        # 從資料庫進行去重校驗，防止重新部署後重複執行
+                        from src.services.supabase_client import has_trading_job_run_today
+                        if not has_trading_job_run_today(is_paper=start_mode_is_paper):
+                            log_system_event("INFO", f"[永動機] 進入排程時段 ({tw_now.strftime('%H:%M:%S')}) 且今日未執行，開始執行交易任務...")
                             # 更新最後執行狀態與時間
                             from src.time_manager import get_local_taiwan_datetime_str
                             last_run_time = get_local_taiwan_datetime_str()
                             last_run_status = "定時任務執行中..."
                             try:
-                                run_live_trading_job(stock_codes)
+                                # 每次執行定時自動交易前，動態重新獲取最新的自選股與持股
+                                current_stock_codes = resolve_current_stock_codes()
+                                if not current_stock_codes:
+                                    log_system_event("WARN", "[永動機] 當前自選股與持股均為空，跳過本輪排程。")
+                                else:
+                                    run_live_trading_job(current_stock_codes)
                                 last_run_status = "定時任務成功完成"
                                 log_system_event("INFO", f"[永動機] 當日 ({current_date}) 實盤自動交易順利完成。")
                             except Exception as ex:
                                 last_run_status = f"定時任務失敗: {str(ex)}"
                                 log_system_event("ERROR", f"[永動機] 執行定時自動交易出錯: {str(ex)}")
                         else:
-                            log_system_event("INFO", f"[永動機] 今日 ({current_date}) 為週末非交易日，跳過當日定時交易排程。")
+                            log_system_event("INFO", f"[永動機] 進入排程時段，但偵測到今日已執行過交易，跳過本次排程。")
                         
-                        # 不論成敗或週末，皆標記為此日已處理，避免在該時段內重複觸發
-                        last_run_date = current_date
+                        # 標記為今日已處理，避免今日重複觸發
+                        last_run_date_memory = current_date
         
         if stop_requested:
             last_run_status = "已被使用者手動停止"
@@ -314,7 +333,15 @@ def get_status():
         enhanced_holdings = []
         try:
             holdings = get_holdings()
-            from src.services.stock_fetcher import get_display_price
+            from src.services.stock_fetcher import get_display_price, fetch_realtime_quotes_batch
+            # 預先批次獲取即時報價，減少網路請求
+            try:
+                stock_codes = [h["stock_code"] for h in holdings if h.get("stock_code")]
+                if stock_codes:
+                    fetch_realtime_quotes_batch(stock_codes)
+            except Exception as batch_err:
+                print(f"[Web API] 預先批次獲取即時報價失敗: {batch_err}")
+
             for h in holdings:
                 stock_code = h["stock_code"]
                 qty = float(h["quantity"])
@@ -740,7 +767,7 @@ def api_trigger_run(background_tasks: BackgroundTasks):
         except Exception as io_err:
             print(f"[Web API] 警告: 無法寫入 config.json (可能為唯讀檔案系統): {str(io_err)}")
 
-    t = threading.Thread(target=run_trading_job_in_background, daemon=True)
+    t = threading.Thread(target=run_trading_job_in_background, args=(False,), daemon=True)
     t.start()
     return {"status": "ok", "message": "自動交易排程已成功在背景啟動，且已重啟自動交易開關！"}
 

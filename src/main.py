@@ -15,19 +15,18 @@ def get_taiwan_time() -> datetime:
     """
     return get_local_taiwan_datetime()
 
-def run_live_trading_job(stock_codes: List[str]) -> None:
+def run_live_trading_job(stock_codes: List[str], is_manual: bool = False) -> None:
     """
-    執行真實/模擬盤後自動化交易任務 (定時 Cron 觸發)
+    執行真實/模擬盤後自動化或手動交易任務
     """
     if not config.is_auto_trading_active:
-        msg = "自動交易已被停用 (AUTO_TRADING_ACTIVE=false)，跳過本次自動交易排程委託。"
+        msg = "自動交易已被停用 (AUTO_TRADING_ACTIVE=false)，跳過本次交易排程委託。"
         print(f" [排程引擎] {msg}")
         supabase_client.log_system_event("INFO", msg)
         return
 
     tw_now = get_taiwan_time()
 
-    
     # 自動清理 7 天前的舊日誌
     try:
         supabase_client.prune_old_db_logs(days=7)
@@ -41,7 +40,10 @@ def run_live_trading_job(stock_codes: List[str]) -> None:
         supabase_client.log_system_event("INFO", msg)
         return
 
-    msg = f"啟動盤後自動化交易流程 (時間: {tw_now.strftime('%Y-%m-%d %H:%M:%S')})"
+    if is_manual:
+        msg = f"啟動盤後手動交易流程 (時間: {tw_now.strftime('%Y-%m-%d %H:%M:%S')})"
+    else:
+        msg = f"啟動盤後自動化交易流程 (時間: {tw_now.strftime('%Y-%m-%d %H:%M:%S')})"
     print(f" [排程引擎] {msg}")
     supabase_client.log_system_event("INFO", msg)
 
@@ -50,8 +52,18 @@ def run_live_trading_job(stock_codes: List[str]) -> None:
     from src.services.nav_calculator import clear_limits_cache
     from src.agents import trading_agent
 
+    # 若為手動分析，先取消今日券商所有委託並刪除今日資料庫訂單紀錄
+    if is_manual:
+        try:
+            print(" [排程引擎] 手動重新分析觸發：正在取消今日券商委託並清除今日交易紀錄...")
+            broker_connector.cancel_all_orders_today()
+            supabase_client.delete_orders_today()
+        except Exception as reset_err:
+            print(f" [排程引擎] 警告: 手動重置今日交易時發生異常: {reset_err}")
+
     # 優先清除今日交易限額快取
-    clear_limits_cache()
+    # 如果是手動重啟分析，不要清空今日已停損股票清單，因為要保留停損記錄以進行「物理過濾」
+    clear_limits_cache(clear_stop_loss=not is_manual)
 
     # 0. 執行系統健康狀態檢查 (Pre-flight System Diagnostics)
     healthy, details = health_check.run_preflight_checks()
@@ -113,6 +125,19 @@ def run_live_trading_job(stock_codes: List[str]) -> None:
             supabase_client.log_system_event("INFO", f"已將目前持股合併至分析標的: {added_from_holdings} → 總標的: {stock_codes}")
     except Exception as h_err:
         print(f" [排程引擎] 警告: 獲取目前持股以合併分析標的時發生異常: {str(h_err)}")
+
+    # 物理 (程式) 剔除今天已經停損的股票，免除分析
+    try:
+        from src.services.supabase_client import get_stop_loss_stocks_today
+        stop_loss_stocks = get_stop_loss_stocks_today()
+        if stop_loss_stocks:
+            original_codes = list(stock_codes)
+            stock_codes = [c for c in stock_codes if c not in stop_loss_stocks]
+            filtered_out = [c for c in original_codes if c in stop_loss_stocks]
+            if filtered_out:
+                supabase_client.log_system_event("INFO", f"[排程引擎] 物理過濾：股票 {filtered_out} 今日已被停損，本次免除分析與決策。")
+    except Exception as filter_err:
+        print(f" [排程引擎] 警告: 執行停損股票物理過濾時發生異常: {filter_err}")
 
     # A-0. 抓取大盤加權指數 (TAIEX) 的最新 K 線歷史數據並儲存
     from datetime import timedelta
@@ -341,7 +366,12 @@ def run_live_trading_job(stock_codes: List[str]) -> None:
     # E. 彙整今日交易損益與持股，發送每日報告至 Discord Webhook
     ai_outlook_str = "\n\n".join(ai_outlook_details)
     try:
-        discord_notifier.send_daily_report(ai_outlook_str, regime_assessment=regime_assessment)
+        discord_notifier.send_daily_report(
+            ai_outlook_str, 
+            regime_assessment=regime_assessment,
+            portfolio_decision=portfolio_decision,
+            is_manual=is_manual
+        )
     except Exception as e:
         print(f" [排程引擎] Discord 報告發送失敗: {str(e)}")
 
@@ -557,6 +587,23 @@ def _run_sandbox_simulation_internal(stock_codes: List[str], start_date: str, en
             regime_assessment = None
 
         ai_stock_codes = [c for c in klines_map.keys() if c != "TAIEX"]
+        
+        # 物理 (程式) 剔除今日已停損股票，免除 AI 分析
+        try:
+            from src.services.supabase_client import get_stop_loss_stocks_today
+            stop_loss_stocks = get_stop_loss_stocks_today()
+            if stop_loss_stocks:
+                original_codes = list(ai_stock_codes)
+                ai_stock_codes = [c for c in ai_stock_codes if c not in stop_loss_stocks]
+                filtered_out = [c for c in original_codes if c in stop_loss_stocks]
+                if filtered_out:
+                    print(f"   [沙盒排程引擎] 物理過濾：股票 {filtered_out} 今日已被停損，本次免除分析與決策。")
+                    for code in filtered_out:
+                        if code in klines_map:
+                            del klines_map[code]
+        except Exception as filter_err:
+            print(f"   [沙盒排程引擎] 警告: 執行停損股票物理過濾時發生異常: {filter_err}")
+
         try:
             portfolio_decision = trading_agent.generate_portfolio_decisions(
                 stock_codes=ai_stock_codes,
@@ -629,7 +676,11 @@ def _run_sandbox_simulation_internal(stock_codes: List[str], start_date: str, en
         # 該模擬日交易結束，發送模擬結算報告至 Discord Webhook
         ai_outlook_str = "\n\n".join(ai_outlook_details)
         try:
-            discord_notifier.send_daily_report(ai_outlook_str, regime_assessment=regime_assessment)
+            discord_notifier.send_daily_report(
+                ai_outlook_str, 
+                regime_assessment=regime_assessment,
+                portfolio_decision=portfolio_decision
+            )
         except Exception as e:
             print(f"   [模擬 Discord 報告發送失敗]: {str(e)}")
 

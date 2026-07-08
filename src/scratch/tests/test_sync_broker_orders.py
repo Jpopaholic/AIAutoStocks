@@ -126,11 +126,11 @@ class TestSyncBrokerOrders(unittest.TestCase):
 
     @patch("src.services.broker_connector.config")
     @patch("src.services.broker_connector.get_pending_real_orders")
-    @patch("src.services.broker_connector.update_order_status")
+    @patch("src.services.broker_connector.delete_order_db")
     @patch("src.services.broker_connector._get_shioaji_api")
     @patch("src.services.broker_connector.log_system_event")
     def test_sync_broker_orders_cancelled_scenario(
-        self, mock_log, mock_get_api, mock_update_order, mock_get_pending, mock_config
+        self, mock_log, mock_get_api, mock_delete_order, mock_get_pending, mock_config
     ):
         """
         Verify that CANCELLED status correctly releases purchasing power by setting total_amount = 0.0.
@@ -169,22 +169,15 @@ class TestSyncBrokerOrders(unittest.TestCase):
         sync_broker_orders()
         
         # 3. Assertions
-        mock_update_order.assert_called_once_with(
-            43,
-            {
-                "status": "CANCELLED",
-                "total_amount": 0.0,
-                "fee": 0.0
-            }
-        )
+        mock_delete_order.assert_called_once_with(43)
 
     @patch("src.services.broker_connector.config")
     @patch("src.services.broker_connector.get_pending_real_orders")
-    @patch("src.services.broker_connector.update_order_status")
+    @patch("src.services.broker_connector.delete_order_db")
     @patch("src.services.broker_connector._get_shioaji_api")
     @patch("src.services.broker_connector.log_system_event")
     def test_sync_broker_orders_missing_old_order_cancelled(
-        self, mock_log, mock_get_api, mock_update_order, mock_get_pending, mock_config
+        self, mock_log, mock_get_api, mock_delete_order, mock_get_pending, mock_config
     ):
         """
         Verify that a pending order from a previous day (not in broker trade list) is marked as CANCELLED.
@@ -220,27 +213,20 @@ class TestSyncBrokerOrders(unittest.TestCase):
         sync_broker_orders()
         
         # 3. Assertions: check that update_order_status was called to cancel it
-        mock_update_order.assert_called_once_with(
-            44,
-            {
-                "status": "CANCELLED",
-                "total_amount": 0.0,
-                "fee": 0.0
-            }
-        )
+        mock_delete_order.assert_called_once_with(44)
         # Check that log_system_event log has the info statement
         mock_log.assert_any_call(
             "INFO",
-            "[對帳同步] 找不到券商委託單號 sj-old-123 (2881 BUY)，券商端無此委託紀錄，判定為無效或已過期，自動將狀態更新為 CANCELLED。"
+            "[對帳同步] 找不到券商委託單號 sj-old-123 (2881 BUY)，券商端無此委託紀錄，判定為無效或已過期，已自動將其自資料庫刪除。"
         )
 
     @patch("src.services.broker_connector.config")
     @patch("src.services.broker_connector.get_pending_real_orders")
-    @patch("src.services.broker_connector.update_order_status")
+    @patch("src.services.broker_connector.delete_order_db")
     @patch("src.services.broker_connector._get_shioaji_api")
     @patch("src.services.broker_connector.log_system_event")
     def test_sync_broker_orders_missing_today_order_cancelled(
-        self, mock_log, mock_get_api, mock_update_order, mock_get_pending, mock_config
+        self, mock_log, mock_get_api, mock_delete_order, mock_get_pending, mock_config
     ):
         """
         Verify that a pending order from today (not in broker trade list) is ALSO cancelled.
@@ -275,18 +261,11 @@ class TestSyncBrokerOrders(unittest.TestCase):
         sync_broker_orders()
         
         # 3. Assertions: check that update_order_status was called to cancel it
-        mock_update_order.assert_called_once_with(
-            45,
-            {
-                "status": "CANCELLED",
-                "total_amount": 0.0,
-                "fee": 0.0
-            }
-        )
+        mock_delete_order.assert_called_once_with(45)
         # Check that log_system_event log has the info statement
         mock_log.assert_any_call(
             "INFO",
-            "[對帳同步] 找不到券商委託單號 sj-today-123 (2881 BUY)，券商端無此委託紀錄，判定為無效或已過期，自動將狀態更新為 CANCELLED。"
+            "[對帳同步] 找不到券商委託單號 sj-today-123 (2881 BUY)，券商端無此委託紀錄，判定為無效或已過期，已自動將其自資料庫刪除。"
         )
 
     @patch("src.services.broker_connector.supabase")

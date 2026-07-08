@@ -358,6 +358,17 @@ def update_order_status(order_id_db: int, updates: Dict[str, Any]) -> Any:
         .execute()
     )
 
+def delete_order_db(order_id_db: int) -> Any:
+    """
+    從資料庫中刪除指定 id 的訂單
+    """
+    return execute_with_retry(
+        lambda: supabase.table("trade_orders")
+        .delete()
+        .eq("id", order_id_db)
+        .execute()
+    )
+
 # ==========================================================================
 # 4. 系統日誌 相關資料庫操作
 # ==========================================================================
@@ -583,6 +594,105 @@ def set_system_fault_status(status: str, detail: str = "") -> None:
         log_system_event("WARN" if status == "FAULT" else "INFO", f"系統故障狀態已設為 {status} (詳情: {detail})")
     except Exception as e:
         print(f" [Supabase] 設定系統故障狀態失敗: {str(e)}")
+
+
+def has_trading_job_run_today(is_paper: bool = False) -> bool:
+    """
+    從資料庫 system_logs 查詢今日是否已經執行過自動化交易任務 (藉由比對 '啟動盤後自動化交易流程' 日誌)。
+    """
+    from src.time_manager import get_local_taiwan_midnight_utc_range
+    try:
+        utc_start, utc_end = get_local_taiwan_midnight_utc_range()
+        res = execute_with_retry(
+            lambda: supabase.table("system_logs")
+            .select("id")
+            .eq("level", "INFO")
+            .eq("is_paper", is_paper)
+            .gte("created_at", utc_start)
+            .lte("created_at", utc_end)
+            .like("message", "%啟動盤後自動化交易流程%")
+            .limit(1)
+            .execute()
+        )
+        return len(res.data) > 0
+    except Exception as e:
+        err_str = str(e)
+        if "column \"is_paper\" of relation \"system_logs\" does not exist" in err_str or "PGRST204" in err_str or "42703" in err_str:
+            try:
+                res = execute_with_retry(
+                    lambda: supabase.table("system_logs")
+                    .select("id")
+                    .eq("level", "INFO")
+                    .gte("created_at", utc_start)
+                    .lte("created_at", utc_end)
+                    .like("message", "%啟動盤後自動化交易流程%")
+                    .limit(1)
+                    .execute()
+                )
+                return len(res.data) > 0
+            except Exception as retry_err:
+                print(f" [Supabase] 檢查今日交易紀錄失敗 (回退查詢): {str(retry_err)}")
+                return False
+        else:
+            print(f" [Supabase] 檢查今日交易紀錄失敗: {str(e)}")
+            return False
+
+
+def get_stop_loss_stocks_today() -> List[str]:
+    """
+    從資料庫 system_config 的 STOP_LOSS_STOCKS_TODAY 鍵值讀取今日已停損股票代號。
+    """
+    try:
+        config_dict = get_db_config()
+        val = config_dict.get("STOP_LOSS_STOCKS_TODAY", "")
+        return [c.strip() for c in val.split(",") if c.strip()]
+    except Exception as e:
+        print(f" [Supabase] 讀取今日停損股票清單失敗: {str(e)}")
+        return []
+
+
+def add_stop_loss_stock_today(stock_code: str) -> None:
+    """
+    將指定股票代號加入今日停損免除分析清單。
+    """
+    try:
+        stocks = get_stop_loss_stocks_today()
+        if stock_code not in stocks:
+            stocks.append(stock_code)
+            set_db_config("STOP_LOSS_STOCKS_TODAY", ",".join(stocks))
+            log_system_event("INFO", f"股票 {stock_code} 已加入今日停損免除 AI 分析清單。")
+    except Exception as e:
+        print(f" [Supabase] 寫入今日停損股票清單失敗: {str(e)}")
+
+
+def clear_stop_loss_stocks_today() -> None:
+    """
+    清空今日已停損免除分析清單。
+    """
+    try:
+        set_db_config("STOP_LOSS_STOCKS_TODAY", "")
+        log_system_event("INFO", "已成功清空今日停損免除 AI 分析清單。")
+    except Exception as e:
+        print(f" [Supabase] 清空今日停損清單失敗: {str(e)}")
+
+
+def delete_orders_today() -> None:
+    """
+    手動重啟分析前，刪除今日台灣時間內產生的所有訂單紀錄。
+    """
+    from src.time_manager import get_local_taiwan_midnight_utc_range
+    try:
+        utc_start, utc_end = get_local_taiwan_midnight_utc_range()
+        execute_with_retry(
+            lambda: supabase.table("orders")
+            .delete()
+            .gte("created_at", utc_start)
+            .lte("created_at", utc_end)
+            .execute()
+        )
+        log_system_event("INFO", "手動重啟分析：已成功自 Supabase 清空今日所有交易訂單紀錄。")
+    except Exception as e:
+        print(f" [Supabase] 清空今日交易紀錄失敗: {str(e)}")
 
 
 

@@ -74,6 +74,20 @@ def _get_with_retry(url: str, retries: int = 3, timeout: float = 10.0) -> reques
             
     raise last_err
 
+def _safe_json(response: requests.Response) -> Dict[str, Any]:
+    """
+    安全解析 requests 回傳的 JSON 內容，防止空字串或無效格式導致例外。
+    """
+    text = response.text
+    if not text or not text.strip():
+        return {}
+    try:
+        return response.json()
+    except Exception as e:
+        # 紀錄錯誤以供日後診斷，但不要直接噴錯
+        print(f" [數據擷取器] 解析 JSON 失敗，狀態碼={response.status_code}，內容長度={len(text)}，前100個字元={repr(text[:100])}")
+        return {}
+
 def fetch_stock_klines(stock_code: str, date_str: str = None) -> List[Dict[str, Any]]:
     """
     從台灣證券交易所 (TWSE) 獲取指定個股當月 (或指定日期所在月份) 的歷史 K 線數據
@@ -88,7 +102,7 @@ def fetch_stock_klines(stock_code: str, date_str: str = None) -> List[Dict[str, 
 
     try:
         response = _get_with_retry(url)
-        data = response.json()
+        data = _safe_json(response)
 
         if data.get("stat") != "OK" or "data" not in data:
             # 證交所 API 常在當日資料未準備好或尚未整理完成時回傳「查詢日期小於99年1月4日」等錯誤。
@@ -106,7 +120,7 @@ def fetch_stock_klines(stock_code: str, date_str: str = None) -> List[Dict[str, 
                 print(f" [數據擷取器] 查詢 {stock_code} 回應 {data.get('stat')}，嘗試回退至前一日 {fallback_date_str} 重新擷取...")
                 url = f"https://www.twse.com.tw/exchangeReport/STOCK_DAY?response=json&date={fallback_date_str}&stockNo={stock_code}"
                 response = _get_with_retry(url)
-                data = response.json()
+                data = _safe_json(response)
 
             if data.get("stat") != "OK" or "data" not in data:
                 print(f" [數據擷取器] 無法取得 {stock_code} 的 K 線數據，證交所回應: {data.get('stat')}")
@@ -214,7 +228,7 @@ def fetch_realtime_quotes_batch(stock_codes: List[str]) -> Dict[str, Dict[str, A
 
     try:
         response = _get_with_retry(url)
-        data = response.json()
+        data = _safe_json(response)
 
         if "msgArray" in data and len(data["msgArray"]) > 0:
             for info in data["msgArray"]:
@@ -259,10 +273,17 @@ def fetch_realtime_quotes_batch(stock_codes: List[str]) -> Dict[str, Dict[str, A
     except Exception as e:
         print(f" [數據擷取器] 批次獲取即時報價失敗: {str(e)}")
 
-    # For any stock that failed to fetch, cache empty result for 10 seconds to avoid spamming
+    # 計算失敗的快取時間：盤中交易時段 30 秒，非交易時段 300 秒 (5分鐘)
+    from src.time_manager import get_local_taiwan_datetime
+    from datetime import time as dt_time
+    local_dt = get_local_taiwan_datetime()
+    is_trading_hours = (local_dt.weekday() < 5 and dt_time(9, 0) <= local_dt.time() <= dt_time(13, 30))
+    fail_cache_ttl = 30.0 if is_trading_hours else 300.0
+
+    # 對於獲取失敗的股票，快取空結果以防頻繁請求
     for code in missing_codes:
         if code not in results:
-            _QUOTE_CACHE[code] = ({}, now - QUOTE_CACHE_TTL + 10.0)
+            _QUOTE_CACHE[code] = ({}, now - QUOTE_CACHE_TTL + fail_cache_ttl)
             results[code] = {}
 
     return results
@@ -283,7 +304,7 @@ def fetch_taiex_realtime_quote() -> Dict[str, Any]:
     url = "https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_t00.tw"
     try:
         response = _get_with_retry(url)
-        data = response.json()
+        data = _safe_json(response)
         if "msgArray" in data and len(data["msgArray"]) > 0:
             info = data["msgArray"][0]
             price = float(info.get("z", info.get("y", 0.0)))
@@ -322,7 +343,7 @@ def fetch_taiex_klines(date_str: str = None) -> List[Dict[str, Any]]:
 
     try:
         response = _get_with_retry(url)
-        data = response.json()
+        data = _safe_json(response)
 
         if data.get("stat") != "OK" or "data" not in data:
             print(f" [數據擷取器] 無法取得大盤加權指數的 K 線數據，證交所回應: {data.get('stat')}")

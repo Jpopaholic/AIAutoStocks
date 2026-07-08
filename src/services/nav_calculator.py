@@ -28,7 +28,15 @@ def calculate_nav() -> Tuple[float, float, float]:
                 holdings_value += qty * current_price
         else:
             # 即時/手動實時交易：使用全新顯示價格邏輯
-            from src.services.stock_fetcher import get_display_price
+            from src.services.stock_fetcher import get_display_price, fetch_realtime_quotes_batch
+            # 先行批次獲取所有持股的即時報價並寫入快取，減少網路請求
+            try:
+                stock_codes = [h["stock_code"] for h in holdings if h.get("stock_code")]
+                if stock_codes:
+                    fetch_realtime_quotes_batch(stock_codes)
+            except Exception as batch_err:
+                print(f" [NAV計算器] 預先批次獲取即時報價失敗: {batch_err}")
+
             for h in holdings:
                 stock_code = h["stock_code"]
                 qty = float(h["quantity"])
@@ -59,13 +67,19 @@ def calculate_nav() -> Tuple[float, float, float]:
 
 _cached_limits = None
 
-def clear_limits_cache() -> None:
+def clear_limits_cache(clear_stop_loss: bool = True) -> None:
     """
     清除動態限額快取。於每日排程工作或沙盒模擬交易日開始時呼叫。
     """
     global _cached_limits
     _cached_limits = None
     print(" [NAV計算器] 已清除動態交易限額快取。")
+    if clear_stop_loss:
+        try:
+            from src.services.supabase_client import clear_stop_loss_stocks_today
+            clear_stop_loss_stocks_today()
+        except Exception as e:
+            print(f" [NAV計算器] 警告: 清除今日已停損股票清單失敗: {str(e)}")
 
 def get_dynamic_limits() -> Tuple[float, float]:
     """

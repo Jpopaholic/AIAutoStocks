@@ -14,6 +14,7 @@ from src.services.supabase_client import (
     update_holding_after_fill,
     get_pending_real_orders,
     update_order_status,
+    delete_order_db,
     execute_with_retry,
     supabase
 )
@@ -498,12 +499,16 @@ def check_and_execute_hard_stop_losses() -> None:
             current_price = 0.0
         
         roi = (current_price - avg_price) / avg_price if avg_price > 0 else 0.0
-        
-        # 虧損達設定比例或以上觸發硬體停損
         hard_limit = config.limits.hard_stop_loss_pct
         if roi <= -hard_limit:
             msg = f"【硬體停損觸發】偵測到 {stock_code} 虧損達 {roi*100:.2f}% (成本: {avg_price} | 現價: {current_price} | 停損閾值: -{hard_limit*100:.1f}%)，執行強制平倉！"
             log_system_event("WARN", msg)
+            try:
+                from src.services.supabase_client import add_stop_loss_stock_today
+                add_stop_loss_stock_today(stock_code)
+            except Exception as se:
+                print(f" [硬體停損防線] 警告: 寫入今日停損股票清單失敗: {se}")
+
             try:
                 # 執行下單賣出全部股數
                 place_order(stock_code=stock_code, action="SELL", price=current_price, quantity=qty)
@@ -553,15 +558,10 @@ def sync_broker_orders() -> None:
                 continue
                 
             if order_id not in trade_map:
-                updates = {
-                    "status": "CANCELLED",
-                    "total_amount": 0.0,
-                    "fee": 0.0
-                }
-                update_order_status(order_db_id, updates)
+                delete_order_db(order_db_id)
                 log_system_event(
                     "INFO",
-                    f"[對帳同步] 找不到券商委託單號 {order_id} ({stock_code} {action})，券商端無此委託紀錄，判定為無效或已過期，自動將狀態更新為 CANCELLED。"
+                    f"[對帳同步] 找不到券商委託單號 {order_id} ({stock_code} {action})，券商端無此委託紀錄，判定為無效或已過期，已自動將其自資料庫刪除。"
                 )
                 continue
                 
@@ -629,16 +629,22 @@ def sync_broker_orders() -> None:
                     f" [對帳同步成功] 訂單 {order_id} 已成功轉為 FILLED | 實際成交價: {avg_exec_price} | 實際成交股數: {total_deal_qty} | 損益: {realized_pnl:,.0f} 元"
                 )
                 
-            elif status_name in ["Cancelled", "Failed"]:
+            elif status_name == "Cancelled":
+                delete_order_db(order_db_id)
+                log_system_event(
+                    "INFO",
+                    f" [對帳同步] 訂單 {order_id} 已由券商取消，已自動將其自資料庫刪除。"
+                )
+            elif status_name == "Failed":
                 updates = {
-                    "status": status_name.upper(),
+                    "status": "FAILED",
                     "total_amount": 0.0,
                     "fee": 0.0
                 }
                 update_order_status(order_db_id, updates)
                 log_system_event(
                     "INFO",
-                    f" [對帳同步] 訂單 {order_id} 已轉為 {status_name.upper()}，已釋放可用資金。"
+                    f" [對帳同步] 訂單 {order_id} 已轉為 FAILED，已釋放可用資金。"
                 )
             else:
                 log_system_event(
@@ -747,3 +753,43 @@ def sync_sandbox_orders(sim_date: str) -> None:
             "INFO",
             f" [模擬對帳成功] 訂單 ID {order_db_id} ({stock_code}) 於 {sim_date} 成交 | 成交價: {exec_price} | 股數: {qty}"
         )
+
+
+def cancel_all_orders_today() -> None:
+    """
+    用永豐 API 取消本日所有未成交的委託單。
+    """
+    if config.limits.is_paper_trading:
+        log_system_event("INFO", "[對帳取消] 模擬交易模式，跳過券商端 API 委託取消。")
+        return
+
+    try:
+        api = _get_shioaji_api()
+        if not api:
+            raise RuntimeError("無法初始化 Shioaji API 進行取消交易")
+            
+        if not api.stock_account:
+            log_system_event("WARN", "[對帳取消] 目前無可用證券帳號，無法取消交易。")
+            return
+            
+        api.update_status(api.stock_account)
+        trades = api.list_trades()
+        
+        cancelled_count = 0
+        for trade in trades:
+            status_name = trade.status.status
+            if status_name not in ["Filled", "Cancelled", "Failed", "Inactive"]:
+                try:
+                    api.cancel_order(trade)
+                    cancelled_count += 1
+                    print(f" [對帳取消] 已發送取消委託: {trade.contract.code} | 單號: {trade.order.id}")
+                except Exception as cancel_err:
+                    print(f" [對帳取消] 取消 {trade.contract.code} 委託失敗: {cancel_err}")
+                    
+        if cancelled_count > 0:
+            log_system_event("INFO", f"[對帳取消] 成功於永豐 API 取消 {cancelled_count} 筆未完成委託交易。")
+        else:
+            log_system_event("INFO", f"[對帳取消] 永豐端目前無任何未完成委託，無需進行取消。")
+    except Exception as e:
+        log_system_event("ERROR", f"[對帳取消] 於永豐 API 批量取消今日委託發生異常: {str(e)}")
+        raise

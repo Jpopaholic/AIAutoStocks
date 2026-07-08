@@ -105,28 +105,29 @@ def _split_into_fields(title_prefix: str, content: str, syntax: Optional[str] = 
 def send_daily_report(
     ai_outlook: str,
     override_orders: Optional[List[Dict[str, Any]]] = None,
-    regime_assessment: Optional[Dict[str, Any]] = None
+    regime_assessment: Optional[Dict[str, Any]] = None,
+    analyst_scores: Optional[List[Dict[str, Any]]] = None,
+    portfolio_decision: Optional[Dict[str, Any]] = None,
+    is_manual: bool = False
 ) -> None:
     """
-    彙整今日交易、持股現況、資產淨值與 AI 分析，產出 Discord Rich Embed 每日交易與狀態報告並發送
-    :param ai_outlook: AI 針對今日交易的反思或明日台股的分析預測
-    :param override_orders: 手動指定交易訂單列表（主要用於下車平倉報告，防止時區或沙盒時間軸不對而漏載）
+    彙整今日交易、大盤氣候、評分降序排名、今日停損警告與 AI 第三層決策原因，產出精簡的單一 Discord Embed 卡片報告。
     """
-
-    is_liquidation = override_orders is not None
     sim_active = sandbox_simulator.is_simulation_active()
     is_paper = config.limits.is_paper_trading
     shioaji_sim = config.shioaji_simulation
-    
     is_sandbox_mode = sim_active or is_paper or shioaji_sim
 
-    # ── 日期標籤與模式名稱：顯示與過濾用 ──────────────────────────────────────────────
-    if is_liquidation:
+    # ── 1. 時間與模式標籤 ───────────────────────────────────────────
+    if override_orders is not None:
         mode_label = "下車平倉"
         current_date_label = get_local_taiwan_datetime_str()
     elif sim_active:
         mode_label = "沙盒演練"
         current_date_label = get_effective_date_str()
+    elif is_manual:
+        mode_label = "手動分析"
+        current_date_label = get_local_taiwan_date_str()
     elif is_paper:
         mode_label = "模擬交易"
         current_date_label = get_local_taiwan_date_str()
@@ -137,7 +138,7 @@ def send_daily_report(
         mode_label = "實際操盤"
         current_date_label = get_local_taiwan_date_str()
 
-    # 1. 取得今日交易訂單
+    # ── 2. 獲取今日交易委託與成交狀態 ──────────────────────────────────
     if override_orders is not None:
         today_orders = override_orders
     else:
@@ -151,39 +152,7 @@ def send_daily_report(
             print(f" [Discord通知器] 無法取得今日交易紀錄: {str(e)}")
             today_orders = []
 
-    # 2. 取得目前持股明細，並動態查詢現價以估算市值
-    try:
-        holdings = get_holdings()
-    except Exception as e:
-        print(f" [Discord通知器] 無法取得持股明細: {str(e)}")
-        holdings = []
-
-    # 計算持股市值與未實現損益
-    holdings_value = 0.0
-    total_cost = 0.0
-    
-    from src.services.stock_fetcher import get_display_price
-    for h in holdings:
-        stock_code = h["stock_code"]
-        qty = float(h["quantity"])
-        avg_price = float(h["average_price"])
-        
-        # 依據全新顯示價格邏輯獲取現價
-        current_price = get_display_price(stock_code, fallback_price=avg_price)
-        
-        market_value = qty * current_price
-        cost = qty * avg_price
-        
-        holdings_value += market_value
-        total_cost += cost
-
-    # 3. 透過中央計算器計算帳戶資產淨值 (NAV)
-    from src.services.nav_calculator import calculate_nav
-    cash_balance, _, net_asset_value = calculate_nav()
-    initial_cash = config.limits.initial_cash
-    net_asset_roi = ((net_asset_value - initial_cash) / initial_cash * 100)
-
-    # 4. 計算今日交易已實現損益
+    # 計算實現損益
     today_realized_pnl = 0.0
     for o in today_orders:
         status = o.get("status", "FILLED")
@@ -191,13 +160,134 @@ def send_daily_report(
             realized_pnl = float(o.get("realized_pnl") or 0.0)
             today_realized_pnl += realized_pnl
 
-    # 5. 送出報告至 Discord Webhook
+    # 帳戶總覽 (NAV)
+    from src.services.nav_calculator import calculate_nav
+    cash_balance, _, net_asset_value = calculate_nav()
+    initial_cash = config.limits.initial_cash
+    net_asset_roi = ((net_asset_value - initial_cash) / initial_cash * 100)
+
+    # ── 3. 欄位 1: 大盤氣候與本日交易 ─────────────────────────────────
+    regime_display = "UNKNOWN"
+    risk_mult = 1.0
+    posture = "UNKNOWN"
+    climate_reason = ""
+    if regime_assessment:
+        regime = regime_assessment.get("regime", "UNKNOWN")
+        posture = regime_assessment.get("posture", "UNKNOWN")
+        risk_mult = regime_assessment.get("risk_multiplier", 1.0)
+        climate_reason = regime_assessment.get("reason", "")
+        
+        emoji_map = {
+            "BULLISH_TREND": "🐂 多頭趨勢",
+            "BEARISH_TREND": "🐻 空頭趨勢",
+            "CALM_RANGE": "🦀 低波動盤整",
+            "VOLATILE_RANGE": "🌪️ 高波動震盪"
+        }
+        regime_display = emoji_map.get(regime, regime)
+
+    climate_header = (
+        f"• **市場狀態**: `{regime_display}` | **交易姿態**: `{posture}`\n"
+        f"• **風險乘數**: `{risk_mult:.1f}` | **氣候分析**: {climate_reason[:80]}...\n"
+        f"• **帳戶淨值 (NAV)**: **`{net_asset_value:,.0f}`** 元 (`{net_asset_roi:+.2f}%`)\n"
+        f"• **現金餘額**: `{cash_balance:,.0f}` 元 | **今日實現損益**: **`{today_realized_pnl:+,.0f}`** 元\n"
+    )
+
+    # 交易列表 (使用 diff 美化)
+    trades_lines = []
+    for o in today_orders:
+        status = o.get("status", "FILLED")
+        action_label = "買" if o["action"] == "BUY" else "賣"
+        stock_name = get_stock_name(o['stock_code'])
+        name_display = f"({stock_name})" if stock_name else ""
+        qty = float(o.get("quantity") or 0.0)
+        limit_price = float(o.get("price") or 0.0)
+        exec_price = float(o.get("execution_price") or 0.0) if status == "FILLED" else limit_price
+        
+        prefix = "+" if o["action"] == "BUY" else "-"
+        status_str = "已成交" if status == "FILLED" else ("已取消" if status == "CANCELLED" else "委託中")
+        
+        line = f"{prefix} {action_label} {o['stock_code']}{name_display} | {qty:,.0f}股 | 均價:{exec_price:,.2f} | {status_str}"
+        if o["action"] == "SELL" and status == "FILLED":
+            realized = float(o.get("realized_pnl") or 0.0)
+            line += f" (已實現損益: {realized:+,.0f})"
+        trades_lines.append(line)
+
+    trades_text = "\n".join(trades_lines) if trades_lines else "今日無任何交易委託成交。"
+
+    # ── 4. 欄位 2: 評分與相對排名 (第二層) ────────────────────────────────
+    scores_text = "暫無分析師評分資料。"
+    target_scores = analyst_scores
+    if not target_scores and portfolio_decision and "decisions" in portfolio_decision:
+        target_scores = portfolio_decision["decisions"]
+        
+    if target_scores:
+        # 按總分降序排列
+        sorted_scores = sorted(target_scores, key=lambda x: x.get("total_score", 0), reverse=True)
+        score_lines = []
+        for idx, s in enumerate(sorted_scores):
+            stock_name = get_stock_name(s["stock_code"])
+            name_display = f" {stock_name}" if stock_name else ""
+            score_lines.append(
+                f"{idx+1}. {s['stock_code']}{name_display} | 總分: **{s['total_score']}** "
+                f"(趨勢:{s['trend_score']} 動能:{s['momentum_score']} 成交量:{s['volume_score']} 安全:{s['safety_score']} 大盤:{s['regime_score']})"
+            )
+        scores_text = "\n".join(score_lines)
+    section2_value = scores_text
+
+    # ── 5. 欄位 3: 今日停損警告清單 ──────────────────────────────────────
+    stop_loss_text = "🟢 今日無任何股票觸發停損。"
+    try:
+        from src.services.supabase_client import get_stop_loss_stocks_today
+        stop_loss_list = get_stop_loss_stocks_today()
+        if stop_loss_list:
+            stop_loss_details = []
+            for code in stop_loss_list:
+                name = get_stock_name(code)
+                name_display = f" ({name})" if name else ""
+                stop_loss_details.append(f"● {code}{name_display}")
+            stop_loss_text = "🚨 **今日停損排除清單 (後續免除 AI 分析)**:\n" + ", ".join(stop_loss_details)
+    except Exception as e:
+        print(f" [Discord通知器] 警告: 載入停損清單失敗: {e}")
+    section3_value = stop_loss_text
+
+    # ── 6. 欄位 4: 第三層買賣決策與原因 ──────────────────────────────────
+    decisions_text = "今日無 AI 配置決策。"
+    if portfolio_decision:
+        ranking_analysis = portfolio_decision.get("ranking_analysis", "橫向對比分析中。")
+        decision_lines = [f"**經理人橫向配置說明**:\n{ranking_analysis}\n"]
+        
+        raw_decs = portfolio_decision.get("decisions", [])
+        for d in raw_decs:
+            code = d.get("stock_code")
+            action = d.get("action", "HOLD")
+            qty = float(d.get("quantity") or 0.0)
+            reason = d.get("reason", "維持觀望。")
+            
+            action_emoji = "🟢 BUY" if action == "BUY" else ("🔴 SELL" if action == "SELL" else "⚪ HOLD")
+            stock_name = get_stock_name(code)
+            name_display = f" ({stock_name})" if stock_name else ""
+            
+            qty_str = f" | 數量: {qty:,.0f} 股" if action != "HOLD" else ""
+            decision_lines.append(
+                f"**{action_emoji}** {code}{name_display}{qty_str}\n"
+                f"└ *原因*: {reason[:120]}" # 限制字數防止爆版面
+            )
+        decisions_text = "\n".join(decision_lines)
+    elif ai_outlook:
+        # 相容舊模式 (未傳入結構化變數時)
+        decisions_text = ai_outlook[:1000]
+        
+    section4_value = decisions_text
+
+    # ── 7. 送出報告至 Discord Webhook ──────────────────────────────────
     webhook_url = config.discord.webhook_sandbox if is_sandbox_mode else config.discord.webhook_live
     
-    if is_liquidation:
-        subject = f"【AI下車平倉報告】{current_date_label} 結算回報 ({mode_label})"
+    if override_orders is not None:
+        subject = f"【AI下車平倉報告】{current_date_label} ({mode_label})"
+    elif is_manual:
+        subject = f"【AI手動交易報告】{current_date_label} ({mode_label})"
     else:
-        subject = f"【AI交易報告】{current_date_label} 台股結算回報 ({mode_label})"
+        subject = f"【AI交易報告】{current_date_label} ({mode_label})"
         
     if not webhook_url:
         err_msg = f"未配置 Discord Webhook 網址 (is_sandbox_mode={is_sandbox_mode})，無法發送每日報告。"
@@ -206,229 +296,76 @@ def send_daily_report(
         
     try:
         from datetime import datetime, timezone
+        color = 16744448 if override_orders is not None else (3447003 if is_sandbox_mode else 3066993)
         
-        # 建立已完成交易文字
-        completed_trades_text = ""
-        for o in today_orders:
-            status = o.get("status", "FILLED")
-            if status != "PENDING":
-                action_label = "買入" if o["action"] == "BUY" else "賣出"
-                stock_name = get_stock_name(o['stock_code'])
-                name_display = f" {stock_name}" if stock_name else ""
-                fee_val = float(o.get("fee") or 0.0)
-                qty = float(o.get("quantity") or 0.0)
-                
-                limit_price_val = o.get("price")
-                limit_price_display = f"{float(limit_price_val):,.2f}" if limit_price_val is not None else "--"
-                exec_price_val = o.get("execution_price")
-                exec_price_display = f"{float(exec_price_val):,.2f}" if status == "FILLED" and exec_price_val is not None else "--"
-                
-                realized_pnl = float(o.get("realized_pnl") or 0.0)
-                pnl_display = f" | 實現損益: {realized_pnl:+,.0f} 元" if o["action"] == "SELL" and status == "FILLED" else ""
-                
-                prefix = "+" if o["action"] == "BUY" else "-"
-                status_str = "已成交" if status == "FILLED" else ("已取消" if status == "CANCELLED" else "已失敗")
-                
-                completed_trades_text += f"{prefix} {action_label} {o['stock_code']}{name_display} | {qty:,.0f} 股 | 委託: {limit_price_display} | 成交: {exec_price_display} (規費: {fee_val:,.0f} 元){pnl_display} - {status_str}\n"
+        # 動態分割長文字為多個 Embed Fields，以符合 Discord 的 1024 字元限制並防止截斷
+        fields = []
+        fields.extend(_split_into_fields("🌦️ 1a. 大盤氣候 & 帳戶狀態", climate_header, max_len=950))
+        fields.extend(_split_into_fields("💸 1b. 本日交易明細", trades_text, syntax="diff", max_len=950))
+        fields.extend(_split_into_fields("📈 2. 評分與相對排名 (第二層)", section2_value, max_len=950))
+        fields.extend(_split_into_fields("🚨 3. 今日停損警告清單", section3_value, max_len=950))
+        fields.extend(_split_into_fields("🧠 4. 經理人交易配置與理由 (第三層)", section4_value, max_len=950))
 
-        # 建立未完成委託文字
-        pending_trades_text = ""
-        for o in today_orders:
-            status = o.get("status", "FILLED")
-            if status == "PENDING":
-                action_label = "買入" if o["action"] == "BUY" else "賣出"
-                stock_name = get_stock_name(o['stock_code'])
-                name_display = f" {stock_name}" if stock_name else ""
-                fee_val = float(o.get("fee") or 0.0)
-                qty = float(o.get("quantity") or 0.0)
-                limit_price_val = o.get("price")
-                limit_price_display = f"{float(limit_price_val):,.2f}" if limit_price_val is not None else "--"
-                
-                pending_trades_text += f"[{action_label}] {o['stock_code']}{name_display} | 數量: {qty:,.0f} 股 | 委託價: {limit_price_display} 元 (預估規費: {fee_val:,.0f} 元)\n"
+        # ── Discord Embed 6000 字元限制：拆分多個 Embed 分批發送 ──
+        # 每個 Embed 的 title + description + 所有 fields 總字元不得超過 6000
+        # 每個 Embed 最多 25 個 fields
+        MAX_EMBED_CHARS = 5500  # 保守上限，留 500 字元緩衝
+        MAX_FIELDS_PER_EMBED = 25
 
-        # 建立目前持股現況文字
-        holdings_text = ""
-        for h in holdings:
-            stock_code = h["stock_code"]
-            qty = float(h["quantity"])
-            avg_price = float(h["average_price"])
-            
-            current_price = get_display_price(stock_code, fallback_price=avg_price)
-            
-            market_value = qty * current_price
-            cost = qty * avg_price
-            unrealized_pnl = market_value - cost
-            unrealized_roi = (unrealized_pnl / cost * 100) if cost > 0 else 0.0
-            
-            stock_name = get_stock_name(stock_code)
-            name_display = f" {stock_name}" if stock_name else ""
-            
-            prefix = "+" if unrealized_pnl >= 0 else "-"
-            pnl_prefix = "+" if unrealized_pnl >= 0 else ""
-            
-            holdings_text += f"{prefix} {stock_code}{name_display} | {qty:,.0f} 股 | 均價: {avg_price:,.2f} | 現價: {current_price:,.2f} | 損益: {pnl_prefix}{unrealized_pnl:,.0f} 元 ({pnl_prefix}{unrealized_roi:.2f}%)\n"
+        base_chars = len(subject) + len(mode_label) + 50  # title + description 固定部分
 
-        # 定義長度防禦輔助函數
-        def safe_val(val: str, max_len: int = 1000) -> str:
-            if not val:
-                return "無"
-            val_str = str(val).strip()
-            if len(val_str) > max_len:
-                return val_str[:max_len - 3] + "..."
-            return val_str
+        embeds = []
+        current_fields = []
+        current_chars = base_chars
 
-        color = 15679812 if is_liquidation else (3899902 if is_sandbox_mode else 2278750)
-        ai_outlook_chunks = _split_text_by_length(ai_outlook, max_len=950)
+        for field in fields:
+            field_chars = len(field.get("name", "")) + len(field.get("value", ""))
+            # 若加入此 field 後超過上限，或 fields 數量已達上限，就先輸出目前 embed
+            if current_fields and (current_chars + field_chars > MAX_EMBED_CHARS or len(current_fields) >= MAX_FIELDS_PER_EMBED):
+                embeds.append(list(current_fields))
+                current_fields = []
+                current_chars = base_chars
+            current_fields.append(field)
+            current_chars += field_chars
 
-        # 1. 建立「投資組合帳戶總覽 & 大盤氣候」欄位與 Payload
-        overview_fields = [
-            {
-                "name": "💰 投資組合帳戶總覽",
-                "value": (
-                    f"可用現金餘額: `{cash_balance:,.0f}` 元\n"
-                    f"持股總市值: `{holdings_value:,.0f}` 元\n"
-                    f"資產淨總值 (NAV): **`{net_asset_value:,.0f}`** 元 (`{'+' if net_asset_roi >= 0 else ''}{net_asset_roi:.2f}%`)\n"
-                    f"今日已實現損益: **`{today_realized_pnl:+,.0f}`** 元"
-                ),
-                "inline": False
+        if current_fields:
+            embeds.append(current_fields)
+
+        ts = datetime.now(timezone.utc).isoformat()
+        all_success = True
+        for embed_idx, embed_fields in enumerate(embeds):
+            is_first = (embed_idx == 0)
+            is_last = (embed_idx == len(embeds) - 1)
+            embed_obj = {
+                "color": color,
+                "fields": embed_fields,
             }
-        ]
-
-        if regime_assessment:
-            regime = regime_assessment.get("regime", "UNKNOWN")
-            posture = regime_assessment.get("posture", "UNKNOWN")
-            risk_mult = regime_assessment.get("risk_multiplier", 1.0)
-            reason = regime_assessment.get("reason", "")
-            
-            emoji_map = {
-                "BULLISH_TREND": "🐂 多頭趨勢",
-                "BEARISH_TREND": "🐻 空頭趨勢",
-                "CALM_RANGE": "🦀 低波動盤整",
-                "VOLATILE_RANGE": "🌪️ 高波動震盪"
-            }
-            regime_display = emoji_map.get(regime, regime)
-            
-            regime_base_info = (
-                f"市場狀態: **`{regime_display}`**\n"
-                f"交易姿態: **`{posture}`**\n"
-                f"風險限額乘數: **`{risk_mult:.1f}`**\n"
-            )
-            
-            if reason:
-                reason_chunks = _split_text_by_length(f"分析理由: {reason}", max_len=900)
-                for idx, chunk in enumerate(reason_chunks):
-                    title = "🌦️ Market Regime 大盤氣候判定" if idx == 0 else f"🌦️ Market Regime 大盤氣候判定 (續 {idx+1})"
-                    val = (regime_base_info + chunk) if idx == 0 else chunk
-                    overview_fields.append({
-                        "name": title,
-                        "value": safe_val(val),
-                        "inline": False
-                    })
+            if is_first:
+                embed_obj["title"] = subject
+                embed_obj["description"] = f"**環境/模式**: `{mode_label}`"
             else:
-                overview_fields.append({
-                    "name": "🌦️ Market Regime 大盤氣候判定",
-                    "value": safe_val(regime_base_info),
-                    "inline": False
-                })
+                embed_obj["title"] = f"{subject} (第 {embed_idx + 1} 部分)"
+            if is_last:
+                embed_obj["footer"] = {"text": "此報告由 AI 三層決策系統自動發送。"}
+                embed_obj["timestamp"] = ts
 
-        overview_payload = {
-            "username": "AI 台股自動交易報告",
-            "embeds": [
-                {
-                    "title": f"💰 帳戶總覽 & 大盤氣候 - {subject}",
-                    "description": f"**環境/模式**: `{mode_label}`",
-                    "color": color,
-                    "fields": overview_fields,
-                    "footer": {
-                        "text": f"此報告由 AI 自動化交易系統發送。"
-                    },
-                    "timestamp": datetime.now(timezone.utc).isoformat()
-                }
-            ]
-        }
+            payload = {
+                "username": "AI 台股自動交易報告",
+                "embeds": [embed_obj]
+            }
 
-        # 2. 建立「今日交易與預約委託」欄位與 Payload
-        trades_fields = []
-        trades_fields.extend(_split_into_fields("🟢 今日已完成交易 (實際成交回報)", completed_trades_text or "今日無已完成交易成交紀錄", "diff"))
-        trades_fields.extend(_split_into_fields("⏳ 今日盤後 AI 新增委託 (預約明日交易)", pending_trades_text or "今日無新委託預約單紀錄", "ini"))
-        
-        trades_payload = {
-            "username": "AI 台股自動交易報告",
-            "embeds": [
-                {
-                    "title": f"🔄 今日交易與預約委託 - {subject}",
-                    "description": f"**環境/模式**: `{mode_label}`",
-                    "color": color,
-                    "fields": trades_fields,
-                    "footer": {
-                        "text": f"此報告由 AI 自動化交易系統發送。"
-                    },
-                    "timestamp": datetime.now(timezone.utc).isoformat()
-                }
-            ]
-        }
+            success = _send_discord_webhook(webhook_url, payload)
+            if not success:
+                all_success = False
+                err_msg = f"發送每日整合報告 (第 {embed_idx+1}/{len(embeds)} 部分) 至 Discord Webhook 失敗 (網址: {webhook_url})。"
+                log_system_event("ERROR", err_msg)
+                raise RuntimeError(err_msg)
+            # 若還有後續 embed，稍等 0.5s 避免 Discord 速率限制
+            if not is_last:
+                time.sleep(0.5)
 
-        # 3. 建立「目前持股現況」欄位與 Payload
-        holdings_fields = []
-        holdings_fields.extend(_split_into_fields("📈 目前持股現況", holdings_text or "目前帳戶無持股倉位", "diff"))
-        
-        holdings_payload = {
-            "username": "AI 台股自動交易報告",
-            "embeds": [
-                {
-                    "title": f"📊 目前持股現況 - {subject}",
-                    "description": f"**環境/模式**: `{mode_label}`",
-                    "color": color,
-                    "fields": holdings_fields,
-                    "footer": {
-                        "text": f"此報告由 AI 自動化交易系統發送。"
-                    },
-                    "timestamp": datetime.now(timezone.utc).isoformat()
-                }
-            ]
-        }
-
-        # 發送各區塊報告 (分開多個發送，徹底避免單個 payload 超過 Discord 限制的 6000 字元)
-        success_overview = _send_discord_webhook(webhook_url, overview_payload)
-        success_trades = _send_discord_webhook(webhook_url, trades_payload)
-        success_holdings = _send_discord_webhook(webhook_url, holdings_payload)
-
-        success = success_overview and success_trades and success_holdings
-        if success:
-            log_system_event("INFO", f"已成功發送 {current_date_label} 每日報告至 Discord Webhook ({mode_label})")
-            
-            # 額外獨立發送 AI 決策理由 (每 4 個 chunks 作為一個獨立的 Discord 訊息發送，防止超過 6000 字元)
-            if ai_outlook_chunks:
-                chunk_size = 4
-                for i in range(0, len(ai_outlook_chunks), chunk_size):
-                    sub_chunks = ai_outlook_chunks[i:i+chunk_size]
-                    outlook_fields = []
-                    for idx, chunk in enumerate(sub_chunks):
-                        global_idx = i + idx
-                        title = "🧠 AI 投資決策與詳細評分理由" if global_idx == 0 else f"🧠 AI 投資決策與詳細評分理由 (續 {global_idx+1})"
-                        outlook_fields.append({
-                            "name": title,
-                            "value": chunk,
-                            "inline": False
-                        })
-                    
-                    part_label = f" (第 {i//chunk_size + 1} 部分)" if len(ai_outlook_chunks) > chunk_size else ""
-                    outlook_payload = {
-                        "username": "AI 台股自動交易報告",
-                        "embeds": [
-                            {
-                                "title": f"🧠 {current_date_label} AI 決策理由與量化技術指標評估 ({mode_label}){part_label}",
-                                "color": 3447003,  # 寶藍色
-                                "fields": outlook_fields,
-                                "timestamp": datetime.now(timezone.utc).isoformat()
-                            }
-                        ]
-                    }
-                    _send_discord_webhook(webhook_url, outlook_payload)
-        else:
-            err_msg = f"發送每日報告至 Discord Webhook 失敗 (網址: {webhook_url})。"
-            log_system_event("ERROR", err_msg)
-            raise RuntimeError(err_msg)
+        if all_success:
+            log_system_event("INFO", f"已成功發送 {current_date_label} 每日整合報告至 Discord Webhook ({mode_label})，共 {len(embeds)} 個 Embed 訊息。")
     except Exception as e:
         log_system_event("ERROR", f"發送每日報告至 Discord Webhook 發生異常: {str(e)}")
         raise
