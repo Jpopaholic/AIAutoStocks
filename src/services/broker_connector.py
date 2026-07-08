@@ -553,7 +553,16 @@ def sync_broker_orders() -> None:
                 continue
                 
             if order_id not in trade_map:
-                log_system_event("WARN", f"[對帳同步] 找不到券商委託單號 {order_id}，可能尚未送出或非今日委託")
+                updates = {
+                    "status": "CANCELLED",
+                    "total_amount": 0.0,
+                    "fee": 0.0
+                }
+                update_order_status(order_db_id, updates)
+                log_system_event(
+                    "INFO",
+                    f"[對帳同步] 找不到券商委託單號 {order_id} ({stock_code} {action})，券商端無此委託紀錄，判定為無效或已過期，自動將狀態更新為 CANCELLED。"
+                )
                 continue
                 
             trade = trade_map[order_id]

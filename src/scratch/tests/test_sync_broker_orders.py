@@ -178,6 +178,117 @@ class TestSyncBrokerOrders(unittest.TestCase):
             }
         )
 
+    @patch("src.services.broker_connector.config")
+    @patch("src.services.broker_connector.get_pending_real_orders")
+    @patch("src.services.broker_connector.update_order_status")
+    @patch("src.services.broker_connector._get_shioaji_api")
+    @patch("src.services.broker_connector.log_system_event")
+    def test_sync_broker_orders_missing_old_order_cancelled(
+        self, mock_log, mock_get_api, mock_update_order, mock_get_pending, mock_config
+    ):
+        """
+        Verify that a pending order from a previous day (not in broker trade list) is marked as CANCELLED.
+        """
+        mock_config.limits.is_paper_trading = False
+        
+        from datetime import timedelta
+        from src.time_manager import get_local_taiwan_datetime
+        yesterday_str = (get_local_taiwan_datetime() - timedelta(days=1)).isoformat()
+        
+        # 1. Setup pending order from yesterday
+        mock_get_pending.return_value = [
+            {
+                "id": 44,
+                "stock_code": "2881",
+                "action": "BUY",
+                "price": 121.5,
+                "quantity": 100.0,
+                "fee": 10.0,
+                "total_amount": 12160.0,
+                "status": "PENDING",
+                "order_id": "sj-old-123",
+                "executed_at": yesterday_str
+            }
+        ]
+        
+        # 2. Setup mock Shioaji API response returning empty trades list
+        mock_api = MagicMock()
+        mock_get_api.return_value = mock_api
+        mock_api.list_trades.return_value = []
+        
+        # Execute sync
+        sync_broker_orders()
+        
+        # 3. Assertions: check that update_order_status was called to cancel it
+        mock_update_order.assert_called_once_with(
+            44,
+            {
+                "status": "CANCELLED",
+                "total_amount": 0.0,
+                "fee": 0.0
+            }
+        )
+        # Check that log_system_event log has the info statement
+        mock_log.assert_any_call(
+            "INFO",
+            "[對帳同步] 找不到券商委託單號 sj-old-123 (2881 BUY)，券商端無此委託紀錄，判定為無效或已過期，自動將狀態更新為 CANCELLED。"
+        )
+
+    @patch("src.services.broker_connector.config")
+    @patch("src.services.broker_connector.get_pending_real_orders")
+    @patch("src.services.broker_connector.update_order_status")
+    @patch("src.services.broker_connector._get_shioaji_api")
+    @patch("src.services.broker_connector.log_system_event")
+    def test_sync_broker_orders_missing_today_order_cancelled(
+        self, mock_log, mock_get_api, mock_update_order, mock_get_pending, mock_config
+    ):
+        """
+        Verify that a pending order from today (not in broker trade list) is ALSO cancelled.
+        """
+        mock_config.limits.is_paper_trading = False
+        
+        from src.time_manager import get_local_taiwan_datetime
+        today_str = get_local_taiwan_datetime().isoformat()
+        
+        # 1. Setup pending order from today
+        mock_get_pending.return_value = [
+            {
+                "id": 45,
+                "stock_code": "2881",
+                "action": "BUY",
+                "price": 121.5,
+                "quantity": 100.0,
+                "fee": 10.0,
+                "total_amount": 12160.0,
+                "status": "PENDING",
+                "order_id": "sj-today-123",
+                "executed_at": today_str
+            }
+        ]
+        
+        # 2. Setup mock Shioaji API response returning empty trades list
+        mock_api = MagicMock()
+        mock_get_api.return_value = mock_api
+        mock_api.list_trades.return_value = []
+        
+        # Execute sync
+        sync_broker_orders()
+        
+        # 3. Assertions: check that update_order_status was called to cancel it
+        mock_update_order.assert_called_once_with(
+            45,
+            {
+                "status": "CANCELLED",
+                "total_amount": 0.0,
+                "fee": 0.0
+            }
+        )
+        # Check that log_system_event log has the info statement
+        mock_log.assert_any_call(
+            "INFO",
+            "[對帳同步] 找不到券商委託單號 sj-today-123 (2881 BUY)，券商端無此委託紀錄，判定為無效或已過期，自動將狀態更新為 CANCELLED。"
+        )
+
     @patch("src.services.broker_connector.supabase")
     @patch("src.services.broker_connector.execute_with_retry")
     @patch("src.services.broker_connector.update_holding_after_fill")
