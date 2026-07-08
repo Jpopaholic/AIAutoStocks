@@ -260,5 +260,68 @@ class TestHybridLiquidation(unittest.TestCase):
         set_system_fault_status("OK")
         mock_set_config.assert_any_call("SYSTEM_FAULT_STATUS", "OK")
 
+    @patch("src.agents.trading_agent.get_system_fault_status")
+    @patch("src.agents.trading_agent.get_pending_liquidation_stocks")
+    @patch("src.agents.trading_agent.call_gemini_with_rotation")
+    def test_wind_control_override_warning_in_ranking_analysis(self, mock_call_gemini, mock_get_pending, mock_get_fault):
+        """
+        驗證當風控觸發覆寫時，是否會自動在 ranking_analysis 中追加 [風控護欄提示] 警告訊息
+        """
+        mock_get_fault.return_value = {"status": "OK", "detail": ""}
+        mock_get_pending.return_value = []
+        
+        # 模擬 Gemini 呼叫：2618 總分 34 觸發風控，經理人原決策為 HOLD
+        mock_call_gemini.side_effect = [
+            # 呼叫 1: 分析師評估
+            """{
+                "scores": [
+                    {
+                        "stock_code": "2618",
+                        "trend_score": 8,
+                        "momentum_score": 6,
+                        "volume_score": 6,
+                        "safety_score": 6,
+                        "regime_score": 8,
+                        "confidence": 0.5,
+                        "reason": "技術面疲弱"
+                    }
+                ]
+            }""",
+            # 呼叫 2: 投資組合經理決策
+            """{
+                "ranking_analysis": "今日大盤震盪，故全數維持 HOLD。",
+                "decisions": [
+                    {
+                        "stock_code": "2618",
+                        "action": "HOLD",
+                        "pm_reason": "季線有撐，暫時觀望",
+                        "allocation_weight": 0
+                    }
+                ]
+            }"""
+        ]
+        
+        stock_codes = ["2618"]
+        klines_map = {
+            "2618": [{"date": "2026-06-09", "open": 30.0, "high": 30.0, "low": 30.0, "close": 30.0, "volume": 100.0}],
+            "TAIEX": [{"date": "2026-06-09", "open": 16000.0, "high": 16000.0, "low": 16000.0, "close": 16000.0, "volume": 100.0}]
+        }
+        # 模擬持股中包含 2618，因此會檢查總分門檻 (34 < 60) 觸發 SELL 覆寫
+        current_holdings = [{"stock_code": "2618", "quantity": 200.0, "average_price": 35.0}]
+        
+        result = generate_portfolio_decisions(stock_codes, klines_map, current_holdings)
+        
+        # 驗證 2618 被覆寫為 SELL
+        decisions = result["decisions"]
+        dec_2618 = next(d for d in decisions if d["stock_code"] == "2618")
+        self.assertEqual(dec_2618["action"], "SELL")
+        
+        # 驗證 ranking_analysis 中有出現 [風控護欄提示] 的警告內容
+        ranking_analysis = result["ranking_analysis"]
+        self.assertIn("風控護欄提示", ranking_analysis)
+        self.assertIn("2618", ranking_analysis)
+        self.assertIn("長榮航", ranking_analysis)
+        self.assertIn("HOLD ➔ SELL", ranking_analysis)
+
 if __name__ == "__main__":
     unittest.main()

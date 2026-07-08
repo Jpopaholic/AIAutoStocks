@@ -603,6 +603,43 @@ def generate_portfolio_decisions(
                 "total_score": total_score
             })
 
+    # ── 14. 檢查是否有風控覆寫，若有則動態追加提示至 ranking_analysis ──
+    try:
+        from src.config import get_stock_name
+        overridden_items = []
+        
+        # 建立經理人原始決策對照表
+        raw_action_map = {}
+        for d in raw_decisions:
+            code = d.get("stock_code")
+            if code:
+                raw_action_map[code] = str(d.get("action", "HOLD")).strip().upper()
+                
+        for fd in final_decisions:
+            code = fd["stock_code"]
+            final_act = fd["action"].upper()
+            stock_name = get_stock_name(code)
+            name_display = f" {stock_name}" if stock_name else ""
+            
+            # 情況 A: 經理人有原始決策，但被修改了
+            if code in raw_action_map:
+                raw_act = raw_action_map[code]
+                if final_act != raw_act:
+                    overridden_items.append(f"{code}{name_display} ({raw_act} ➔ {final_act})")
+            # 情況 B: 經理人漏掉了這檔，且系統最終自動判定了 SELL 或與預設 HOLD 不同的動作
+            else:
+                if final_act != "HOLD":
+                    overridden_items.append(f"{code}{name_display} (無原始決策 ➔ {final_act})")
+                    
+        if overridden_items:
+            override_note = (
+                f"\n\n⚠️ **[風控護欄提示]**：今日有 {len(overridden_items)} 檔標的之最終決策因觸發系統量化安全/風控規則而進行覆寫調整："
+                f"「{ '、'.join(overridden_items) }」。經理人原始橫向配置說明未包含此風控考量，請以最終個別標的執行決策為準。"
+            )
+            ranking_analysis += override_note
+    except Exception as override_err:
+        print(f" [決策代理] 警告: 產生風控覆寫提示失敗: {override_err}")
+
     return {
         "ranking_analysis": ranking_analysis,
         "decisions": final_decisions
