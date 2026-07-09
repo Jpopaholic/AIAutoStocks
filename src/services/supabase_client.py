@@ -856,3 +856,59 @@ def prune_old_daily_analysis(days: int = 30) -> None:
         print(f" [日誌管理器] 已成功清理 {cutoff_time} 之前的舊分析執行紀錄（保留最近 {days} 天）。")
     except Exception as e:
         print(f" [日誌管理器] 警告: 清理舊分析執行紀錄失敗: {str(e)}")
+
+
+def log_unfilled_order_db(order: Dict[str, Any], reason: str) -> Any:
+    """
+    將因滑價或未成交而被刪除的訂單紀錄存入 unfilled_orders 資料表
+    """
+    unfilled_record = {
+        "stock_code": order["stock_code"],
+        "action": order["action"],
+        "price": float(order["price"]),
+        "quantity": float(order["quantity"]),
+        "fee": float(order.get("fee") or 0.0),
+        "total_amount": float(order["total_amount"]),
+        "is_paper": order.get("is_paper", False),
+        "executed_at": order["executed_at"],
+        "order_id": order.get("order_id"),
+        "reason": reason
+    }
+    return execute_with_retry(
+        lambda: supabase.table("unfilled_orders")
+        .insert(unfilled_record)
+        .execute()
+    )
+
+
+def get_unfilled_orders(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    sim_date: Optional[str] = None,
+    limit: int = 50
+) -> List[Dict[str, Any]]:
+    """
+    取得未成交/滑價取消的交易訂單。
+    :param start_date: 依真實 executed_at 篩選起始時間（真實操盤模式用）
+    :param end_date: 依真實 executed_at 篩選結束時間
+    :param sim_date: 依沙盒虛擬日期精準篩選（如 '2026-05-05'，沙盒模式用）
+    """
+    is_paper = config.limits.is_paper_trading
+    query = supabase.table("unfilled_orders").select(
+        "id, stock_code, action, price, quantity, fee, total_amount, executed_at, order_id, reason"
+    ).eq("is_paper", is_paper)
+
+    if sim_date:
+        from src.time_manager import get_local_taiwan_midnight_utc_range
+        utc_start, utc_end = get_local_taiwan_midnight_utc_range(sim_date)
+        query = query.gte("executed_at", utc_start).lte("executed_at", utc_end)
+    else:
+        if start_date:
+            query = query.gte("executed_at", start_date)
+        if end_date:
+            query = query.lte("executed_at", end_date)
+
+    return execute_with_retry(
+        lambda: query.order("executed_at", desc=True).limit(limit).execute()
+    )
+

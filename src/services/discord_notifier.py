@@ -4,7 +4,7 @@ from datetime import date
 from typing import Dict, List, Any, Optional
 
 from src.config import config, get_stock_name
-from src.services.supabase_client import get_orders, get_holdings, log_system_event
+from src.services.supabase_client import get_orders, get_holdings, log_system_event, get_unfilled_orders
 # 由於要動態判斷是沙盒還是真實環境以獲取報價，我們引用 sandbox_simulator
 # 它會自動根據當前系統狀態，透明切換即時報價或歷史模擬報價
 from src.services import sandbox_simulator
@@ -153,6 +153,20 @@ def send_daily_report(
             print(f" [Discord通知器] 無法取得今日交易紀錄: {str(e)}")
             today_orders = []
 
+    # ── 2.5 獲取今日未成交/滑價取消訂單 ────────────────────────────────
+    if override_orders is not None:
+        today_unfilled = []
+    else:
+        try:
+            if sim_active:
+                today_unfilled = get_unfilled_orders(sim_date=get_effective_date_str())
+            else:
+                start_utc, end_utc = get_local_taiwan_midnight_utc_range()
+                today_unfilled = get_unfilled_orders(start_date=start_utc, end_date=end_utc)
+        except Exception as e:
+            print(f" [Discord通知器] 無法取得今日未成交紀錄: {str(e)}")
+            today_unfilled = []
+
     # 計算實現損益
     today_realized_pnl = 0.0
     for o in today_orders:
@@ -218,6 +232,23 @@ def send_daily_report(
         trades_lines.append(line)
 
     trades_text = "\n".join(trades_lines) if trades_lines else "今日無任何交易委託成交。"
+
+    # 未成交/滑價取消列表
+    unfilled_lines = []
+    for o in today_unfilled:
+        action_label = "買" if o["action"] == "BUY" else "賣"
+        stock_name = get_stock_name(o['stock_code'])
+        name_display = f"({stock_name})" if stock_name else ""
+        qty = float(o.get("quantity") or 0.0)
+        limit_price = float(o.get("price") or 0.0)
+        reason_val = o.get("reason") or "CANCELLED"
+        reason_str = "券商取消(滑價)" if reason_val == "CANCELLED" else "未找到委託(過期)"
+        
+        prefix = "!"
+        line = f"{prefix} {action_label} {o['stock_code']}{name_display} | {qty:,.0f}股 | 委託價:{limit_price:,.2f} | 原因:{reason_str}"
+        unfilled_lines.append(line)
+
+    unfilled_text = "\n".join(unfilled_lines) if unfilled_lines else "今日無任何未成交/滑價取消委託。"
 
     # ── 4. 欄位 2: 評分與相對排名 (第二層) ────────────────────────────────
     scores_text = "暫無分析師評分資料。"
@@ -311,6 +342,7 @@ def send_daily_report(
             fields.extend(_split_into_fields("📋 1b. 大盤氣候分析理由", climate_reason, max_len=950))
         fields.extend(_split_into_fields("💰 1c. 帳戶資金狀態", account_header, max_len=950))
         fields.extend(_split_into_fields("💸 1d. 本日交易明細", trades_text, syntax="diff", max_len=950))
+        fields.extend(_split_into_fields("⚠️ 1e. 本日未成交/滑價取消明細", unfilled_text, syntax="diff", max_len=950))
         fields.extend(_split_into_fields("📈 2. 評分與相對排名 (第二層)", section2_value, max_len=950))
         fields.extend(_split_into_fields("🚨 3. 今日停損警告清單", section3_value, max_len=950))
         fields.extend(_split_into_fields("🧠 4. 經理人交易配置與理由 (第三層)", section4_value, max_len=950))

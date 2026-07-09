@@ -23,6 +23,7 @@ from src.services.supabase_client import (
     set_db_config,
     get_holdings,
     get_orders,
+    get_unfilled_orders,
     log_system_event,
     get_pending_liquidation_stocks,
     remove_pending_liquidation_stock,
@@ -378,6 +379,18 @@ def get_status():
         except Exception as e:
             orders = []
             print(f"[Web API] 載入交易訂單失敗: {e}")
+
+        try:
+            unfilled = get_unfilled_orders(limit=15)
+            enhanced_unfilled = []
+            for u in unfilled:
+                u_dict = dict(u)
+                u_dict["stock_name"] = get_stock_name(u_dict["stock_code"])
+                enhanced_unfilled.append(u_dict)
+            unfilled_orders = enhanced_unfilled
+        except Exception as e:
+            unfilled_orders = []
+            print(f"[Web API] 載入未成交交易訂單失敗: {e}")
             
         return {
             "cash": cash_balance,
@@ -385,6 +398,7 @@ def get_status():
             "nav": net_asset_value,
             "holdings": enhanced_holdings,
             "orders": orders,
+            "unfilled_orders": unfilled_orders,
             "is_paper": config.limits.is_paper_trading,
             "is_running": is_running,
             "is_liquidating": is_liquidating,

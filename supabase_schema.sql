@@ -178,3 +178,28 @@ ALTER TABLE daily_analysis ENABLE ROW LEVEL SECURITY;
 -- =============================================================================
 -- 完成！以上 8 張資料表即為 AIAutoStocks 系統的完整 Schema。
 -- =============================================================================
+
+
+-- -----------------------------------------------------------------------------
+-- 9. unfilled_orders — 未成交/滑價取消訂單紀錄
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS unfilled_orders (
+    id            BIGSERIAL PRIMARY KEY,
+    stock_code    TEXT NOT NULL,
+    action        TEXT NOT NULL CHECK (action IN ('BUY', 'SELL')),
+    price         NUMERIC(18, 4) NOT NULL,
+    quantity      NUMERIC(18, 4) NOT NULL,
+    fee           NUMERIC(18, 4) NOT NULL DEFAULT 0,
+    total_amount  NUMERIC(18, 4) NOT NULL,
+    is_paper      BOOLEAN NOT NULL DEFAULT FALSE,
+    executed_at   TIMESTAMPTZ NOT NULL,
+    order_id      TEXT,
+    reason        TEXT,                                -- 刪除原因: CANCELLED (券商取消), NOT_FOUND (未找到/過期)
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_unfilled_orders_stock_code ON unfilled_orders (stock_code);
+CREATE INDEX IF NOT EXISTS idx_unfilled_orders_executed_at ON unfilled_orders (executed_at DESC);
+
+ALTER TABLE unfilled_orders ENABLE ROW LEVEL SECURITY;
+

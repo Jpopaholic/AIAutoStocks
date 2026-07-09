@@ -61,14 +61,30 @@ mock_holdings = [
     }
 ]
 
+mock_unfilled_orders = [
+    {
+        "id": 101,
+        "stock_code": "2317",
+        "action": "BUY",
+        "price": 180.0,
+        "quantity": 1000,
+        "fee": 150,
+        "total_amount": 180150,
+        "executed_at": "2026-07-09T09:05:00Z",
+        "order_id": "sj-order-999",
+        "reason": "CANCELLED"
+    }
+]
+
 mock_nav = (50000.0, 950000.0, 1000000.0)  # cash_balance, holdings_value, net_asset_value
 
+@patch("src.services.discord_notifier.get_unfilled_orders", return_value=mock_unfilled_orders)
 @patch("src.services.discord_notifier.get_orders", return_value=mock_orders)
 @patch("src.services.discord_notifier.get_holdings", return_value=mock_holdings)
 @patch("src.services.nav_calculator.calculate_nav", return_value=mock_nav)
 @patch("src.services.sandbox_simulator.fetch_realtime_quote", return_value={"price": 952.0})
 @patch("requests.post")
-def run_test(mock_post, mock_quote, mock_nav_calc, mock_holdings_query, mock_orders_query):
+def run_test(mock_post, mock_quote, mock_nav_calc, mock_holdings_query, mock_orders_query, mock_unfilled_query):
     # Setup mock webhook URL in config
     test_webhook = sys.argv[1] if len(sys.argv) > 1 else "https://discord.com/api/webhooks/test/test"
     
@@ -118,6 +134,7 @@ if __name__ == "__main__":
         # If user passed a real webhook url, we do not mock requests.post
         print(f"使用實體 Webhook 進行真實發送測試: {sys.argv[1]}")
         with patch("src.services.discord_notifier.get_orders", return_value=mock_orders), \
+             patch("src.services.discord_notifier.get_unfilled_orders", return_value=mock_unfilled_orders), \
              patch("src.services.discord_notifier.get_holdings", return_value=mock_holdings), \
              patch("src.services.nav_calculator.calculate_nav", return_value=mock_nav), \
              patch("src.services.sandbox_simulator.fetch_realtime_quote", return_value={"price": 952.0}):

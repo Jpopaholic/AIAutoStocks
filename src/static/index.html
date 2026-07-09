@@ -1027,6 +1027,40 @@
                         </table>
                     </div>
                 </div>
+
+                <!-- 未成交/滑價取消訂單 -->
+                <div class="glass-card">
+                    <div class="section-title">
+                        <span>
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                            未成交 / 滑價取消訂單 (Unfilled Orders)
+                        </span>
+                    </div>
+                    
+                    <div class="table-responsive">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>交易時間</th>
+                                    <th>股票代號</th>
+                                    <th>類型</th>
+                                    <th>委託價格</th>
+                                    <th>數量</th>
+                                    <th>總金額</th>
+                                    <th>原因</th>
+                                    <th style="text-align: right;">狀態</th>
+                                </tr>
+                            </thead>
+                            <tbody id="unfilled-orders-table-body">
+                                <tr>
+                                    <td colspan="8" class="empty-state">
+                                        <div>暫無未成交紀錄</div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
             </div>
 
             <!-- 右欄：自選股與配置面板 -->
@@ -1590,6 +1624,47 @@
                         `;
                         ordersBody.appendChild(row);
                     });
+                }
+
+                // 5.5 填充未成交訂單表格
+                const unfilledBody = document.getElementById("unfilled-orders-table-body");
+                if (unfilledBody) {
+                    unfilledBody.innerHTML = "";
+                    const unfilledOrders = data.unfilled_orders || [];
+                    if (unfilledOrders.length === 0) {
+                        unfilledBody.innerHTML = `
+                            <tr>
+                                <td colspan="8" class="empty-state">
+                                    <div>暫無未成交紀錄</div>
+                                </td>
+                            </tr>
+                        `;
+                    } else {
+                        unfilledOrders.forEach(o => {
+                            const row = document.createElement("tr");
+                            const actionClass = o.action === "BUY" ? "positive" : "negative";
+                            const actionLabel = o.action === "BUY" ? "買入" : "賣出";
+                            const formattedTime = new Date(o.executed_at).toLocaleString('zh-TW', { hour12: false });
+                            
+                            const reasonVal = o.reason || "CANCELLED";
+                            let reasonLabel = "券商取消 (滑價)";
+                            if (reasonVal === "NOT_FOUND") {
+                                reasonLabel = "未找到委託 (過期/無效)";
+                            }
+                            
+                            row.innerHTML = `
+                                <td style="font-size:12px; color:var(--text-secondary);">${formattedTime}</td>
+                                <td class="stock-tag-td"><span>${o.stock_code}${o.stock_name ? ' ' + o.stock_name : ''}</span></td>
+                                <td><span class="pnl-badge ${actionClass}">${actionLabel}</span></td>
+                                <td class="price-td">${formatPrice(o.price)}</td>
+                                <td class="price-td">${parseInt(o.quantity).toLocaleString()} 股</td>
+                                <td class="price-td" style="font-weight:600;">${formatCurrency(o.total_amount)}</td>
+                                <td style="font-size:12px; color:var(--text-secondary);">${reasonLabel}</td>
+                                <td style="text-align: right;"><span class="status-badge-item cancelled">未成交</span></td>
+                            `;
+                            unfilledBody.appendChild(row);
+                        });
+                    }
                 }
 
             } catch (err) {

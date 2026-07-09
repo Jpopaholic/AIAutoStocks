@@ -15,6 +15,7 @@ from src.services.supabase_client import (
     get_pending_real_orders,
     update_order_status,
     delete_order_db,
+    log_unfilled_order_db,
     execute_with_retry,
     supabase
 )
@@ -517,7 +518,7 @@ def check_and_execute_hard_stop_losses() -> None:
                 log_system_event("ERROR", f"[硬體停損失敗] 無法自動賣出 {stock_code}: {str(order_err)}")
                 add_pending_liquidation_stock(stock_code)
 
-def sync_broker_orders() -> None:
+def sync_broker_orders(exclude_from_failed_log: bool = False) -> None:
     """
     與券商對帳同步所有 PENDING 的訂單狀態。
     """
@@ -559,6 +560,11 @@ def sync_broker_orders() -> None:
                 continue
                 
             if order_id not in trade_map:
+                if not exclude_from_failed_log:
+                    try:
+                        log_unfilled_order_db(order, "NOT_FOUND")
+                    except Exception as le:
+                        print(f" [對帳同步] 記錄未成交訂單至資料庫失敗: {le}")
                 delete_order_db(order_db_id)
                 log_system_event(
                     "INFO",
@@ -655,6 +661,11 @@ def sync_broker_orders() -> None:
                 
             elif status_name == "Cancelled":
                 # 此處僅處置完全無成交 (total_deal_qty == 0) 的 Cancelled 訂單
+                if not exclude_from_failed_log:
+                    try:
+                        log_unfilled_order_db(order, "CANCELLED")
+                    except Exception as le:
+                        print(f" [對帳同步] 記錄未成交訂單至資料庫失敗: {le}")
                 delete_order_db(order_db_id)
                 log_system_event(
                     "INFO",

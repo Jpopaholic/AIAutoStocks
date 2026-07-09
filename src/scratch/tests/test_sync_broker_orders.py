@@ -126,11 +126,12 @@ class TestSyncBrokerOrders(unittest.TestCase):
 
     @patch("src.services.broker_connector.config")
     @patch("src.services.broker_connector.get_pending_real_orders")
+    @patch("src.services.broker_connector.log_unfilled_order_db")
     @patch("src.services.broker_connector.delete_order_db")
     @patch("src.services.broker_connector._get_shioaji_api")
     @patch("src.services.broker_connector.log_system_event")
     def test_sync_broker_orders_cancelled_scenario(
-        self, mock_log, mock_get_api, mock_delete_order, mock_get_pending, mock_config
+        self, mock_log, mock_get_api, mock_delete_order, mock_log_unfilled, mock_get_pending, mock_config
     ):
         """
         Verify that CANCELLED status correctly releases purchasing power by setting total_amount = 0.0.
@@ -171,14 +172,16 @@ class TestSyncBrokerOrders(unittest.TestCase):
         
         # 3. Assertions
         mock_delete_order.assert_called_once_with(43)
+        mock_log_unfilled.assert_called_once_with(mock_get_pending.return_value[0], "CANCELLED")
 
     @patch("src.services.broker_connector.config")
     @patch("src.services.broker_connector.get_pending_real_orders")
+    @patch("src.services.broker_connector.log_unfilled_order_db")
     @patch("src.services.broker_connector.delete_order_db")
     @patch("src.services.broker_connector._get_shioaji_api")
     @patch("src.services.broker_connector.log_system_event")
     def test_sync_broker_orders_missing_old_order_cancelled(
-        self, mock_log, mock_get_api, mock_delete_order, mock_get_pending, mock_config
+        self, mock_log, mock_get_api, mock_delete_order, mock_log_unfilled, mock_get_pending, mock_config
     ):
         """
         Verify that a pending order from a previous day (not in broker trade list) is marked as CANCELLED.
@@ -215,6 +218,7 @@ class TestSyncBrokerOrders(unittest.TestCase):
         
         # 3. Assertions: check that update_order_status was called to cancel it
         mock_delete_order.assert_called_once_with(44)
+        mock_log_unfilled.assert_called_once_with(mock_get_pending.return_value[0], "NOT_FOUND")
         # Check that log_system_event log has the info statement
         mock_log.assert_any_call(
             "INFO",
@@ -223,11 +227,12 @@ class TestSyncBrokerOrders(unittest.TestCase):
 
     @patch("src.services.broker_connector.config")
     @patch("src.services.broker_connector.get_pending_real_orders")
+    @patch("src.services.broker_connector.log_unfilled_order_db")
     @patch("src.services.broker_connector.delete_order_db")
     @patch("src.services.broker_connector._get_shioaji_api")
     @patch("src.services.broker_connector.log_system_event")
     def test_sync_broker_orders_missing_today_order_cancelled(
-        self, mock_log, mock_get_api, mock_delete_order, mock_get_pending, mock_config
+        self, mock_log, mock_get_api, mock_delete_order, mock_log_unfilled, mock_get_pending, mock_config
     ):
         """
         Verify that a pending order from today (not in broker trade list) is ALSO cancelled.
@@ -263,6 +268,7 @@ class TestSyncBrokerOrders(unittest.TestCase):
         
         # 3. Assertions: check that update_order_status was called to cancel it
         mock_delete_order.assert_called_once_with(45)
+        mock_log_unfilled.assert_called_once_with(mock_get_pending.return_value[0], "NOT_FOUND")
         # Check that log_system_event log has the info statement
         mock_log.assert_any_call(
             "INFO",
