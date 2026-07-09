@@ -167,6 +167,22 @@ pip install -r requirements.txt
    ```
    加密完成後會生成安全憑證檔 `credentials.enc`。腳本會詢問是否刪除明文 `credentials.json`，請確認刪除。
 
+#### 🔑 證券商電子憑證 (`.pfx`) 的處理與自動上傳
+永豐金證券下單 (Shioaji) 在實盤交易時，必須使用電子憑證檔案（例如 `Sinopac.pfx`）。系統已針對此處理進行了安全與部署上的優化：
+
+1. **本機配置與加密**：
+   * 請向永豐金證券申請電子憑證，下載後命名為 `Sinopac.pfx` 並直接放置於**專案根目錄**下。
+   * 專案的 `.gitignore` 已設定過濾 `*.pfx`，因此該憑證**絕對不會**被意外提交到 Git 儲存庫。
+   * 在 `credentials.json` 中的 `"brokerCredentials"` 內，將 `"certificatePath"` 設定為 `"Sinopac.pfx"`（即相對路徑），並填寫正確的憑證密碼等資訊。
+   * 執行 `python encrypt_credentials.py`，將密碼等敏感設定加密存入 `credentials.enc`。
+
+2. **Docker / 雲端部署 (如 Fly.io) 自動打包**：
+   * 專案的 `Dockerfile` 中已配置了條件式複製指令：`COPY Sinopac.pf[x] ./`。
+   * 當您在本地執行 `fly deploy`（或 `docker build`）時，若您的根目錄下存在 `Sinopac.pfx`，Docker 建置流程會**自動將該憑證打包進容器的 `/app` 工作目錄**中。
+   * 系統在容器內運行時，將會從解密後的設定檔中讀取到 `"certificatePath": "Sinopac.pfx"`，並直接在容器根目錄載入。
+   * **無需手動透過 SSH/SFTP 上傳憑證至雲端主機**。只要在部署前確保本機根目錄有 `Sinopac.pfx`，部署指令會一併處理。
+
+
 ---
 
 ## 🚀 執行模式與指令說明
