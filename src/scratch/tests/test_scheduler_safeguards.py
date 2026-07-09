@@ -279,6 +279,8 @@ class TestSchedulerSafeguards(unittest.TestCase):
         # 為了避免進入後續真實決策/網路 API 呼叫，Mock trading_agent.generate_portfolio_decisions
         with patch("src.main.get_taiwan_time", return_value=tw_now), \
              patch("src.main.supabase_client.get_daily_analysis_today", return_value=None), \
+             patch("src.services.supabase_client.save_daily_analysis") as mock_save_analysis, \
+             patch("src.services.discord_notifier.send_daily_report") as mock_send_report, \
              patch("src.agents.trading_agent.generate_portfolio_decisions") as mock_decision, \
              patch("src.agents.regime_agent.generate_market_regime") as mock_regime:
              

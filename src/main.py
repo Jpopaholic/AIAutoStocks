@@ -857,7 +857,7 @@ def run_liquidate_job() -> None:
                     .select("id, status, stock_code")
                     .in_("id", placed_order_ids)
                     .execute()
-                ).data
+                )
             except Exception as query_err:
                 print(f" [下車引擎] 查詢訂單狀態時發生錯誤: {query_err}")
                 db_orders = []

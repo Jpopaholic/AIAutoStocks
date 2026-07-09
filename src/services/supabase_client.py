@@ -652,7 +652,7 @@ def has_trading_job_run_today(is_paper: bool = False) -> bool:
             .limit(1)
             .execute()
         )
-        return len(res.data) > 0
+        return len(res) > 0
     except Exception as e:
         err_str = str(e)
         # 回退處理 (如果沒有 is_paper 欄位)
@@ -668,7 +668,7 @@ def has_trading_job_run_today(is_paper: bool = False) -> bool:
                     .limit(1)
                     .execute()
                 )
-                return len(res.data) > 0
+                return len(res) > 0
             except Exception as retry_err:
                 print(f" [Supabase] 檢查今日交易紀錄失敗 (回退查詢): {str(retry_err)}")
                 return False
