@@ -116,7 +116,13 @@ def run_live_trading_job(stock_codes: List[str], is_manual: bool = False) -> Non
     if is_manual:
         try:
             print(" [排程引擎] 手動重新分析觸發：正在取消今日券商委託並清除今日交易紀錄...")
+            # 1. 先做一次對帳同步，確保留在 PENDING 的訂單獲得最新的成交回報
+            broker_connector.sync_broker_orders()
+            # 2. 取消今天券商端所有未成交的委託單
             broker_connector.cancel_all_orders_today()
+            # 3. 再次執行對帳同步，將被取消的委託單狀態更新（部分成交的轉為 FILLED，完全未成交的刪除）
+            broker_connector.sync_broker_orders()
+            # 4. 最後清理依然留在 PENDING 的無效訂單
             supabase_client.delete_orders_today()
         except Exception as reset_err:
             print(f" [排程引擎] 警告: 手動重置今日交易時發生異常: {reset_err}")
@@ -862,7 +868,7 @@ def run_liquidate_job() -> None:
 
             for o in db_orders:
                 status = o.get("status")
-                if status == "PENDING":
+                if status in ["PENDING", "PARTFILLED"]:
                     pending_stocks.append(o.get("stock_code"))
                 elif status == "FILLED":
                     filled_count += 1

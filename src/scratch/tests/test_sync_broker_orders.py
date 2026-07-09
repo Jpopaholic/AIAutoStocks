@@ -158,6 +158,7 @@ class TestSyncBrokerOrders(unittest.TestCase):
         
         mock_trade = MagicMock()
         mock_trade.status.id = "sj-order-456"
+        mock_trade.status.deals = []
         
         mock_status_enum = MagicMock()
         mock_status_enum.name = "Cancelled"
@@ -329,6 +330,190 @@ class TestSyncBrokerOrders(unittest.TestCase):
             "INFO",
             " [模擬對帳成功] 訂單 ID 101 (2330) 於 2022-11-03 成交 | 成交價: 595.0 | 股數: 10.0"
         )
+
+    @patch("src.services.broker_connector.config")
+    @patch("src.services.broker_connector.get_pending_real_orders")
+    @patch("src.services.broker_connector.update_order_status")
+    @patch("src.services.broker_connector.update_holding_after_fill")
+    @patch("src.services.broker_connector.get_holdings")
+    @patch("src.services.broker_connector._get_shioaji_api")
+    @patch("src.services.broker_connector.log_system_event")
+    def test_sync_broker_orders_partfilled_then_filled_scenario(
+        self, mock_log, mock_get_api, mock_get_holdings, mock_update_holding, mock_update_order, mock_get_pending, mock_config
+    ):
+        """
+        Verify that:
+        1. First sync updates PENDING to PARTFILLED with partial quantity and delta holdings are updated.
+        2. Second sync updates PARTFILLED to FILLED with full quantity and only the delta holdings are updated.
+        """
+        mock_config.limits.is_paper_trading = False
+        
+        # ─── CYCLE 1: PENDING -> PARTFILLED ───
+        # Setup pending order
+        mock_get_pending.return_value = [
+            {
+                "id": 100,
+                "stock_code": "2330",
+                "action": "BUY",
+                "price": 600.0,
+                "quantity": 1000.0,
+                "fee": 513.0,
+                "total_amount": 600513.0,
+                "status": "PENDING",
+                "order_id": "sj-order-999"
+            }
+        ]
+        
+        mock_api = MagicMock()
+        mock_get_api.return_value = mock_api
+        
+        mock_trade = MagicMock()
+        mock_trade.status.id = "sj-order-999"
+        mock_trade.status.status = MagicMock(name="PartFilled")
+        mock_trade.status.status.name = "PartFilled"
+        
+        # Deal 1: 400 shares at 598.0
+        mock_deal1 = MagicMock()
+        mock_deal1.price = 598.0
+        mock_deal1.quantity = 400.0
+        mock_trade.status.deals = [mock_deal1]
+        
+        mock_api.list_trades.return_value = [mock_trade]
+        
+        # Execute first sync
+        sync_broker_orders()
+        
+        # Check order updated to PARTFILLED
+        mock_update_order.assert_any_call(100, {
+            "status": "PARTFILLED",
+            "execution_price": 598.0,
+            "quantity": 400.0,
+            "fee": 205.0,
+            "total_amount": 239405.0,
+            "realized_pnl": 0.0
+        })
+        
+        # Check holdings updated with the first 400 shares
+        mock_update_holding.assert_any_call(
+            stock_code="2330",
+            action="BUY",
+            price=598.0,
+            quantity=400.0,
+            is_paper=False
+        )
+        
+        # ─── CYCLE 2: PARTFILLED -> FILLED ───
+        # Reset mock calls for the next cycle
+        mock_update_order.reset_mock()
+        mock_update_holding.reset_mock()
+        
+        # Now DB order is PARTFILLED (quantity = 400, execution_price = 598.0)
+        mock_get_pending.return_value = [
+            {
+                "id": 100,
+                "stock_code": "2330",
+                "action": "BUY",
+                "price": 600.0,
+                "quantity": 400.0,
+                "fee": 205.0,
+                "total_amount": 239405.0,
+                "status": "PARTFILLED",
+                "execution_price": 598.0,
+                "order_id": "sj-order-999"
+            }
+        ]
+        
+        # Update trade deals at broker (now total 1000 shares: 400 at 598.0, and 600 at 601.0)
+        mock_deal2 = MagicMock()
+        mock_deal2.price = 601.0
+        mock_deal2.quantity = 600.0
+        mock_trade.status.deals = [mock_deal1, mock_deal2]
+        mock_trade.status.status.name = "Filled"
+        
+        # Execute second sync
+        sync_broker_orders()
+        
+        # Check order updated to FILLED with 1000 shares
+        mock_update_order.assert_any_call(100, {
+            "status": "FILLED",
+            "execution_price": 599.8,
+            "quantity": 1000.0,
+            "fee": 513.0,
+            "total_amount": 600313.0,
+            "realized_pnl": 0.0
+        })
+        
+        # Check holdings updated only with the delta (600 shares at 601.0)
+        mock_update_holding.assert_called_once_with(
+            stock_code="2330",
+            action="BUY",
+            price=601.0,
+            quantity=600.0,
+            is_paper=False
+        )
+
+    @patch("src.services.broker_connector.config")
+    @patch("src.services.broker_connector.get_pending_real_orders")
+    @patch("src.services.broker_connector.update_order_status")
+    @patch("src.services.broker_connector.update_holding_after_fill")
+    @patch("src.services.broker_connector.get_holdings")
+    @patch("src.services.broker_connector._get_shioaji_api")
+    @patch("src.services.broker_connector.log_system_event")
+    def test_sync_broker_orders_partfilled_then_cancelled_scenario(
+        self, mock_log, mock_get_api, mock_get_holdings, mock_update_holding, mock_update_order, mock_get_pending, mock_config
+    ):
+        """
+        Verify that when a PARTFILLED order is Cancelled, it is updated to FILLED and delta (0) is not updated.
+        """
+        mock_config.limits.is_paper_trading = False
+        
+        # DB order is PARTFILLED (quantity = 400.0, execution_price = 598.0)
+        mock_get_pending.return_value = [
+            {
+                "id": 100,
+                "stock_code": "2330",
+                "action": "BUY",
+                "price": 600.0,
+                "quantity": 400.0,
+                "fee": 205.0,
+                "total_amount": 239405.0,
+                "status": "PARTFILLED",
+                "execution_price": 598.0,
+                "order_id": "sj-order-999"
+            }
+        ]
+        
+        mock_api = MagicMock()
+        mock_get_api.return_value = mock_api
+        
+        mock_trade = MagicMock()
+        mock_trade.status.id = "sj-order-999"
+        mock_trade.status.status = MagicMock(name="Cancelled")
+        mock_trade.status.status.name = "Cancelled"
+        
+        # Deals has 400 shares at 598.0
+        mock_deal1 = MagicMock()
+        mock_deal1.price = 598.0
+        mock_deal1.quantity = 400.0
+        mock_trade.status.deals = [mock_deal1]
+        
+        mock_api.list_trades.return_value = [mock_trade]
+        
+        # Execute sync
+        sync_broker_orders()
+        
+        # DB status should update to FILLED
+        mock_update_order.assert_any_call(100, {
+            "status": "FILLED",
+            "execution_price": 598.0,
+            "quantity": 400.0,
+            "fee": 205.0,
+            "total_amount": 239405.0,
+            "realized_pnl": 0.0
+        })
+        
+        # holdings should NOT be updated because delta is 0
+        mock_update_holding.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()

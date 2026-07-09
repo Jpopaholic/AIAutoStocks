@@ -552,6 +552,7 @@ def sync_broker_orders() -> None:
             order_id = order.get("order_id")
             stock_code = order["stock_code"]
             action = order["action"]
+            db_status = order["status"]
             
             if not order_id:
                 log_system_event("WARN", f"[對帳同步] 訂單 ID {order_db_id} ({stock_code}) 缺少券商 order_id，跳過")
@@ -578,18 +579,27 @@ def sync_broker_orders() -> None:
             
             log_system_event("INFO", f"[對帳同步] 正在同步訂單 {order_id} ({stock_code} {action}) | 券商狀態: {status_name}")
             
-            if status_name in ["Filled", "PartFilled"]:
-                deals = trade.status.deals
-                if not deals:
-                    log_system_event("WARN", f"[對帳同步] 訂單 {order_id} 狀態為 {status_name} 但無成交明細，暫不處理")
-                    continue
-                
-                total_deal_qty = sum(float(d.quantity) for d in deals)
+            # 獲取成交明細並計算累計成交數量與均價
+            deals = trade.status.deals if hasattr(trade.status, 'deals') else []
+            total_deal_qty = sum(float(d.quantity) for d in deals) if deals else 0.0
+            avg_exec_price = (sum(float(d.price) * float(d.quantity) for d in deals) / total_deal_qty) if total_deal_qty > 0 else 0.0
+
+            if status_name in ["Filled", "PartFilled"] or (status_name == "Cancelled" and total_deal_qty > 0):
                 if total_deal_qty == 0:
                     log_system_event("WARN", f"[對帳同步] 訂單 {order_id} 狀態為 {status_name} 但累計成交數量為 0，暫不處理")
                     continue
-                    
-                avg_exec_price = sum(float(d.price) * float(d.quantity) for d in deals) / total_deal_qty
+                
+                # 判定寫入資料庫的狀態
+                if status_name == "PartFilled":
+                    new_db_status = "PARTFILLED"
+                else:
+                    new_db_status = "FILLED"
+
+                # 計算 Delta：比對當前與上次已同步之成交數量
+                # 如果資料庫原狀態為 PENDING，表示先前尚未處理過任何成交，已成交量為 0
+                prev_filled_qty = 0.0 if db_status == "PENDING" else float(order.get("quantity") or 0.0)
+                prev_exec_price = 0.0 if db_status == "PENDING" else float(order.get("execution_price") or 0.0)
+                delta_qty = total_deal_qty - prev_filled_qty
                 
                 costs = calculate_fees(action, avg_exec_price, total_deal_qty)
                 actual_fee = costs["fee"]
@@ -602,12 +612,13 @@ def sync_broker_orders() -> None:
                         matching_holding = next((h for h in current_holdings if h["stock_code"] == stock_code), None)
                         if matching_holding:
                             avg_cost = float(matching_holding["average_price"])
+                            # 實現損益採用當前累計成交計算
                             realized_pnl = (avg_exec_price - avg_cost) * total_deal_qty - actual_fee
                     except Exception as he:
                         print(f" [對帳同步] 實盤計算平倉損益失敗: {str(he)}")
                 
                 updates = {
-                    "status": "FILLED",
+                    "status": new_db_status,
                     "execution_price": avg_exec_price,
                     "quantity": total_deal_qty,
                     "fee": actual_fee,
@@ -616,24 +627,38 @@ def sync_broker_orders() -> None:
                 }
                 update_order_status(order_db_id, updates)
                 
-                update_holding_after_fill(
-                    stock_code=stock_code,
-                    action=action,
-                    price=avg_exec_price,
-                    quantity=total_deal_qty,
-                    is_paper=False
-                )
-                
-                log_system_event(
-                    "INFO",
-                    f" [對帳同步成功] 訂單 {order_id} 已成功轉為 FILLED | 實際成交價: {avg_exec_price} | 實際成交股數: {total_deal_qty} | 損益: {realized_pnl:,.0f} 元"
-                )
+                if delta_qty > 0:
+                    # 計算本次新增成交部分的單價
+                    if prev_filled_qty == 0.0:
+                        delta_price = avg_exec_price
+                    else:
+                        total_cost = total_deal_qty * avg_exec_price
+                        prev_cost = prev_filled_qty * prev_exec_price
+                        delta_price = (total_cost - prev_cost) / delta_qty
+                    
+                    update_holding_after_fill(
+                        stock_code=stock_code,
+                        action=action,
+                        price=delta_price,
+                        quantity=delta_qty,
+                        is_paper=False
+                    )
+                    log_system_event(
+                        "INFO",
+                        f" [對帳同步成功] 訂單 {order_id} 狀態更新為 {new_db_status} | 實際成交價: {avg_exec_price} (本階段成交單價: {delta_price:.2f}) | 累計成交: {total_deal_qty} (新增: {delta_qty}) | 損益: {realized_pnl:,.0f} 元"
+                    )
+                else:
+                    log_system_event(
+                        "INFO",
+                        f" [對帳同步] 訂單 {order_id} 狀態更新為 {new_db_status} | 累計成交: {total_deal_qty} (無新增成交) | 損益: {realized_pnl:,.0f} 元"
+                    )
                 
             elif status_name == "Cancelled":
+                # 此處僅處置完全無成交 (total_deal_qty == 0) 的 Cancelled 訂單
                 delete_order_db(order_db_id)
                 log_system_event(
                     "INFO",
-                    f" [對帳同步] 訂單 {order_id} 已由券商取消，已自動將其自資料庫刪除。"
+                    f" [對帳同步] 訂單 {order_id} 已由券商取消且無任何成交，已自動將其自資料庫刪除。"
                 )
             elif status_name == "Failed":
                 updates = {
@@ -649,7 +674,7 @@ def sync_broker_orders() -> None:
             else:
                 log_system_event(
                     "INFO",
-                    f"[對帳同步] 訂單 {order_id} 當前狀態為 {status_name}，保持 PENDING 狀態。"
+                    f"[對帳同步] 訂單 {order_id} 當前狀態為 {status_name}，保持 {db_status} 狀態。"
                 )
                 
     except Exception as e:

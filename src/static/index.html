@@ -505,6 +505,11 @@
             background: rgba(245, 158, 11, 0.15);
             color: #fbbf24;
         }
+        .status-badge-item.partfilled {
+            background: rgba(245, 158, 11, 0.15);
+            color: #fbbf24;
+            border: 1px dashed #fbbf24;
+        }
         .status-badge-item.filled {
             background: var(--color-success-glow);
             color: var(--color-success);
@@ -1551,6 +1556,9 @@
                         if (statusVal === "PENDING") {
                             statusClass = "pending";
                             statusLabel = "預約中";
+                        } else if (statusVal === "PARTFILLED") {
+                            statusClass = "partfilled";
+                            statusLabel = "部分成交";
                         } else if (statusVal === "CANCELLED") {
                             statusClass = "cancelled";
                             statusLabel = "已取消";
@@ -1559,12 +1567,12 @@
                             statusLabel = "已失敗";
                         }
 
-                        const pnlVal = statusVal === "FILLED" ? (parseFloat(o.realized_pnl) || 0) : 0;
+                        const pnlVal = (statusVal === "FILLED" || statusVal === "PARTFILLED") ? (parseFloat(o.realized_pnl) || 0) : 0;
                         const pnlDisplay = pnlVal !== 0 ? `${pnlVal > 0 ? "+" : ""}${formatCurrency(pnlVal)}` : "-";
                         const pnlClass = pnlVal > 0 ? "positive" : (pnlVal < 0 ? "negative" : "");
 
                         const execPriceVal = o.execution_price;
-                        const execPriceDisplay = (statusVal === "FILLED" && execPriceVal !== null && execPriceVal !== undefined)
+                        const execPriceDisplay = ((statusVal === "FILLED" || statusVal === "PARTFILLED") && execPriceVal !== null && execPriceVal !== undefined)
                             ? formatPrice(execPriceVal)
                             : "--";
 
