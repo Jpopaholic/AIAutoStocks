@@ -598,7 +598,7 @@ def set_system_fault_status(status: str, detail: str = "") -> None:
 
 def has_trading_job_run_today(is_paper: bool = False) -> bool:
     """
-    從資料庫 system_logs 查詢當前交易週期（關盤後 13:30 到開盤前 09:00）是否已經執行過自動化或手動交易任務。
+    從資料庫 system_logs 查詢當前交易週期（關盤後 13:30 到下個交易日收盤 13:30）是否已經執行過自動化或手動交易任務。
     """
     from datetime import datetime, timezone, timedelta, time as dt_time
     from src.time_manager import get_local_taiwan_datetime
@@ -625,7 +625,7 @@ def has_trading_job_run_today(is_paper: bool = False) -> bool:
         local_tz = tw_now.tzinfo
         start_dt = datetime.combine(base_date, dt_time(13, 30)).replace(tzinfo=local_tz)
 
-        # 3. 計算 cycle end (下一個工作日的 09:00)
+        # 3. 計算 cycle end (下一個工作日的 13:30)
         days_to_add = 1
         if base_date.weekday() == 4:    # Friday
             days_to_add = 3             # Go to Monday
@@ -635,7 +635,7 @@ def has_trading_job_run_today(is_paper: bool = False) -> bool:
             days_to_add = 1
             
         next_work_date = base_date + timedelta(days=days_to_add)
-        end_dt = datetime.combine(next_work_date, dt_time(9, 0)).replace(tzinfo=local_tz)
+        end_dt = datetime.combine(next_work_date, dt_time(13, 30)).replace(tzinfo=local_tz)
         
         # 轉為 UTC 時間格式進行資料庫查詢
         utc_start = start_dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -717,7 +717,7 @@ def clear_stop_loss_stocks_today() -> None:
 
 def delete_orders_today() -> None:
     """
-    手動重啟分析前，刪除當前交易週期（關盤後 13:30 到開盤前 09:00）內產生的所有 PENDING 訂單紀錄。
+    手動重啟分析前，刪除當前交易週期（關盤後 13:30 到下個交易日收盤 13:30）內產生的所有 PENDING 訂單紀錄。
     """
     from datetime import datetime, timezone, timedelta, time as dt_time
     from src.time_manager import get_local_taiwan_datetime
@@ -743,7 +743,7 @@ def delete_orders_today() -> None:
         local_tz = tw_now.tzinfo
         start_dt = datetime.combine(base_date, dt_time(13, 30)).replace(tzinfo=local_tz)
 
-        # 3. 計算 cycle end (下一個工作日的 09:00)
+        # 3. 計算 cycle end (下一個工作日的 13:30)
         days_to_add = 1
         if base_date.weekday() == 4:    # Friday
             days_to_add = 3             # Go to Monday
@@ -753,7 +753,7 @@ def delete_orders_today() -> None:
             days_to_add = 1
             
         next_work_date = base_date + timedelta(days=days_to_add)
-        end_dt = datetime.combine(next_work_date, dt_time(9, 0)).replace(tzinfo=local_tz)
+        end_dt = datetime.combine(next_work_date, dt_time(13, 30)).replace(tzinfo=local_tz)
         
         # 轉為 UTC 時間格式進行資料庫查詢
         utc_start = start_dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
