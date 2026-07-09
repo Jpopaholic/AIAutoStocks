@@ -12,7 +12,7 @@ from src.services.gemini_rotator import call_gemini_with_rotation, DailyRateLimi
 class AnalystStockScore(BaseModel):
     stock_code: str = Field(
         ..., 
-        description="必須填寫 4 碼股票代號字串，例如 '2330'。此欄位必須與輸入的股票列表代號完全一致."
+        description="必須填寫股票代號字串，例如 '2330' 或 '00878'。此欄位必須與輸入的股票列表代號完全一致."
     )
     trend_score: int = Field(
         ...,

@@ -19,7 +19,7 @@ from src.services.supabase_client import (
 class PMStockDecision(BaseModel):
     stock_code: str = Field(
         ..., 
-        description="必須填寫 4 碼股票代號字串，例如 '2330'。此欄位必須與輸入的股票列表代號完全一致。"
+        description="必須填寫股票代號字串，例如 '2330' 或 '00878'。此欄位必須與輸入的股票列表代號完全一致。"
     )
     action: str = Field(
         ..., 

@@ -88,6 +88,64 @@ def _safe_json(response: requests.Response) -> Dict[str, Any]:
         print(f" [數據擷取器] 解析 JSON 失敗，狀態碼={response.status_code}，內容長度={len(text)}，前100個字元={repr(text[:100])}")
         return {}
 
+def _fetch_tpex_klines(stock_code: str, date_str: str) -> List[Dict[str, Any]]:
+    """
+    從櫃買中心 (TPEx) 獲取指定上櫃個股的歷史 K 線數據
+    """
+    try:
+        dt = datetime.strptime(date_str, "%Y%m%d")
+        api_date = dt.strftime("%Y/%m/01")
+        url = f"https://www.tpex.org.tw/www/zh-tw/afterTrading/tradingStock?code={stock_code}&date={api_date}"
+        
+        response = _get_with_retry(url)
+        data = _safe_json(response)
+        
+        if data.get("stat") != "ok" or "tables" not in data or not data["tables"]:
+            print(f" [數據擷取器] 無法取得 {stock_code} 的 K 線數據，櫃買中心回應: {data.get('stat')}")
+            return []
+            
+        table = data["tables"][0]
+        if "data" not in table or not table["data"]:
+            return []
+            
+        klines = []
+        for row in table["data"]:
+            try:
+                # row 格式: ["日期", "成交張數", "成交仟元", "開盤", "最高", "最低", "收盤", "漲跌", "筆數"]
+                # 1. 解析與校正民國日期: "115/06/01" -> "2026-06-01"
+                date_parts = row[0].split("/")
+                roc_year = int(date_parts[0])
+                ad_year = roc_year + 1911
+                iso_date = f"{ad_year}-{date_parts[1]}-{date_parts[2]}"
+                
+                # 2. 轉換欄位為數值 (張數 * 1000 轉換為股數)
+                volume = int(row[1].replace(",", "")) * 1000
+                open_val = float(row[3].replace(",", ""))
+                high_val = float(row[4].replace(",", ""))
+                low_val = float(row[5].replace(",", ""))
+                close_val = float(row[6].replace(",", ""))
+                
+                if open_val <= 0 or high_val <= 0 or low_val <= 0 or close_val <= 0:
+                    continue
+                if high_val < low_val or high_val < open_val or high_val < close_val:
+                    continue
+                    
+                klines.append({
+                    "stockCode": stock_code,
+                    "date": iso_date,
+                    "open": open_val,
+                    "high": high_val,
+                    "low": low_val,
+                    "close": close_val,
+                    "volume": volume
+                })
+            except (ValueError, IndexError):
+                continue
+        return klines
+    except Exception as e:
+        print(f" [數據擷取器] 擷取櫃買中心 K 線時發生異常: {str(e)}")
+        return []
+
 def fetch_stock_klines(stock_code: str, date_str: str = None) -> List[Dict[str, Any]]:
     """
     從台灣證券交易所 (TWSE) 獲取指定個股當月 (或指定日期所在月份) 的歷史 K 線數據
@@ -123,8 +181,9 @@ def fetch_stock_klines(stock_code: str, date_str: str = None) -> List[Dict[str, 
                 data = _safe_json(response)
 
             if data.get("stat") != "OK" or "data" not in data:
-                print(f" [數據擷取器] 無法取得 {stock_code} 的 K 線數據，證交所回應: {data.get('stat')}")
-                return []
+                # 證交所無資料，嘗試從櫃買中心 (TPEx) 獲取
+                print(f" [數據擷取器] {stock_code} 在證交所查無資料，嘗試從櫃買中心 (TPEx) 獲取...")
+                return _fetch_tpex_klines(stock_code, date_str)
 
         klines = []
         for row in data["data"]:

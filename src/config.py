@@ -35,7 +35,7 @@ STOCK_PRESETS_INFO = {
 
 def resolve_stock_codes(stocks_arg: str) -> List[str]:
     """
-    將使用者傳入的股票代號字串解析為獨立的 4 碼股票代號列表，支援 preset 套餐名稱。
+    將使用者傳入的股票代號字串解析為獨立的股票代號列表 (支援英文字母、長度不限)，並支援 preset 套餐名稱。
     """
     preset_key = stocks_arg.strip().lower()
     if preset_key in STOCK_PRESETS:
@@ -570,11 +570,12 @@ def get_stock_name(stock_code: str) -> str:
         if response.status_code == 200:
             data = response.json()
             if "msgArray" in data and len(data["msgArray"]) > 0:
-                name = data["msgArray"][0].get("n", "").strip()
-                if name:
-                    _dynamic_stock_names[clean_code] = name
-                    print(f" [配置管理] 成功動態獲取自訂股票 {clean_code} 名稱: {name}")
-                    return name
+                for item in data["msgArray"]:
+                    name = item.get("n", "").strip()
+                    if name:
+                        _dynamic_stock_names[clean_code] = name
+                        print(f" [配置管理] 成功動態獲取自訂股票 {clean_code} 名稱: {name}")
+                        return name
     except Exception as e:
         print(f" [配置管理] 警告: 無法動態查詢股票 {clean_code} 名稱: {e}")
         
