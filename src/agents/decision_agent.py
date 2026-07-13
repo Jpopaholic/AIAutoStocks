@@ -66,16 +66,18 @@ def generate_portfolio_decisions(
     from src.services.nav_calculator import calculate_nav, get_dynamic_limits
     cash_balance, total_equity, net_asset_value = calculate_nav()
     
-    # 2. 獲取限額與安全限期設定
-    single_pct = config.limits.single_stock_pct
-    single_limit = net_asset_value * single_pct
+    # 2. 獲取限額與安全限期設定 (配合大盤氣候風險乘數)
+    single_limit, daily_limit = get_dynamic_limits()
+    if regime_assessment:
+        multiplier = max(float(regime_assessment.get("risk_multiplier", 1.0)), 0.15)
+        single_limit *= multiplier
     
     # 3. 取得動態風控每日剩餘可交易限額
     try:
         from src.services.nav_calculator import get_today_remaining_limit
         remaining_daily_limit = get_today_remaining_limit()
     except Exception:
-        remaining_daily_limit, _ = get_dynamic_limits()
+        _, remaining_daily_limit = get_dynamic_limits()
 
     # 4. 取得智慧等候平倉名單
     if pending_stocks is None:

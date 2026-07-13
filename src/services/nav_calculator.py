@@ -124,3 +124,32 @@ def get_dynamic_limits() -> Tuple[float, float]:
         # 退回絕對數值限制
         _cached_limits = (config.limits.single_stock, config.limits.daily_total)
         return _cached_limits
+
+def get_today_remaining_limit() -> float:
+    """
+    計算今日剩餘可交易的累計買入限額。
+    """
+    from src.services.sandbox_simulator import is_simulation_active
+    from src.services.supabase_client import get_orders
+    from src.time_manager import get_local_taiwan_midnight_utc_range, get_effective_date_str
+    
+    _, daily_limit = get_dynamic_limits()
+    
+    try:
+        if is_simulation_active():
+            today_iso = get_effective_date_str()
+            today_orders = get_orders(sim_date=today_iso)
+        else:
+            start_utc, end_utc = get_local_taiwan_midnight_utc_range()
+            today_orders = get_orders(start_date=start_utc, end_date=end_utc)
+            
+        today_buy_sum = sum(
+            float(o["total_amount"])
+            for o in today_orders
+            if o["action"] == "BUY" and o.get("status") not in ["CANCELLED", "FAILED"]
+        )
+        return max(daily_limit - today_buy_sum, 0.0)
+    except Exception as e:
+        print(f" [NAV計算器] 計算今日剩餘累計限額失敗: {e}")
+        return daily_limit
+
