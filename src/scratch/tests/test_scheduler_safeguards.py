@@ -298,7 +298,7 @@ class TestSchedulerSafeguards(unittest.TestCase):
     @patch("src.time_manager.get_local_taiwan_datetime")
     def test_has_trading_job_run_today_cycle_range(self, mock_get_time, mock_supabase):
         """
-        測試 has_trading_job_run_today 計算的交易週期時間範圍（今日收盤 13:30 到下次收盤 13:30）
+        測試 has_trading_job_run_today 計算的交易週期時間範圍（今日收盤 12:50 到下次收盤 12:50）
         """
         from datetime import datetime
         from zoneinfo import ZoneInfo
@@ -317,31 +317,31 @@ class TestSchedulerSafeguards(unittest.TestCase):
         mock_query.limit.return_value = mock_query
         mock_query.execute.return_value = MagicMock(data=[])
 
-        # 情況 A：目前時間為 2026-06-10 14:00 (週三盤後)，在此時間點下，基準日應為今日，起迄點應為 2026-06-10 13:30 至 2026-06-11 13:30 (下一個交易日)
+        # 情況 A：目前時間為 2026-06-10 14:00 (週三盤後)，在此時間點下，基準日應為今日，起迄點應為 2026-06-10 12:50 至 2026-06-11 12:50 (下一個交易日)
         mock_get_time.return_value = datetime(2026, 6, 10, 14, 0, 0, tzinfo=local_tz)
         has_trading_job_run_today(is_paper=True)
 
         # 驗證 gte/lte 被呼叫的參數是否正確 (UTC 時間)
-        # 2026-06-10 13:30+08:00 = 2026-06-10 05:30:00Z
-        # 2026-06-11 13:30+08:00 = 2026-06-11 05:30:00Z
-        mock_query.gte.assert_any_call("created_at", "2026-06-10T05:30:00Z")
-        mock_query.lte.assert_any_call("created_at", "2026-06-11T05:30:00Z")
+        # 2026-06-10 12:50+08:00 = 2026-06-10 04:50:00Z
+        # 2026-06-11 12:50+08:00 = 2026-06-11 04:50:00Z
+        mock_query.gte.assert_any_call("created_at", "2026-06-10T04:50:00Z")
+        mock_query.lte.assert_any_call("created_at", "2026-06-11T04:50:00Z")
 
         mock_query.gte.reset_mock()
         mock_query.lte.reset_mock()
 
-        # 情況 B：目前時間為 2026-06-11 10:00 (週四上午盤中)，在此時間點下，基準日應為昨日，起迄點仍應為 2026-06-10 13:30 至 2026-06-11 13:30
+        # 情況 B：目前時間為 2026-06-11 10:00 (週四上午盤中)，在此時間點下，基準日應為昨日，起迄點仍應為 2026-06-10 12:50 至 2026-06-11 12:50
         mock_get_time.return_value = datetime(2026, 6, 11, 10, 0, 0, tzinfo=local_tz)
         has_trading_job_run_today(is_paper=True)
 
-        mock_query.gte.assert_any_call("created_at", "2026-06-10T05:30:00Z")
-        mock_query.lte.assert_any_call("created_at", "2026-06-11T05:30:00Z")
+        mock_query.gte.assert_any_call("created_at", "2026-06-10T04:50:00Z")
+        mock_query.lte.assert_any_call("created_at", "2026-06-11T04:50:00Z")
 
     @patch("src.services.supabase_client.supabase")
     @patch("src.time_manager.get_local_taiwan_datetime")
     def test_delete_orders_today_cycle_range(self, mock_get_time, mock_supabase):
         """
-        測試 delete_orders_today 清除 PENDING 訂單的交易週期時間範圍（今日收盤 13:30 到下次收盤 13:30）
+        測試 delete_orders_today 清除 PENDING 訂單的交易週期時間範圍（今日收盤 12:50 到下次收盤 12:50）
         """
         from datetime import datetime
         from zoneinfo import ZoneInfo
@@ -357,12 +357,66 @@ class TestSchedulerSafeguards(unittest.TestCase):
         mock_query.lte.return_value = mock_query
         mock_query.execute.return_value = MagicMock(data=[])
 
-        # 情況 A：目前時間為 2026-06-10 14:00 (週三盤後)，應刪除 2026-06-10 13:30 至 2026-06-11 13:30 的 PENDING 訂單
+        # 情況 A：目前時間為 2026-06-10 14:00 (週三盤後)，應刪除 2026-06-10 12:50 至 2026-06-11 12:50 的 PENDING 訂單
         mock_get_time.return_value = datetime(2026, 6, 10, 14, 0, 0, tzinfo=local_tz)
         delete_orders_today()
 
-        mock_query.gte.assert_any_call("executed_at", "2026-06-10T05:30:00Z")
-        mock_query.lte.assert_any_call("executed_at", "2026-06-11T05:30:00Z")
+        mock_query.gte.assert_any_call("executed_at", "2026-06-10T04:50:00Z")
+        mock_query.lte.assert_any_call("executed_at", "2026-06-11T04:50:00Z")
+
+    @patch("src.services.supabase_client.supabase")
+    def test_save_stock_analysis_scores_and_daily_analysis(self, mock_supabase):
+        """
+        測試 save_daily_analysis 傳入 portfolio_decision 時，能正確提取個股評分並呼叫 insert 寫入資料表，且排除 TAIEX
+        """
+        from src.services.supabase_client import save_daily_analysis
+        
+        portfolio_decision = {
+            "decisions": [
+                {
+                    "stock_code": "2330",
+                    "decision": "BUY",
+                    "trend_score": 19,
+                    "momentum_score": 16,
+                    "volume_score": 14,
+                    "safety_score": 15,
+                    "regime_score": 18
+                },
+                {
+                    "stock_code": "TAIEX",
+                    "decision": "HOLD",
+                    "trend_score": 10,
+                    "momentum_score": 10,
+                    "volume_score": 10,
+                    "safety_score": 10,
+                    "regime_score": 10
+                }
+            ]
+        }
+        
+        mock_query = MagicMock()
+        mock_supabase.table.return_value = mock_query
+        mock_query.insert.return_value = mock_query
+        mock_query.execute.side_effect = [
+            MagicMock(data=[{"id": 99}]), # daily_analysis insert
+            MagicMock(data=[])            # stock_analysis_scores insert
+        ]
+        
+        save_daily_analysis(
+            analysis_date="2026-07-15",
+            trigger_type="auto",
+            portfolio_decision=portfolio_decision
+        )
+        
+        mock_supabase.table.assert_any_call("daily_analysis")
+        mock_supabase.table.assert_any_call("stock_analysis_scores")
+        
+        call_args_list = mock_query.insert.call_args_list
+        inserted_records = call_args_list[1][0][0]
+        self.assertEqual(len(inserted_records), 1)
+        self.assertEqual(inserted_records[0]["stock_code"], "2330")
+        self.assertEqual(inserted_records[0]["daily_analysis_id"], 99)
+        self.assertEqual(inserted_records[0]["decision"], "BUY")
 
 if __name__ == "__main__":
     unittest.main()

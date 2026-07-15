@@ -598,7 +598,7 @@ def set_system_fault_status(status: str, detail: str = "") -> None:
 
 def has_trading_job_run_today(is_paper: bool = False) -> bool:
     """
-    從資料庫 system_logs 查詢當前交易週期（關盤後 13:30 到下個交易日收盤 13:30）是否已經執行過自動化或手動交易任務。
+    從資料庫 system_logs 查詢當前交易週期（關盤前 12:50 到下個交易日收盤 12:50）是否已經執行過自動化或手動交易任務。
     """
     from datetime import datetime, timezone, timedelta, time as dt_time
     from src.time_manager import get_local_taiwan_datetime
@@ -608,8 +608,8 @@ def has_trading_job_run_today(is_paper: bool = False) -> bool:
         tw_now = get_local_taiwan_datetime()
         current_time = tw_now.time()
         
-        # 1. 判斷基準日 (基準日當天的 13:30 為 cycle start)
-        if current_time >= dt_time(13, 30):
+        # 1. 判斷基準日 (基準日當天的 12:50 為 cycle start)
+        if current_time >= dt_time(12, 50):
             base_date = tw_now.date()
         else:
             days_to_subtract = 1
@@ -621,11 +621,11 @@ def has_trading_job_run_today(is_paper: bool = False) -> bool:
                 days_to_subtract = 1     # Go back to Friday
             base_date = (tw_now - timedelta(days=days_to_subtract)).date()
 
-        # 2. 計算 cycle start (基準日的 13:30)
+        # 2. 計算 cycle start (基準日的 12:50)
         local_tz = tw_now.tzinfo
-        start_dt = datetime.combine(base_date, dt_time(13, 30)).replace(tzinfo=local_tz)
+        start_dt = datetime.combine(base_date, dt_time(12, 50)).replace(tzinfo=local_tz)
 
-        # 3. 計算 cycle end (下一個工作日的 13:30)
+        # 3. 計算 cycle end (下一個工作日的 12:50)
         days_to_add = 1
         if base_date.weekday() == 4:    # Friday
             days_to_add = 3             # Go to Monday
@@ -635,7 +635,7 @@ def has_trading_job_run_today(is_paper: bool = False) -> bool:
             days_to_add = 1
             
         next_work_date = base_date + timedelta(days=days_to_add)
-        end_dt = datetime.combine(next_work_date, dt_time(13, 30)).replace(tzinfo=local_tz)
+        end_dt = datetime.combine(next_work_date, dt_time(12, 50)).replace(tzinfo=local_tz)
         
         # 轉為 UTC 時間格式進行資料庫查詢
         utc_start = start_dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -717,7 +717,7 @@ def clear_stop_loss_stocks_today() -> None:
 
 def delete_orders_today() -> None:
     """
-    手動重啟分析前，刪除當前交易週期（關盤後 13:30 到下個交易日收盤 13:30）內產生的所有 PENDING 訂單紀錄。
+    手動重啟分析前，刪除當前交易週期（關盤前 12:50 到下個交易日收盤 12:50）內產生的所有 PENDING 訂單紀錄。
     """
     from datetime import datetime, timezone, timedelta, time as dt_time
     from src.time_manager import get_local_taiwan_datetime
@@ -726,8 +726,8 @@ def delete_orders_today() -> None:
         tw_now = get_local_taiwan_datetime()
         current_time = tw_now.time()
         
-        # 1. 判斷基準日 (基準日當天的 13:30 為 cycle start)
-        if current_time >= dt_time(13, 30):
+        # 1. 判斷基準日 (基準日當天的 12:50 為 cycle start)
+        if current_time >= dt_time(12, 50):
             base_date = tw_now.date()
         else:
             days_to_subtract = 1
@@ -739,11 +739,11 @@ def delete_orders_today() -> None:
                 days_to_subtract = 1     # Go back to Friday
             base_date = (tw_now - timedelta(days=days_to_subtract)).date()
 
-        # 2. 計算 cycle start (基準日的 13:30)
+        # 2. 計算 cycle start (基準日的 12:50)
         local_tz = tw_now.tzinfo
-        start_dt = datetime.combine(base_date, dt_time(13, 30)).replace(tzinfo=local_tz)
+        start_dt = datetime.combine(base_date, dt_time(12, 50)).replace(tzinfo=local_tz)
 
-        # 3. 計算 cycle end (下一個工作日的 13:30)
+        # 3. 計算 cycle end (下一個工作日的 12:50)
         days_to_add = 1
         if base_date.weekday() == 4:    # Friday
             days_to_add = 3             # Go to Monday
@@ -753,7 +753,7 @@ def delete_orders_today() -> None:
             days_to_add = 1
             
         next_work_date = base_date + timedelta(days=days_to_add)
-        end_dt = datetime.combine(next_work_date, dt_time(13, 30)).replace(tzinfo=local_tz)
+        end_dt = datetime.combine(next_work_date, dt_time(12, 50)).replace(tzinfo=local_tz)
         
         # 轉為 UTC 時間格式進行資料庫查詢
         utc_start = start_dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -787,7 +787,7 @@ def save_daily_analysis(
     :param analysis_date: 台灣當日日期字串，格式 'YYYY-MM-DD'
     :param trigger_type: 'auto' 或 'manual'
     :param regime_assessment: 大盤氣候評估字典（可選，用於記錄摘要）
-    :param portfolio_decision: 保留相容性，實際不使用
+    :param portfolio_decision: 包含 AI 生成之決策與個股評分的字典（可選，用於寫入評分明細）
     """
     is_paper = config.limits.is_paper_trading
     record: Dict[str, Any] = {
@@ -802,14 +802,76 @@ def save_daily_analysis(
         record["risk_multiplier"] = regime_assessment.get("risk_multiplier")
 
     try:
-        execute_with_retry(
+        res_data = execute_with_retry(
             lambda: supabase.table("daily_analysis")
             .insert(record)
             .execute()
         )
         print(f" [Supabase] 已新增 {analysis_date} ({trigger_type}) 分析執行紀錄至 daily_analysis。")
+
+        # 若有傳入 portfolio_decision，則寫入對應的個股評分與決策紀錄
+        if portfolio_decision and "decisions" in portfolio_decision:
+            analysis_id = None
+            if res_data and len(res_data) > 0:
+                analysis_id = res_data[0].get("id")
+            save_stock_analysis_scores(
+                analysis_id=analysis_id,
+                analysis_date=analysis_date,
+                decisions=portfolio_decision["decisions"]
+            )
     except Exception as e:
         print(f" [Supabase] 警告: 寫入每日分析執行紀錄失敗: {str(e)}")
+
+
+def save_stock_analysis_scores(
+    analysis_id: Optional[int],
+    analysis_date: str,
+    decisions: List[Dict[str, Any]],
+) -> None:
+    """
+    批次儲存股票評分與決策紀錄至 stock_analysis_scores 資料表。
+    :param analysis_id: daily_analysis 資料表中的流水號外鍵（可為 None）
+    :param analysis_date: 台灣當日日期字串，格式 'YYYY-MM-DD'
+    :param decisions: 決策明細列表，包含個股的技術評分與決策資訊
+    """
+    is_paper = config.limits.is_paper_trading
+    records = []
+    for d in decisions:
+        stock_code = d.get("stock_code") or d.get("stockCode")
+        if not stock_code or stock_code == "TAIEX":
+            continue
+
+        decision_val = d.get("action") or d.get("decision") or "HOLD"
+        decision_val = str(decision_val).strip().upper()
+        if decision_val not in ("BUY", "SELL", "HOLD"):
+            decision_val = "HOLD"
+
+        records.append({
+            "daily_analysis_id": analysis_id,
+            "analysis_date": analysis_date,
+            "stock_code": stock_code,
+            "trend_score": int(d.get("trend_score", 0)),
+            "momentum_score": int(d.get("momentum_score", 0)),
+            "volume_score": int(d.get("volume_score", 0)),
+            "safety_score": int(d.get("safety_score", 0)),
+            "regime_score": int(d.get("regime_score", 0)),
+            "decision": decision_val,
+            "is_paper": is_paper,
+            "created_at": _get_current_time_iso(),
+        })
+
+    if not records:
+        return
+
+    try:
+        execute_with_retry(
+            lambda: supabase.table("stock_analysis_scores")
+            .insert(records)
+            .execute()
+        )
+        print(f" [Supabase] 已成功儲存 {len(records)} 筆個股評分與決策紀錄至 stock_analysis_scores。")
+    except Exception as e:
+        print(f" [Supabase] 警告: 寫入個股分析評分與決策紀錄失敗: {str(e)}")
 
 
 def get_daily_analysis_today() -> Optional[Dict[str, Any]]:
@@ -847,6 +909,17 @@ def prune_old_daily_analysis(days: int = 30) -> None:
     from datetime import datetime, timedelta
     cutoff_time = (datetime.utcnow() - timedelta(days=days)).isoformat() + "Z"
     try:
+        # 優先清理過期的個股分析評分與決策紀錄
+        try:
+            execute_with_retry(
+                lambda: supabase.table("stock_analysis_scores")
+                .delete()
+                .lt("created_at", cutoff_time)
+                .execute()
+            )
+        except Exception as e_score:
+            print(f" [日誌管理器] 警告: 清理舊個股評分與決策紀錄失敗: {str(e_score)}")
+
         execute_with_retry(
             lambda: supabase.table("daily_analysis")
             .delete()

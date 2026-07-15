@@ -234,7 +234,7 @@ def run_trading_job_in_background(is_startup: bool = False):
                 run_live_trading_job(stock_codes, is_manual=True)
                 last_run_date_memory = get_local_taiwan_datetime().date()
             
-            log_system_event("INFO", f"[永動機] 進入每日定時自動交易循環 (目標時間: 每日 14:00-14:30 盤後 或 15:00-17:00 預約，排除週末)")
+            log_system_event("INFO", f"[永動機] 進入每日定時自動交易循環 (目標時間: 每日 13:00-14:30 盤中/盤後 或 15:00-17:00 預約，排除週末)")
             
             # 進入永動機定時排程循環
             while not stop_requested:
@@ -259,12 +259,12 @@ def run_trading_job_in_background(is_startup: bool = False):
                 current_date = tw_now.date()
                 
                 # 判斷是否在合法的自動下單時段內：
-                # 1. 14:00 - 14:30 (當日盤後定價/盤後零股交易，撮合在 14:30)
+                # 1. 13:00 - 14:30 (當日盤中/盤後零股交易，盤後撮合在 14:30)
                 # 2. 15:00 - 17:00 (次日盤中交易預約單)
                 # 避開 14:30 - 15:00 券商非委託空窗期，防止下單失敗被阻斷
                 from datetime import time as dt_time
                 tw_time = tw_now.time()
-                in_after_hours_window = (dt_time(14, 0) <= tw_time <= dt_time(14, 30))
+                in_after_hours_window = (dt_time(13, 0) <= tw_time <= dt_time(14, 30))
                 in_pre_order_window = (dt_time(15, 0) <= tw_time <= dt_time(17, 0))
                 
                 if (in_after_hours_window or in_pre_order_window) and tw_now.weekday() not in (5, 6):

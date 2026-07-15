@@ -203,3 +203,31 @@ CREATE INDEX IF NOT EXISTS idx_unfilled_orders_executed_at ON unfilled_orders (e
 
 ALTER TABLE unfilled_orders ENABLE ROW LEVEL SECURITY;
 
+
+-- -----------------------------------------------------------------------------
+-- 10. stock_analysis_scores — 股票 AI 分析評分與決策紀錄
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS stock_analysis_scores (
+    id                BIGSERIAL PRIMARY KEY,
+    daily_analysis_id BIGINT REFERENCES daily_analysis(id) ON DELETE CASCADE,
+    analysis_date     DATE NOT NULL,                   -- 台灣當日日期 (e.g. 2026-07-08)
+    stock_code        TEXT NOT NULL,                   -- 股票代號 (e.g. '2330')
+    trend_score       INTEGER NOT NULL,                -- 趨勢得分 (0-20)
+    momentum_score    INTEGER NOT NULL,                -- 動能得分 (0-20)
+    volume_score      INTEGER NOT NULL,                -- 成交量得分 (0-20)
+    safety_score      INTEGER NOT NULL,                -- 安全防守得分 (0-20)
+    regime_score      INTEGER NOT NULL,                -- 與大盤一致性得分 (0-20)
+    decision          TEXT NOT NULL CHECK (decision IN ('BUY', 'SELL', 'HOLD')), -- 決策
+    is_paper          BOOLEAN NOT NULL DEFAULT TRUE,   -- TRUE=沙盒模擬, FALSE=實盤
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 加速查詢索引
+CREATE INDEX IF NOT EXISTS idx_stock_analysis_scores_date ON stock_analysis_scores (analysis_date DESC);
+CREATE INDEX IF NOT EXISTS idx_stock_analysis_scores_stock ON stock_analysis_scores (stock_code);
+CREATE INDEX IF NOT EXISTS idx_stock_analysis_scores_analysis_id ON stock_analysis_scores (daily_analysis_id);
+
+-- 啟用 Row Level Security
+ALTER TABLE stock_analysis_scores ENABLE ROW LEVEL SECURITY;
+
+
