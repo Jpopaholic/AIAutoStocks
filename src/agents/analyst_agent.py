@@ -240,10 +240,16 @@ def generate_analyst_assessments(
 
     # Python 計算價格與總分
     analyst_scores = []
+    seen_codes = set()
     for s_item in raw_scores:
         code = s_item.get("stock_code")
         if not code or code == "TAIEX":
             continue
+        
+        if code in seen_codes:
+            print(f" [分析師代理] 警告: 偵測到重複的評分結果 {code}，自動忽略重複項。")
+            continue
+        seen_codes.add(code)
         
         klines = klines_map.get(code, [])
         price = klines[-1]["close"] if klines else 10.0

@@ -170,7 +170,8 @@ def run_live_trading_job(stock_codes: List[str], is_manual: bool = False) -> Non
         held_codes = [h["stock_code"] for h in existing_holdings if h.get("stock_code")]
         added_from_holdings = [c for c in held_codes if c not in stock_codes]
         if added_from_holdings:
-            stock_codes = stock_codes + added_from_holdings
+            # 使用 dict.fromkeys 在合併後進行去重以維持原始排序
+            stock_codes = list(dict.fromkeys(stock_codes + added_from_holdings))
             supabase_client.log_system_event("INFO", f"已將目前持股合併至分析標的: {added_from_holdings} → 總標的: {stock_codes}")
     except Exception as h_err:
         print(f" [排程引擎] 警告: 獲取目前持股以合併分析標的時發生異常: {str(h_err)}")
@@ -461,7 +462,8 @@ def _run_sandbox_simulation_internal(stock_codes: List[str], start_date: str, en
         held_codes = [h["stock_code"] for h in existing_holdings if h.get("stock_code")]
         added_from_holdings = [c for c in held_codes if c not in stock_codes]
         if added_from_holdings:
-            stock_codes = stock_codes + added_from_holdings
+            # 使用 dict.fromkeys 在合併後進行去重以維持原始排序
+            stock_codes = list(dict.fromkeys(stock_codes + added_from_holdings))
             print(f" [排程引擎] 已將目前持股合併至沙盒分析標的: {added_from_holdings} → 總標的: {stock_codes}")
     except Exception as h_err:
         print(f" [排程引擎] 警告: 獲取目前持股以合併沙盒分析標的時發生異常: {str(h_err)}")
