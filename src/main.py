@@ -756,6 +756,17 @@ def _run_sandbox_simulation_internal(stock_codes: List[str], start_date: str, en
         current_day_idx = sandbox_simulator.get_current_day_index()
         target_day_idx = sandbox_simulator.get_current_target_day_index()
         if current_day_idx < target_day_idx:
+            # 讀取沙盒交易日之間的間隔延遲 (秒)，預設為 2.0 秒，避免過快觸發 RPM/TPM 上限
+            sandbox_step_delay_str = get_config_val("SANDBOX_STEP_DELAY") or "2.0"
+            try:
+                sandbox_step_delay = float(sandbox_step_delay_str)
+            except ValueError:
+                sandbox_step_delay = 2.0
+            
+            if sandbox_step_delay > 0:
+                print(f" [模擬器] 為了防範 Gemini RPM/TPM 上限，主動暫停 {sandbox_step_delay} 秒...")
+                time.sleep(sandbox_step_delay)
+
             next_day = sandbox_simulator.advance_simulation_step()
             if next_day:
                 print(f" [模擬器] 時間比例推進至下一個交易日: {next_day}")
