@@ -100,6 +100,14 @@ AIAutoStocks/
 │   │   ├── technical_indicators.py# 價格/成交量指標計算器 (SMA, EMA, RSI, MACD, DMI)
 │   │   ├── totp_service.py        # TOTP 驗證與 Session Token 管理服務
 │   │   └── trading_memory.py      # 交易得失與經驗檢索管理器
+│   ├── scratch/                   # 維護與診斷腳本目錄 (包含對帳、日誌檢視與資料清理)
+│   │   ├── check_logs.py          # 系統運行日誌快速查詢工具
+│   │   ├── check_orders.py        # 訂單委託狀態與歷史明細檢查工具
+│   │   ├── check_relations.py     # daily_analysis 與個股評分外鍵關聯檢查器
+│   │   ├── check_unfilled.py      # 未成交/滑價取消訂單明細檢查器
+│   │   ├── cleanup_duplicates.py  # 資料庫重複資料與 K 線清理公用工具
+│   │   ├── import_scores.py       # 歷史 AI 個股評分明細大量導入器
+│   │   └── parse_reports.py       # Discord 報告解析與交易績效統計器
 │   ├── static/
 │   │   └── index.html             # Web Dashboard 控制台前端頁面
 │   ├── config.py                  # 配置與環境變數驗證器
@@ -242,7 +250,7 @@ python import_history.py --stocks top5 --start-date 2026-05-01 --end-date 2026-0
 
 ## 🗄️ Supabase 資料庫建置 (SQL Schema)
 
-請在您的 Supabase 專案中，前往 **SQL Editor** 執行專案根目錄下 [supabase_schema.sql](file:///Users/jpopaholic/Documents/AIAutoStocks/supabase_schema.sql) 的全部內容，以建立以下 8 張資料表、加速查詢索引與初始設定值：
+請在您的 Supabase 專案中，前往 **SQL Editor** 執行專案根目錄下 [supabase_schema.sql](file:///Users/jpopaholic/Documents/AIAutoStocks/supabase_schema.sql) 的全部內容，以建立以下 10 張資料表、加速查詢索引與初始設定值：
 
 1. `watchlist` — 自選監控股票清單（支援 Upsert）
 2. `holdings` — 目前持股明細（支援 Paper Trading / 實盤劃分）
@@ -252,6 +260,8 @@ python import_history.py --stocks top5 --start-date 2026-05-01 --end-date 2026-0
 6. `system_config` — 動態系統配置參數（提供網頁前端進行動態覆蓋）
 7. `gemini_keys_state` — Gemini API 金鑰輪替與冷卻狀態
 8. `daily_analysis` — 每日 AI 分析執行紀錄（記錄大盤氣候、交易姿態與風險乘數）
+9. `unfilled_orders` — 未成交/滑價取消訂單記錄
+10. `stock_analysis_scores` — 股票 AI 分析評分與決策紀錄（記錄多維度量化評分與最終決策）
 
 <details>
 <summary>點擊展開完整的 SQL 建表與初始化語法</summary>
@@ -428,6 +438,57 @@ CREATE INDEX IF NOT EXISTS idx_daily_analysis_paper   ON daily_analysis (is_pape
 CREATE INDEX IF NOT EXISTS idx_daily_analysis_trigger ON daily_analysis (trigger_type);
 
 ALTER TABLE daily_analysis ENABLE ROW LEVEL SECURITY;
+
+
+-- -----------------------------------------------------------------------------
+-- 9. unfilled_orders — 未成交/滑價取消訂單紀錄
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS unfilled_orders (
+    id            BIGSERIAL PRIMARY KEY,
+    stock_code    TEXT NOT NULL,
+    action        TEXT NOT NULL CHECK (action IN ('BUY', 'SELL')),
+    price         NUMERIC(18, 4) NOT NULL,
+    quantity      NUMERIC(18, 4) NOT NULL,
+    fee           NUMERIC(18, 4) NOT NULL DEFAULT 0,
+    total_amount  NUMERIC(18, 4) NOT NULL,
+    is_paper      BOOLEAN NOT NULL DEFAULT FALSE,
+    executed_at   TIMESTAMPTZ NOT NULL,
+    order_id      TEXT,
+    reason        TEXT,                                -- 刪除原因: CANCELLED (券商取消), NOT_FOUND (未找到/過期)
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_unfilled_orders_stock_code ON unfilled_orders (stock_code);
+CREATE INDEX IF NOT EXISTS idx_unfilled_orders_executed_at ON unfilled_orders (executed_at DESC);
+
+ALTER TABLE unfilled_orders ENABLE ROW LEVEL SECURITY;
+
+
+-- -----------------------------------------------------------------------------
+-- 10. stock_analysis_scores — 股票 AI 分析評分與決策紀錄
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS stock_analysis_scores (
+    id                BIGSERIAL PRIMARY KEY,
+    daily_analysis_id BIGINT REFERENCES daily_analysis(id) ON DELETE CASCADE,
+    analysis_date     DATE NOT NULL,                   -- 台灣當日日期 (e.g. 2026-07-08)
+    stock_code        TEXT NOT NULL,                   -- 股票代號 (e.g. '2330')
+    trend_score       INTEGER NOT NULL,                -- 趨勢得分 (0-20)
+    momentum_score    INTEGER NOT NULL,                -- 動能得分 (0-20)
+    volume_score      INTEGER NOT NULL,                -- 成交量得分 (0-20)
+    safety_score      INTEGER NOT NULL,                -- 安全防守得分 (0-20)
+    regime_score      INTEGER NOT NULL,                -- 與大盤一致性得分 (0-20)
+    decision          TEXT NOT NULL CHECK (decision IN ('BUY', 'SELL', 'HOLD')), -- 決策
+    is_paper          BOOLEAN NOT NULL DEFAULT TRUE,   -- TRUE=沙盒模擬, FALSE=實盤
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 加速查詢索引
+CREATE INDEX IF NOT EXISTS idx_stock_analysis_scores_date ON stock_analysis_scores (analysis_date DESC);
+CREATE INDEX IF NOT EXISTS idx_stock_analysis_scores_stock ON stock_analysis_scores (stock_code);
+CREATE INDEX IF NOT EXISTS idx_stock_analysis_scores_analysis_id ON stock_analysis_scores (daily_analysis_id);
+
+-- 啟用 Row Level Security
+ALTER TABLE stock_analysis_scores ENABLE ROW LEVEL SECURITY;
 ```
 </details>
 
