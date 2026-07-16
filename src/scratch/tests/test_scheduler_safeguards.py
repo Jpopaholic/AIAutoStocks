@@ -87,8 +87,8 @@ class TestSchedulerSafeguards(unittest.TestCase):
         測試當今日無最新交易數據時（最新為昨日），是否會被識別為休市/節假日並跳過交易
         """
         from datetime import datetime
-        # 模擬今天日期為 2026-06-10
-        tw_now = datetime(2026, 6, 10, 14, 0, 0)
+        # 模擬今天日期為 2026-06-10 (在合法排程時段 15:00-17:00 內)
+        tw_now = datetime(2026, 6, 10, 16, 0, 0)
         
         # 模擬自動交易為啟用狀態
         mock_config.is_auto_trading_active = True
@@ -253,8 +253,8 @@ class TestSchedulerSafeguards(unittest.TestCase):
         # 1. 模擬自動交易已開啟
         mock_config.is_auto_trading_active = True
         
-        # 2. 模擬今日日期 (並非週末)
-        tw_now = datetime(2026, 6, 10, 14, 0, 0)
+        # 2. 模擬今日日期 (並非週末，在合法排程時段 15:00-17:00 內)
+        tw_now = datetime(2026, 6, 10, 16, 0, 0)
         
         # 3. 模擬基準股 2330 已經有今日最新資料 (不跳過休市自檢)
         # 第一個 call 是休市自檢 fetch_stock_klines("2330")
@@ -298,7 +298,7 @@ class TestSchedulerSafeguards(unittest.TestCase):
     @patch("src.time_manager.get_local_taiwan_datetime")
     def test_has_trading_job_run_today_cycle_range(self, mock_get_time, mock_supabase):
         """
-        測試 has_trading_job_run_today 計算的交易週期時間範圍（今日收盤 12:50 到下次收盤 12:50）
+        測試 has_trading_job_run_today 計算的交易週期時間範圍（今日收盤 13:30 到下次收盤 13:30）
         """
         from datetime import datetime
         from zoneinfo import ZoneInfo
@@ -317,31 +317,31 @@ class TestSchedulerSafeguards(unittest.TestCase):
         mock_query.limit.return_value = mock_query
         mock_query.execute.return_value = MagicMock(data=[])
 
-        # 情況 A：目前時間為 2026-06-10 14:00 (週三盤後)，在此時間點下，基準日應為今日，起迄點應為 2026-06-10 12:50 至 2026-06-11 12:50 (下一個交易日)
-        mock_get_time.return_value = datetime(2026, 6, 10, 14, 0, 0, tzinfo=local_tz)
+        # 情況 A：目前時間為 2026-06-10 16:00 (週三盤後)，在此時間點下，基準日應為今日，起迄點應為 2026-06-10 13:30 至 2026-06-11 13:30 (下一個交易日)
+        mock_get_time.return_value = datetime(2026, 6, 10, 16, 0, 0, tzinfo=local_tz)
         has_trading_job_run_today(is_paper=True)
 
         # 驗證 gte/lte 被呼叫的參數是否正確 (UTC 時間)
-        # 2026-06-10 12:50+08:00 = 2026-06-10 04:50:00Z
-        # 2026-06-11 12:50+08:00 = 2026-06-11 04:50:00Z
-        mock_query.gte.assert_any_call("created_at", "2026-06-10T04:50:00Z")
-        mock_query.lte.assert_any_call("created_at", "2026-06-11T04:50:00Z")
+        # 2026-06-10 13:30+08:00 = 2026-06-10 05:30:00Z
+        # 2026-06-11 13:30+08:00 = 2026-06-11 05:30:00Z
+        mock_query.gte.assert_any_call("created_at", "2026-06-10T05:30:00Z")
+        mock_query.lte.assert_any_call("created_at", "2026-06-11T05:30:00Z")
 
         mock_query.gte.reset_mock()
         mock_query.lte.reset_mock()
 
-        # 情況 B：目前時間為 2026-06-11 10:00 (週四上午盤中)，在此時間點下，基準日應為昨日，起迄點仍應為 2026-06-10 12:50 至 2026-06-11 12:50
+        # 情況 B：目前時間為 2026-06-11 10:00 (週四上午盤中)，在此時間點下，基準日應為昨日，起迄點仍應為 2026-06-10 13:30 至 2026-06-11 13:30
         mock_get_time.return_value = datetime(2026, 6, 11, 10, 0, 0, tzinfo=local_tz)
         has_trading_job_run_today(is_paper=True)
 
-        mock_query.gte.assert_any_call("created_at", "2026-06-10T04:50:00Z")
-        mock_query.lte.assert_any_call("created_at", "2026-06-11T04:50:00Z")
+        mock_query.gte.assert_any_call("created_at", "2026-06-10T05:30:00Z")
+        mock_query.lte.assert_any_call("created_at", "2026-06-11T05:30:00Z")
 
     @patch("src.services.supabase_client.supabase")
     @patch("src.time_manager.get_local_taiwan_datetime")
     def test_delete_orders_today_cycle_range(self, mock_get_time, mock_supabase):
         """
-        測試 delete_orders_today 清除 PENDING 訂單的交易週期時間範圍（今日收盤 12:50 到下次收盤 12:50）
+        測試 delete_orders_today 清除 PENDING 訂單的交易週期時間範圍（今日收盤 13:30 到下次收盤 13:30）
         """
         from datetime import datetime
         from zoneinfo import ZoneInfo
@@ -357,12 +357,12 @@ class TestSchedulerSafeguards(unittest.TestCase):
         mock_query.lte.return_value = mock_query
         mock_query.execute.return_value = MagicMock(data=[])
 
-        # 情況 A：目前時間為 2026-06-10 14:00 (週三盤後)，應刪除 2026-06-10 12:50 至 2026-06-11 12:50 的 PENDING 訂單
-        mock_get_time.return_value = datetime(2026, 6, 10, 14, 0, 0, tzinfo=local_tz)
+        # 情況 A：目前時間為 2026-06-10 16:00 (週三盤後)，應刪除 2026-06-10 13:30 至 2026-06-11 13:30 的 PENDING 訂單
+        mock_get_time.return_value = datetime(2026, 6, 10, 16, 0, 0, tzinfo=local_tz)
         delete_orders_today()
 
-        mock_query.gte.assert_any_call("executed_at", "2026-06-10T04:50:00Z")
-        mock_query.lte.assert_any_call("executed_at", "2026-06-11T04:50:00Z")
+        mock_query.gte.assert_any_call("executed_at", "2026-06-10T05:30:00Z")
+        mock_query.lte.assert_any_call("executed_at", "2026-06-11T05:30:00Z")
 
     @patch("src.services.supabase_client.supabase")
     def test_save_stock_analysis_scores_and_daily_analysis(self, mock_supabase):

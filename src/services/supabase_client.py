@@ -598,7 +598,7 @@ def set_system_fault_status(status: str, detail: str = "") -> None:
 
 def has_trading_job_run_today(is_paper: bool = False) -> bool:
     """
-    從資料庫 system_logs 查詢當前交易週期（關盤前 12:50 到下個交易日收盤 12:50）是否已經執行過自動化或手動交易任務。
+    從資料庫 daily_analysis 查詢當前交易週期（關盤後 13:30 到下個交易日收盤 13:30）是否已經執行過自動化或手動交易任務。
     """
     from datetime import datetime, timezone, timedelta, time as dt_time
     from src.time_manager import get_local_taiwan_datetime
@@ -608,8 +608,8 @@ def has_trading_job_run_today(is_paper: bool = False) -> bool:
         tw_now = get_local_taiwan_datetime()
         current_time = tw_now.time()
         
-        # 1. 判斷基準日 (基準日當天的 12:50 為 cycle start)
-        if current_time >= dt_time(12, 50):
+        # 1. 判斷基準日 (基準日當天的 13:30 為 cycle start)
+        if current_time >= dt_time(13, 30):
             base_date = tw_now.date()
         else:
             days_to_subtract = 1
@@ -621,11 +621,11 @@ def has_trading_job_run_today(is_paper: bool = False) -> bool:
                 days_to_subtract = 1     # Go back to Friday
             base_date = (tw_now - timedelta(days=days_to_subtract)).date()
 
-        # 2. 計算 cycle start (基準日的 12:50)
+        # 2. 計算 cycle start (基準日的 13:30)
         local_tz = tw_now.tzinfo
-        start_dt = datetime.combine(base_date, dt_time(12, 50)).replace(tzinfo=local_tz)
+        start_dt = datetime.combine(base_date, dt_time(13, 30)).replace(tzinfo=local_tz)
 
-        # 3. 計算 cycle end (下一個工作日的 12:50)
+        # 3. 計算 cycle end (下一個工作日的 13:30)
         days_to_add = 1
         if base_date.weekday() == 4:    # Friday
             days_to_add = 3             # Go to Monday
@@ -635,46 +635,25 @@ def has_trading_job_run_today(is_paper: bool = False) -> bool:
             days_to_add = 1
             
         next_work_date = base_date + timedelta(days=days_to_add)
-        end_dt = datetime.combine(next_work_date, dt_time(12, 50)).replace(tzinfo=local_tz)
+        end_dt = datetime.combine(next_work_date, dt_time(13, 30)).replace(tzinfo=local_tz)
         
         # 轉為 UTC 時間格式進行資料庫查詢
         utc_start = start_dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
         utc_end = end_dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
         
         res = execute_with_retry(
-            lambda: supabase.table("system_logs")
+            lambda: supabase.table("daily_analysis")
             .select("id")
-            .eq("level", "INFO")
             .eq("is_paper", is_paper)
             .gte("created_at", utc_start)
             .lte("created_at", utc_end)
-            .like("message", "%啟動盤後%交易流程%")
             .limit(1)
             .execute()
         )
         return len(res) > 0
     except Exception as e:
-        err_str = str(e)
-        # 回退處理 (如果沒有 is_paper 欄位)
-        if utc_start is not None and ("column \"is_paper\" of relation \"system_logs\" does not exist" in err_str or "PGRST204" in err_str or "42703" in err_str):
-            try:
-                res = execute_with_retry(
-                    lambda: supabase.table("system_logs")
-                    .select("id")
-                    .eq("level", "INFO")
-                    .gte("created_at", utc_start)
-                    .lte("created_at", utc_end)
-                    .like("message", "%啟動盤後%交易流程%")
-                    .limit(1)
-                    .execute()
-                )
-                return len(res) > 0
-            except Exception as retry_err:
-                print(f" [Supabase] 檢查今日交易紀錄失敗 (回退查詢): {str(retry_err)}")
-                return False
-        else:
-            print(f" [Supabase] 檢查今日交易紀錄失敗: {str(e)}")
-            return False
+        print(f" [Supabase] 檢查今日交易紀錄失敗: {str(e)}")
+        return False
 
 
 def get_stop_loss_stocks_today() -> List[str]:
@@ -717,7 +696,7 @@ def clear_stop_loss_stocks_today() -> None:
 
 def delete_orders_today() -> None:
     """
-    手動重啟分析前，刪除當前交易週期（關盤前 12:50 到下個交易日收盤 12:50）內產生的所有 PENDING 訂單紀錄。
+    手動重啟分析前，刪除當前交易週期（關盤後 13:30 到下個交易日收盤 13:30）內產生的所有 PENDING 訂單紀錄。
     """
     from datetime import datetime, timezone, timedelta, time as dt_time
     from src.time_manager import get_local_taiwan_datetime
@@ -726,8 +705,8 @@ def delete_orders_today() -> None:
         tw_now = get_local_taiwan_datetime()
         current_time = tw_now.time()
         
-        # 1. 判斷基準日 (基準日當天的 12:50 為 cycle start)
-        if current_time >= dt_time(12, 50):
+        # 1. 判斷基準日 (基準日當天的 13:30 為 cycle start)
+        if current_time >= dt_time(13, 30):
             base_date = tw_now.date()
         else:
             days_to_subtract = 1
@@ -739,11 +718,11 @@ def delete_orders_today() -> None:
                 days_to_subtract = 1     # Go back to Friday
             base_date = (tw_now - timedelta(days=days_to_subtract)).date()
 
-        # 2. 計算 cycle start (基準日的 12:50)
+        # 2. 計算 cycle start (基準日的 13:30)
         local_tz = tw_now.tzinfo
-        start_dt = datetime.combine(base_date, dt_time(12, 50)).replace(tzinfo=local_tz)
+        start_dt = datetime.combine(base_date, dt_time(13, 30)).replace(tzinfo=local_tz)
 
-        # 3. 計算 cycle end (下一個工作日的 12:50)
+        # 3. 計算 cycle end (下一個工作日的 13:30)
         days_to_add = 1
         if base_date.weekday() == 4:    # Friday
             days_to_add = 3             # Go to Monday
@@ -753,7 +732,7 @@ def delete_orders_today() -> None:
             days_to_add = 1
             
         next_work_date = base_date + timedelta(days=days_to_add)
-        end_dt = datetime.combine(next_work_date, dt_time(12, 50)).replace(tzinfo=local_tz)
+        end_dt = datetime.combine(next_work_date, dt_time(13, 30)).replace(tzinfo=local_tz)
         
         # 轉為 UTC 時間格式進行資料庫查詢
         utc_start = start_dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")

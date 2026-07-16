@@ -46,19 +46,15 @@ def run_live_trading_job(stock_codes: List[str], is_manual: bool = False) -> Non
 
     # 1a. 自動分析排程時間視窗防護（手動分析不受限制）
     # 自動分析必須在以下合法時段內才會執行：
-    #   1. 13:00 - 14:30 (盤中/盤後零股交易)
-    #   2. 15:00 - 17:00 (次日盤中預約單)
+    #   15:00 - 17:00 (次日盤中預約單)
     if not is_manual:
         from datetime import time as dt_time
         tw_time_check = tw_now.time()
-        in_window = (
-            dt_time(13, 0) <= tw_time_check <= dt_time(14, 30)
-            or dt_time(15, 0) <= tw_time_check <= dt_time(17, 0)
-        )
+        in_window = (dt_time(15, 0) <= tw_time_check <= dt_time(17, 0))
         if not in_window:
             msg = (
                 f"自動分析時間視窗防護：目前時間 {tw_now.strftime('%H:%M:%S')} "
-                f"不在合法排程時段 (13:00-14:30 或 15:00-17:00)，跳過本次自動分析。"
+                f"不在合法排程時段 (15:00-17:00)，跳過本次自動分析。"
             )
             print(f" [排程引擎] {msg}")
             supabase_client.log_system_event("INFO", msg)

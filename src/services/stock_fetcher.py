@@ -153,6 +153,7 @@ def fetch_stock_klines(stock_code: str, date_str: str = None) -> List[Dict[str, 
     :param date_str: 格式為 YYYYMMDD 的日期字串 (若為 None 則預設為今天)
     :returns: 清理與格式化後的台股 K 線數據列表
     """
+    is_today_query = not date_str
     if not date_str:
         date_str = get_local_taiwan_date_str().replace("-", "")
 
@@ -224,7 +225,7 @@ def fetch_stock_klines(stock_code: str, date_str: str = None) -> List[Dict[str, 
 
         # 如果是查詢今天（即沒有指定 date_str），且回傳的 K 線中最後一筆日期不是今天，
         # 則嘗試透過即時報價補建今天的 K 線（適用於證交所 STOCK_DAY API 尚未更新，但今天確實為交易日的情況）
-        if not date_str:
+        if is_today_query:
             try:
                 today_str = get_local_taiwan_date_str()
                 latest_k_date = klines[-1]["date"] if klines else None
@@ -295,17 +296,46 @@ def fetch_realtime_quotes_batch(stock_codes: List[str]) -> Dict[str, Dict[str, A
                 if not code:
                     continue
                 try:
-                    price = float(info.get("z", info.get("y", 0.0)))
-                    open_val = float(info.get("o", 0.0))
-                    high_val = float(info.get("h", 0.0))
-                    low_val = float(info.get("l", 0.0))
-                    volume = int(info.get("v", 0)) * 1000
+                    def _to_float(v, default=0.0):
+                        if v is None or v == "" or v == "-":
+                            return default
+                        try:
+                            return float(str(v).replace(",", ""))
+                        except (ValueError, TypeError):
+                            return default
 
-                    bids = [float(x) for x in info.get("b", "").split("_") if x]
-                    asks = [float(x) for x in info.get("a", "").split("_") if x]
+                    # Determine price: check z (latest price), then y (yesterday's close), then o (open)
+                    price = _to_float(info.get("z"), -1.0)
+                    if price <= 0.0:
+                        price = _to_float(info.get("y"), -1.0)
+                    if price <= 0.0:
+                        price = _to_float(info.get("o"), 0.0)
 
                     if price <= 0.0:
                         continue
+
+                    open_val = _to_float(info.get("o"), price)
+                    high_val = _to_float(info.get("h"), price)
+                    low_val = _to_float(info.get("l"), price)
+                    
+                    raw_v = info.get("v", "0")
+                    volume = int(_to_float(raw_v, 0.0)) * 1000
+
+                    bids = []
+                    for x in info.get("b", "").split("_"):
+                        if x and x != "-":
+                            try:
+                                bids.append(float(x))
+                            except ValueError:
+                                pass
+
+                    asks = []
+                    for x in info.get("a", "").split("_"):
+                        if x and x != "-":
+                            try:
+                                asks.append(float(x))
+                            except ValueError:
+                                pass
 
                     # 解析即時成交日期，例如 "20260617" -> "2026-06-17"
                     d_val = info.get("d", "")
@@ -366,16 +396,30 @@ def fetch_taiex_realtime_quote() -> Dict[str, Any]:
         data = _safe_json(response)
         if "msgArray" in data and len(data["msgArray"]) > 0:
             info = data["msgArray"][0]
-            price = float(info.get("z", info.get("y", 0.0)))
-            open_val = float(info.get("o", 0.0))
-            high_val = float(info.get("h", 0.0))
-            low_val = float(info.get("l", 0.0))
-            d_val = info.get("d", "")
-            quote_date = ""
-            if len(d_val) == 8:
-                quote_date = f"{d_val[:4]}-{d_val[4:6]}-{d_val[6:]}"
+            
+            def _to_float(v, default=0.0):
+                if v is None or v == "" or v == "-":
+                    return default
+                try:
+                    return float(str(v).replace(",", ""))
+                except (ValueError, TypeError):
+                    return default
+
+            price = _to_float(info.get("z"), -1.0)
+            if price <= 0.0:
+                price = _to_float(info.get("y"), -1.0)
+            if price <= 0.0:
+                price = _to_float(info.get("o"), 0.0)
             
             if price > 0.0:
+                open_val = _to_float(info.get("o"), price)
+                high_val = _to_float(info.get("h"), price)
+                low_val = _to_float(info.get("l"), price)
+                d_val = info.get("d", "")
+                quote_date = ""
+                if len(d_val) == 8:
+                    quote_date = f"{d_val[:4]}-{d_val[4:6]}-{d_val[6:]}"
+                
                 return {
                     "stockCode": "TAIEX",
                     "price": price,
@@ -395,6 +439,7 @@ def fetch_taiex_klines(date_str: str = None) -> List[Dict[str, Any]]:
     :param date_str: 格式為 YYYYMMDD 的日期字串 (若為 None 則預設為今天)
     :returns: 清理與格式化後的大盤 K 線數據列表 (以 stockCode 'TAIEX' 表示)
     """
+    is_today_query = not date_str
     if not date_str:
         date_str = get_local_taiwan_date_str().replace("-", "")
 
@@ -442,7 +487,7 @@ def fetch_taiex_klines(date_str: str = None) -> List[Dict[str, Any]]:
 
         # 如果是查詢今天（即沒有指定 date_str），且回傳的 K 線中最後一筆日期不是今天，
         # 則嘗試透過即時報價補建今天的大盤 K 線
-        if not date_str:
+        if is_today_query:
             try:
                 today_str = get_local_taiwan_date_str()
                 latest_k_date = klines[-1]["date"] if klines else None
