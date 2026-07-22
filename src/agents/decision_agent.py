@@ -180,8 +180,8 @@ def generate_portfolio_decisions(
 請嚴格遵守以下指示：
 1. 你的 decisions 列表中，必須包含所有輸入研究員評估之股票的決策，每檔股票必須且只能出現一次，絕對不可有任何漏遺或省略！即使該檔股票的決策是 HOLD，也必須包含在 decisions 列表中。
 2. 你的輸出必須完全符合規定的 JSON Schema (PortfolioDecision)，不可包含額外文字。
-3. `ranking_analysis` 限制在 150 到 250 字以內，繁體中文，說明大盤與個股橫向排名的綜合配置邏輯。
-4. 個股 `pm_reason` 限制在 80 到 100 字以內，繁體中文，詳細指出該股相對其他標的之優劣與此交易決策之心路歷程。絕對不要在 pm_reason 中重述或提到股票的技術評分或總分。
+3. `ranking_analysis` 需使用繁體中文，簡明扼要說明大盤與個股橫向排名的綜合配置邏輯，長度約 150-250 字左右。
+4. 個股 `pm_reason` 需使用繁體中文，詳細指出該股相對其他標的之優劣與此交易決策之心路歷程，長度約 80-100 字左右。絕對不要在 pm_reason 中重述或提到股票的技術評分或總分。
 """
 
     pm_user_prompt = f"""
@@ -213,7 +213,7 @@ def generate_portfolio_decisions(
     generation_config_pm = {
         "response_mime_type": "application/json",
         "response_schema": PortfolioDecision,
-        "temperature": 0.2  # 調整為 0.2，允許符合結構化輸出的靈活性
+        "temperature": 0.2  # 恢復為預設 0.2 配合穩定模型
     }
 
     try:
@@ -408,7 +408,12 @@ def generate_portfolio_decisions(
                         "total_score": total_score
                     })
                 else:
-                    alloc_weight = int(d.get("allocation_weight") or 3)
+                    try:
+                        raw_w = d.get("allocation_weight")
+                        alloc_weight = int(raw_w) if raw_w is not None else 3
+                    except (ValueError, TypeError, OverflowError):
+                        alloc_weight = 3
+
                     if alloc_weight < 1:
                         alloc_weight = 1
                     elif alloc_weight > 5:

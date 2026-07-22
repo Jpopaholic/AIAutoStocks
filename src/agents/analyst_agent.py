@@ -128,7 +128,7 @@ def generate_analyst_assessments(
         batch_klines_sections = []
         for code in batch_codes:
             klines = klines_map.get(code, [])
-            recent_klines = klines[-30:]
+            recent_klines = klines[-20:]
             klines_lines = []
             for k in recent_klines:
                 ma5_str = f"{k['ma5']:.2f}" if k.get('ma5') is not None else "N/A"
@@ -145,7 +145,7 @@ def generate_analyst_assessments(
                 )
             klines_text = "\n".join(klines_lines)
             batch_klines_sections.append(
-                f"● 股票代號 {code} 最近 30 天 K 線數據 (最下方為最新一日行情)：\n{klines_text}"
+                f"● 股票代號 {code} 最近 20 天 K 線數據 (最下方為最新一日行情)：\n{klines_text}"
             )
         all_klines_text = "\n\n".join(batch_klines_sections)
 

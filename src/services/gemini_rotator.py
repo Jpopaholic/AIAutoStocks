@@ -283,7 +283,7 @@ def call_gemini_with_rotation(
             response = model.generate_content(
                 prompt,
                 generation_config=generation_config,
-                request_options={"timeout": 60}
+                request_options={"timeout": 120}
             )
             
             # 解析實際消耗的 Tokens 並記錄
@@ -295,7 +295,20 @@ def call_gemini_with_rotation(
                 pass
                 
             _record_key_request(key_hash, actual_tokens)
-            return response.text
+            
+            # 安全提取 response.text，避免因安全過濾或 Recitation (finish_reason=4) 導致 response.text 拋出 ValueError
+            try:
+                return response.text
+            except ValueError as ve:
+                finish_reason = "UNKNOWN"
+                try:
+                    if response.candidates:
+                        finish_reason = response.candidates[0].finish_reason
+                except Exception:
+                    pass
+                err_msg = f"Gemini 內容生成中斷 (finish_reason={finish_reason})，可能觸發內容保護或安全過濾: {str(ve)}"
+                print(f" [金鑰輪替器] 警告 (金鑰 [{key_hash[:8]}]): {err_msg}")
+                raise GoogleAPICallError(err_msg)
             
         except ResourceExhausted as e:
             # 處理 429 速率限制
