@@ -31,7 +31,6 @@ class PMStockDecision(BaseModel):
     )
     allocation_weight: int = Field(
         ..., 
-        ge=0, le=5,
         description="買入配置權重 (1-5)。1 代表最低配置優先度，5 代表最高配置優先度。若 action 不為 BUY，此值應設定為 0。"
     )
 

@@ -202,7 +202,7 @@ def send_daily_report(
 
     climate_header = (
         f"• **市場狀態**: `{regime_display}` | **交易姿態**: `{posture}`\n"
-        f"• **風險乘數**: `{risk_mult:.1f}`\n"
+        f"• **風險乘數**: `{float(risk_mult):.2f}`\n"
     )
 
     account_header = (
@@ -263,9 +263,10 @@ def send_daily_report(
         for idx, s in enumerate(sorted_scores):
             stock_name = get_stock_name(s["stock_code"])
             name_display = f" {stock_name}" if stock_name else ""
+            reg_score_val = float(s.get('regime_score', 0))
             score_lines.append(
                 f"{idx+1}. {s['stock_code']}{name_display} | 總分: **{s['total_score']}** "
-                f"(趨勢:{s['trend_score']} 動能:{s['momentum_score']} 成交量:{s['volume_score']} 安全:{s['safety_score']} 大盤:{s['regime_score']})"
+                f"(趨勢:{s['trend_score']} 動能:{s['momentum_score']} 成交量:{s['volume_score']} 安全:{s['safety_score']} 大盤:{reg_score_val:.2f})"
             )
         scores_text = "\n".join(score_lines)
     section2_value = scores_text

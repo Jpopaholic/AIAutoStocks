@@ -16,32 +16,26 @@ class AnalystStockScore(BaseModel):
     )
     trend_score: int = Field(
         ...,
-        ge=0, le=20,
         description="趨勢得分 (0 到 20 分)。評估均線排列（MA5、MA20、MA60）與價格波段高低點。多頭排列、價格站穩在均線之上得高分；空頭排列或價格跌破均線得低分。"
     )
     momentum_score: int = Field(
         ...,
-        ge=0, le=20,
         description="動能得分 (0 到 20 分)。評估 RSI、MACD 柱狀圖多空動能強弱與黃金/死亡交叉狀態。動能轉強、柱狀圖翻紅、黃金交叉得高分；動能消退、柱狀圖翻綠、死亡交叉得低分。"
     )
     volume_score: int = Field(
         ...,
-        ge=0, le=20,
         description="成交量得分 (0 到 20 分)。評估成交量是否價漲量增、量價配合度、VOL_MA5 與 VOL_MA20 關係。放量突破、量價配合得高分；無量盤整或量價背離得低分。"
     )
     safety_score: int = Field(
         ...,
-        ge=0, le=20,
         description="安全與防守得分 (0 到 20 分)。評估下方支撐力道與防守空間。股價回檔至強支撐、乖離率小、防守空間大得高分（代表安全）；股價突破上檔阻力但乖離率過大、高檔超買或支撐跌破得低分。"
     )
     regime_score: int = Field(
         ...,
-        ge=0, le=20,
         description="與大盤一致性得分 (0 到 20 分)。結合當前大盤加權指數狀態與交易姿態。若大盤多頭且個股強於大盤得高分，大盤空頭/防禦或大盤氣候不佳時，根據交易姿態適度調降此得分。"
     )
     confidence: float = Field(
         ...,
-        ge=0.0, le=1.0,
         description="分析信心指數 (0.0 到 1.0)。反映你對該個股技術線圖與指標分析結果的把握度。"
     )
     reason: str = Field(

@@ -19,7 +19,6 @@ class MarketRegimeAssessment(BaseModel):
     )
     risk_multiplier: float = Field(
         ...,
-        ge=0.15, le=1.0,
         description="風險限額乘數，介於 0.15 到 1.0 之間。此乘數用來調整買入倉位上限（部位控制），即使在空頭大盤或高波動環境中，最小值也應保持在 0.15 以上（例如 0.15 至 0.25 之間），以允許對具有強烈技術支撐或特大個股利多的標的進行微量/零股配置，而非一刀切完全關閉買入功能。"
     )
     reason: str = Field(
