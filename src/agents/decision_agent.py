@@ -4,7 +4,7 @@ import math
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 
-from src.config import config
+from src.config import config, safe_int, safe_float
 from src.services.gemini_rotator import call_gemini_with_rotation, DailyRateLimitExceeded
 from src.services.supabase_client import (
     get_orders, 
@@ -31,6 +31,7 @@ class PMStockDecision(BaseModel):
     )
     allocation_weight: int = Field(
         ..., 
+        ge=0, le=5,
         description="買入配置權重 (1-5)。1 代表最低配置優先度，5 代表最高配置優先度。若 action 不為 BUY，此值應設定為 0。"
     )
 
@@ -274,13 +275,13 @@ def generate_portfolio_decisions(
         if not ana:
             continue
             
-        trend = int(ana.get("trend_score", 10))
-        momentum = int(ana.get("momentum_score", 10))
-        volume = int(ana.get("volume_score", 10))
-        safety = int(ana.get("safety_score", 10))
-        regime_s = int(ana.get("regime_score", 10))
+        trend = safe_int(ana.get("trend_score"), default=10, min_val=0, max_val=20)
+        momentum = safe_int(ana.get("momentum_score"), default=10, min_val=0, max_val=20)
+        volume = safe_int(ana.get("volume_score"), default=10, min_val=0, max_val=20)
+        safety = safe_int(ana.get("safety_score"), default=10, min_val=0, max_val=20)
+        regime_s = safe_int(ana.get("regime_score"), default=10, min_val=0, max_val=20)
         total_score = trend + momentum + volume + safety + regime_s
-        price = float(ana.get("price") or 10.0)
+        price = safe_float(ana.get("price"), default=10.0, min_val=0.01)
         analyst_reason = ana.get("reason", "").strip()
 
         merged_reason = f"【量化評分: {total_score}分 (趨勢:{trend} | 動能:{momentum} | 量能:{volume} | 安全:{safety} | 大盤:{regime_s})】{analyst_reason}\n【經理人決策理由】{pm_reason}"
@@ -311,8 +312,8 @@ def generate_portfolio_decisions(
                 "stock_code": code,
                 "action": action,
                 "price": price,
-                "quantity": qty,
-                "confidence": total_score / 100.0,
+                "quantity": safe_float(qty, default=0.0, min_val=0.0),
+                "confidence": safe_float(total_score / 100.0, default=0.5, min_val=0.0, max_val=1.0),
                 "reason": decision_reason,
                 "trend_score": trend,
                 "momentum_score": momentum,
@@ -362,8 +363,8 @@ def generate_portfolio_decisions(
                 "stock_code": code,
                 "action": action,
                 "price": price,
-                "quantity": qty,
-                "confidence": total_score / 100.0,
+                "quantity": safe_float(qty, default=0.0, min_val=0.0),
+                "confidence": safe_float(total_score / 100.0, default=0.5, min_val=0.0, max_val=1.0),
                 "reason": decision_reason,
                 "trend_score": trend,
                 "momentum_score": momentum,
@@ -408,11 +409,8 @@ def generate_portfolio_decisions(
                         "total_score": total_score
                     })
                 else:
-                    try:
-                        raw_w = d.get("allocation_weight")
-                        alloc_weight = int(raw_w) if raw_w is not None else 3
-                    except (ValueError, TypeError, OverflowError):
-                        alloc_weight = 3
+                    raw_w = d.get("allocation_weight")
+                    alloc_weight = safe_int(raw_w, default=3, min_val=1, max_val=5)
 
                     if alloc_weight < 1:
                         alloc_weight = 1
@@ -452,13 +450,13 @@ def generate_portfolio_decisions(
     decided_codes = {d.get("stock_code") for d in raw_decisions if d.get("stock_code")}
     for code, ana in analyst_map.items():
         if code not in decided_codes:
-            trend = int(ana.get("trend_score", 10))
-            momentum = int(ana.get("momentum_score", 10))
-            volume = int(ana.get("volume_score", 10))
-            safety = int(ana.get("safety_score", 10))
-            regime_s = int(ana.get("regime_score", 10))
+            trend = safe_int(ana.get("trend_score"), default=10, min_val=0, max_val=20)
+            momentum = safe_int(ana.get("momentum_score"), default=10, min_val=0, max_val=20)
+            volume = safe_int(ana.get("volume_score"), default=10, min_val=0, max_val=20)
+            safety = safe_int(ana.get("safety_score"), default=10, min_val=0, max_val=20)
+            regime_s = safe_int(ana.get("regime_score"), default=10, min_val=0, max_val=20)
             total_score = trend + momentum + volume + safety + regime_s
-            price = float(ana.get("price") or 10.0)
+            price = safe_float(ana.get("price"), default=10.0, min_val=0.01)
             analyst_reason = ana.get("reason", "").strip()
             
             merged_reason = f"【量化評分: {total_score}分 (趨勢:{trend} | 動能:{momentum} | 量能:{volume} | 安全:{safety} | 大盤:{regime_s})】{analyst_reason}\n【經理人決策理由】（經理人未明確提及，系統自動判定為觀望）"
@@ -501,7 +499,7 @@ def generate_portfolio_decisions(
     
     # 計算每檔股票的加權因子
     for cand in buy_candidates:
-        cand["weight_factor"] = float(cand["total_score"] * cand["allocation_weight"])
+        cand["weight_factor"] = safe_float(cand["total_score"] * cand["allocation_weight"], default=0.0, min_val=0.0)
         
     # 用於分配預算的候選清單
     alloc_candidates = list(buy_candidates)
@@ -577,8 +575,8 @@ def generate_portfolio_decisions(
                 "stock_code": code,
                 "action": "BUY",
                 "price": price,
-                "quantity": float(qty),
-                "confidence": total_score / 100.0,
+                "quantity": safe_float(qty, default=0.0, min_val=0.0),
+                "confidence": safe_float(total_score / 100.0, default=0.5, min_val=0.0, max_val=1.0),
                 "reason": f"【投資組合加權分配買入】技術評定總分 {total_score} 分，經理人權重 {alloc_weight}，融合分配預算 {cost:,.0f} 元。{reason}",
                 "trend_score": cand["trend"],
                 "momentum_score": cand["momentum"],

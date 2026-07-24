@@ -300,8 +300,11 @@ def fetch_realtime_quotes_batch(stock_codes: List[str]) -> Dict[str, Dict[str, A
                         if v is None or v == "" or v == "-":
                             return default
                         try:
-                            return float(str(v).replace(",", ""))
-                        except (ValueError, TypeError):
+                            res = float(str(v).replace(",", ""))
+                            if math.isnan(res) or math.isinf(res):
+                                return default
+                            return res
+                        except (ValueError, TypeError, OverflowError):
                             return default
 
                     # Determine price: check z (latest price), then y (yesterday's close), then o (open)
@@ -401,8 +404,11 @@ def fetch_taiex_realtime_quote() -> Dict[str, Any]:
                 if v is None or v == "" or v == "-":
                     return default
                 try:
-                    return float(str(v).replace(",", ""))
-                except (ValueError, TypeError):
+                    res = float(str(v).replace(",", ""))
+                    if math.isnan(res) or math.isinf(res):
+                        return default
+                    return res
+                except (ValueError, TypeError, OverflowError):
                     return default
 
             price = _to_float(info.get("z"), -1.0)

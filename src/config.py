@@ -1,10 +1,56 @@
 # Path: src/config.py
 import os
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Any
 from dotenv import load_dotenv
+
+def safe_int(val: Any, default: int = 0, min_val: Optional[int] = None, max_val: Optional[int] = None) -> int:
+    """
+    安全轉換任何數值/字串為整數，自動防護 OverflowError (如 int 巨大無法轉 float 或超過記憶體/評分 bounds)
+    """
+    if val is None:
+        res = default
+    else:
+        try:
+            if isinstance(val, float):
+                if math.isnan(val) or math.isinf(val):
+                    res = default
+                else:
+                    res = int(val)
+            else:
+                res = int(val)
+        except (ValueError, TypeError, OverflowError):
+            res = default
+
+    if min_val is not None and res < min_val:
+        res = min_val
+    if max_val is not None and res > max_val:
+        res = max_val
+    return res
+
+def safe_float(val: Any, default: float = 0.0, min_val: Optional[float] = None, max_val: Optional[float] = None) -> float:
+    """
+    安全轉換任何數值/字串為浮點數，自動防護 OverflowError, NaN, Inf
+    """
+    if val is None:
+        res = default
+    else:
+        try:
+            res = float(val)
+            if math.isnan(res) or math.isinf(res):
+                res = default
+        except (ValueError, TypeError, OverflowError):
+            res = default
+
+    if min_val is not None and res < min_val:
+        res = min_val
+    if max_val is not None and res > max_val:
+        res = max_val
+    return res
+
 
 STOCK_PRESETS = {
     "top5": ["2330", "2317", "2454", "2308", "2881"],  # 市值前五大 (台積電、鴻海、聯發科、台達電、富邦金)

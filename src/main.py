@@ -5,7 +5,7 @@ import time
 from datetime import datetime
 from typing import List
 
-from src.config import config, get_config_val, resolve_stock_codes
+from src.config import config, get_config_val, resolve_stock_codes, safe_float
 from src.services import supabase_client
 from src.time_manager import get_local_taiwan_datetime
 
@@ -368,8 +368,10 @@ def run_live_trading_job(stock_codes: List[str], is_manual: bool = False) -> Non
         if stock_code == "TAIEX":
             continue
         action = d.get("action") if isinstance(d, dict) else d.action
-        price = d.get("price") if isinstance(d, dict) else d.price
-        quantity = float(d.get("quantity") if isinstance(d, dict) else d.quantity)
+        raw_price = d.get("price") if isinstance(d, dict) else getattr(d, "price", 0.0)
+        raw_qty = d.get("quantity") if isinstance(d, dict) else getattr(d, "quantity", 0.0)
+        price = safe_float(raw_price, default=0.0, min_val=0.0)
+        quantity = safe_float(raw_qty, default=0.0, min_val=0.0)
         reason = d.get("reason") if isinstance(d, dict) else d.reason
         stock_name = get_stock_name(stock_code)
         display_code = f"{stock_code} {stock_name}" if stock_name else stock_code
