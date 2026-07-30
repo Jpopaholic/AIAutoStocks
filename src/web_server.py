@@ -893,6 +893,13 @@ def api_run_monthly_review(payload: MonthlyReviewRequest):
         print(f" [Web API] 開始手動觸發 {year}-{month:02d} 月度 AI 自我檢討與演化...")
         review_result = run_monthly_review(year, month, is_paper=is_paper)
 
+        if review_result.get("skipped"):
+            return {
+                "status": "ok",
+                "message": review_result.get("message", f"該月份 ({year}-{month:02d}) 無歷史資料，已跳過檢討。"),
+                "data": review_result
+            }
+
         # 觸發 Discord Webhook 通知
         try:
             send_monthly_review_notification(review_result)

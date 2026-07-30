@@ -70,6 +70,21 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
     metrics = aggregated_data["metrics"]
     per_stock_data = aggregated_data["per_stock_data"]
 
+    # 🛡️ 防崩盤與無效 Token 浪費保護：若該區間完全無任何每日分析與個股資料，跳過檢討
+    if not aggregated_data.get("daily_analysis_ids") and not per_stock_data:
+        print(f" [Monthly Review Agent] 提示: {review_month_str} 區間內完全無任何歷史分析與交易紀錄，安全跳過檢討。")
+        return {
+            "review_month": review_month_str,
+            "is_paper": is_paper,
+            "skipped": True,
+            "message": f"區間 ({aggregated_data['date_range']['start_date']} ~ {aggregated_data['date_range']['end_date']}) 內完全無歷史交易與分析資料，跳過檢討。",
+            "metrics": metrics,
+            "stock_reports": [],
+            "overall_summary": f"區間 ({review_month_str}) 內尚無歷史分析與交易紀錄，維持現有戰術防線。",
+            "key_learnings": ["區間內無交易與分析資料，保持觀望與現有配置"],
+            "skills_json": None
+        }
+
     stock_reports: List[Dict[str, Any]] = []
 
     # Step 2: Phase 1 (Map 階段) - 個股獨立檢討 Prompt
