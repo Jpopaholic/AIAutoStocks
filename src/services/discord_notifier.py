@@ -3,7 +3,7 @@ import time
 from datetime import date
 from typing import Dict, List, Any, Optional
 
-from src.config import config, get_stock_name
+from src.config import config, get_stock_name, safe_int
 from src.services.supabase_client import get_orders, get_holdings, log_system_event, get_unfilled_orders
 # 由於要動態判斷是沙盒還是真實環境以獲取報價，我們引用 sandbox_simulator
 # 它會自動根據當前系統狀態，透明切換即時報價或歷史模擬報價
@@ -263,10 +263,10 @@ def send_daily_report(
         for idx, s in enumerate(sorted_scores):
             stock_name = get_stock_name(s["stock_code"])
             name_display = f" {stock_name}" if stock_name else ""
-            reg_score_val = float(s.get('regime_score', 0))
+            reg_score_val = safe_int(s.get('regime_score'), default=10, min_val=0, max_val=20)
             score_lines.append(
                 f"{idx+1}. {s['stock_code']}{name_display} | 總分: **{s['total_score']}** "
-                f"(趨勢:{s['trend_score']} 動能:{s['momentum_score']} 成交量:{s['volume_score']} 安全:{s['safety_score']} 大盤:{reg_score_val:.2f})"
+                f"(趨勢:{s['trend_score']} 動能:{s['momentum_score']} 成交量:{s['volume_score']} 安全:{s['safety_score']} 大盤:{reg_score_val})"
             )
         scores_text = "\n".join(score_lines)
     section2_value = scores_text
