@@ -3,6 +3,7 @@ import unittest
 from datetime import date
 from src.services.monthly_aggregator import (
     get_monthly_analysis_date,
+    get_monthly_analysis_datetime,
     resolve_manual_review_month,
     calculate_mean_and_std,
     get_review_date_range
@@ -17,6 +18,12 @@ class TestMonthlyReviewSuite(unittest.TestCase):
         may_2026 = get_monthly_analysis_date(2026, 5)
         self.assertEqual(may_2026, date(2026, 5, 30))
         self.assertEqual(may_2026.weekday(), 5) # 5 = Saturday
+
+        # 驗證帶有時間點與時區的官方預設時間點 (預設 00:00 Asia/Taipei 起)
+        may_2026_dt = get_monthly_analysis_datetime(2026, 5)
+        self.assertEqual(may_2026_dt.hour, 0)
+        self.assertEqual(may_2026_dt.minute, 0)
+        self.assertEqual(may_2026_dt.tzinfo.zone, "Asia/Taipei")
 
         # 2. 2026 年 7 月底為 7/31 (星期五) ➔ 應取得該週禮拜六 8/1
         july_2026 = get_monthly_analysis_date(2026, 7)

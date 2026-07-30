@@ -14,6 +14,9 @@ from src.services.supabase_client import (
 
 TAIWAN_TZ = pytz.timezone("Asia/Taipei")
 
+DEFAULT_REVIEW_HOUR = 0    # 官方預設時間：週六凌晨 00:00 起 (週六全天皆可隨時分析)
+DEFAULT_REVIEW_MINUTE = 0
+
 def get_monthly_analysis_date(year: int, month: int) -> date:
     """
     計算指定年月的「週六分析日 (Saturday Review Day)」：
@@ -31,11 +34,18 @@ def get_monthly_analysis_date(year: int, month: int) -> date:
         days_to_saturday = (5 - weekday) % 7
         return last_day + timedelta(days=days_to_saturday)
 
+def get_monthly_analysis_datetime(year: int, month: int, hour: int = DEFAULT_REVIEW_HOUR, minute: int = DEFAULT_REVIEW_MINUTE) -> datetime:
+    """
+    計算指定年月的「週六分析日」官方定時執行時間點帶時區 (預設為週六凌晨 00:00 Asia/Taipei 起)。
+    """
+    d = get_monthly_analysis_date(year, month)
+    return TAIWAN_TZ.localize(datetime.combine(d, time(hour, minute)))
+
 def resolve_manual_review_month(target_month_str: Optional[str] = None) -> Tuple[int, int]:
     """
     推算月度檢討的標的年月：
     - 若使用者有傳入 target_month_str (如 "2026-07")，則解析並回傳。
-    - 若未傳入：檢查今日是否已達到或超過本月官方週六分析日。
+    - 若未傳入：檢查當前台灣時間是否已達到或超過本月官方週六分析日 (週六 00:00 起)。
       - 若已達到/超過 ➔ 檢討本月 (curr_year, curr_month)。
       - 若尚未達到 ➔ 自動回溯檢討上個月 (prev_year, prev_month)。
     """
@@ -50,12 +60,12 @@ def resolve_manual_review_month(target_month_str: Optional[str] = None) -> Tuple
             except ValueError:
                 pass
 
-    official_review_date = get_monthly_analysis_date(curr_year, curr_month)
+    official_review_dt = get_monthly_analysis_datetime(curr_year, curr_month)
 
-    if now.date() >= official_review_date:
+    if now >= official_review_dt:
         return curr_year, curr_month
     else:
-        # 回溯上個月
+        # 尚未達到本月週六 20:00 ➔ 回溯檢討上個月
         if curr_month == 1:
             return curr_year - 1, 12
         else:
