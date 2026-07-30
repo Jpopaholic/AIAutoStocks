@@ -104,7 +104,7 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
         generation_config_map = {
             "response_mime_type": "application/json",
             "response_schema": StockReviewOutput,
-            "temperature": 0.1
+            "temperature": 0.0
         }
         try:
             map_res = call_gemini_fn(
@@ -149,7 +149,7 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
     generation_config_reduce = {
         "response_mime_type": "application/json",
         "response_schema": OverallReviewOutput,
-        "temperature": 0.1
+        "temperature": 0.0
     }
 
     try:

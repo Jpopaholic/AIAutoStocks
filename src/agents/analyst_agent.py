@@ -116,7 +116,7 @@ def generate_analyst_assessments(
     generation_config_analyst = {
         "response_mime_type": "application/json",
         "response_schema": AnalystStockScore,
-        "temperature": 0.1
+        "temperature": 0.0
     }
 
     raw_scores = []

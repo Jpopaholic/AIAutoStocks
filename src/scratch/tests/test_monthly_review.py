@@ -6,7 +6,8 @@ from src.services.monthly_aggregator import (
     get_monthly_analysis_datetime,
     resolve_manual_review_month,
     calculate_mean_and_std,
-    get_review_date_range
+    get_review_date_range,
+    aggregate_daily_scores
 )
 from src.services.trading_memory import get_active_skills_context
 from src.web_server import is_weekend_taiwan
@@ -53,6 +54,55 @@ class TestMonthlyReviewSuite(unittest.TestCase):
         self.assertEqual(mean_single, 0.15)
         self.assertEqual(std_single, 0.0)
 
+    def test_daily_score_aggregation(self):
+        """驗證同日多筆分析分數平均與 BUY/SELL 優先判斷邏輯"""
+        raw_scores = [
+            # 2330 第一筆 (HOLD, 總分 50)
+            {
+                "stock_code": "2330",
+                "analysis_date": "2026-07-15",
+                "trend_score": 10, "momentum_score": 10, "volume_score": 10, "safety_score": 10, "regime_score": 10,
+                "decision": "HOLD"
+            },
+            # 2330 第二筆 (BUY, 總分 90)
+            {
+                "stock_code": "2330",
+                "analysis_date": "2026-07-15",
+                "trend_score": 18, "momentum_score": 18, "volume_score": 18, "safety_score": 18, "regime_score": 18,
+                "decision": "BUY"
+            },
+            # 2330 第三筆 (HOLD, 總分 70)
+            {
+                "stock_code": "2330",
+                "analysis_date": "2026-07-15",
+                "trend_score": 14, "momentum_score": 14, "volume_score": 14, "safety_score": 14, "regime_score": 14,
+                "decision": "HOLD"
+            },
+            # 2454 只有一筆 (SELL)
+            {
+                "stock_code": "2454",
+                "analysis_date": "2026-07-15",
+                "trend_score": 8, "momentum_score": 8, "volume_score": 8, "safety_score": 8, "regime_score": 8,
+                "decision": "SELL"
+            }
+        ]
+
+        res = aggregate_daily_scores(raw_scores)
+        self.assertEqual(len(res), 2)
+
+        # 檢驗 2330 聚合結果
+        sc_2330 = next(x for x in res if x["stock_code"] == "2330")
+        self.assertEqual(sc_2330["sample_count"], 3)
+        self.assertEqual(sc_2330["trend_score"], 14)  # (10+18+14)/3 = 14
+        self.assertEqual(sc_2330["momentum_score"], 14)
+        self.assertEqual(sc_2330["total_score"], 70)
+        # 即使包含 HOLD，只要有一筆 BUY 則決策必須為 BUY
+        self.assertEqual(sc_2330["decision"], "BUY")
+
+        # 檢驗 2454 聚合結果
+        sc_2454 = next(x for x in res if x["stock_code"] == "2454")
+        self.assertEqual(sc_2454["decision"], "SELL")
+
     def test_active_skills_query_single_latest(self):
         """驗證 get_active_skills_context 能順利返回 Prompt 字串與 JSON Skills 區塊"""
         ctx = get_active_skills_context(is_paper=False)
@@ -66,3 +116,4 @@ class TestMonthlyReviewSuite(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

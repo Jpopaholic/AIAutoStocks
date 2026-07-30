@@ -221,7 +221,7 @@ def generate_portfolio_decisions(
     generation_config_pm = {
         "response_mime_type": "application/json",
         "response_schema": PortfolioDecision,
-        "temperature": 0.2  # 恢復為預設 0.2 配合穩定模型
+        "temperature": 0.2  # 投資組合經理決策層保持 0.2 靈活性
     }
 
     try:

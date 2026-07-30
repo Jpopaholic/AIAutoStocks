@@ -249,12 +249,18 @@ def call_gemini_with_rotation(
     model_name: str = "gemini-1.5-flash",
     generation_config: Optional[Dict[str, Any]] = None,
     max_api_retries: int = 5,
-    timeout: int = 45
+    timeout: int = 90
 ) -> str:
     """
-    包裝 google-generativeai 接口，自動執行金鑰輪替、主動速率限制 Pacing 及冷卻與重試機制
+    包裝 google-generativeai 接口，自動執行金鑰輪替、主動速率限制 Pacing 及冷卻與重試機制。
+    預設設定 think_level 為 medium (thinking_budget: 2048)，搭配 90s 超時防範 504 錯誤。
     """
     last_error = None
+
+    # 複製或建立 generation_config，預設注入 medium 層級 thinking_config (thinking_budget: 2048)
+    config_to_use = dict(generation_config) if generation_config else {}
+    if "thinking_config" not in config_to_use:
+        config_to_use["thinking_config"] = {"thinking_budget": 2048}
     
     # 估算本次請求的 Token 數 (安全估計：字符數 * 0.75)
     estimated_tokens = int((len(prompt) + len(system_instruction or "")) * 0.75)
@@ -281,11 +287,24 @@ def call_gemini_with_rotation(
                 system_instruction=system_instruction
             )
             
-            response = model.generate_content(
-                prompt,
-                generation_config=generation_config,
-                request_options={"timeout": timeout}
-            )
+            try:
+                response = model.generate_content(
+                    prompt,
+                    generation_config=config_to_use,
+                    request_options={"timeout": timeout}
+                )
+            except (GoogleAPICallError, TypeError, ValueError) as cfg_err:
+                # 若使用的模型不支援 thinking_config，自動倒退回不安裝 thinking_config 再次嘗試
+                if "thinking_config" in config_to_use and "thinking" in str(cfg_err).lower():
+                    clean_config = {k: v for k, v in config_to_use.items() if k != "thinking_config"}
+                    response = model.generate_content(
+                        prompt,
+                        generation_config=clean_config,
+                        request_options={"timeout": timeout}
+                    )
+                else:
+                    raise cfg_err
+            
             
             # 解析實際消耗的 Tokens 並記錄
             actual_tokens = estimated_tokens

@@ -97,6 +97,68 @@ def calculate_mean_and_std(values: List[float]) -> Tuple[float, float]:
     std_val = math.sqrt(variance)
     return mean_val, std_val
 
+def aggregate_daily_scores(scores_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    同日多筆打分紀錄聚合與去重：
+    1. 同一股票在同一個交易日 (stock_code, analysis_date) 若有多筆分析紀錄：
+       - 各項分數 (trend, momentum, volume, safety, regime) 取算術平均值 (round 到整數)。
+       - 總分 total_score 為各項平均分數之總和。
+    2. 策略決策 (decision / action)：
+       - 若當日任一筆分析結果為 'BUY'，則當日聚合決策優先判定為 'BUY'。
+       - 否則若當日任一筆分析結果為 'SELL'，則當日聚合決策優先判定為 'SELL'。
+       - 若全部為 'HOLD' (或無動作)，則判定為 'HOLD'。
+    """
+    if not scores_list:
+        return []
+
+    from collections import defaultdict
+    grouped: Dict[Tuple[str, str], List[Dict[str, Any]]] = defaultdict(list)
+
+    for item in scores_list:
+        sc = item.get("stock_code")
+        an_date = str(item.get("analysis_date"))
+        if sc and an_date:
+            grouped[(sc, an_date)].append(item)
+
+    aggregated: List[Dict[str, Any]] = []
+
+    for (sc, an_date), items in grouped.items():
+        n = len(items)
+        
+        # 1. 各項分數算術平均
+        avg_trend = round(sum(int(x.get("trend_score", 0)) for x in items) / n)
+        avg_momentum = round(sum(int(x.get("momentum_score", 0)) for x in items) / n)
+        avg_volume = round(sum(int(x.get("volume_score", 0)) for x in items) / n)
+        avg_safety = round(sum(int(x.get("safety_score", 0)) for x in items) / n)
+        avg_regime = round(sum(int(x.get("regime_score", 0)) for x in items) / n)
+        total_score = avg_trend + avg_momentum + avg_volume + avg_safety + avg_regime
+
+        # 2. 策略決策優先級判定 (BUY > SELL > HOLD)
+        decisions = [str(x.get("decision") or x.get("action") or x.get("strategy") or "HOLD").upper() for x in items]
+        if "BUY" in decisions:
+            merged_decision = "BUY"
+        elif "SELL" in decisions:
+            merged_decision = "SELL"
+        else:
+            merged_decision = "HOLD"
+
+        aggregated.append({
+            "stock_code": sc,
+            "analysis_date": an_date,
+            "trend_score": avg_trend,
+            "momentum_score": avg_momentum,
+            "volume_score": avg_volume,
+            "safety_score": avg_safety,
+            "regime_score": avg_regime,
+            "total_score": total_score,
+            "decision": merged_decision,
+            "sample_count": n
+        })
+
+    # 按日期與股票代號排序
+    aggregated.sort(key=lambda x: (x["analysis_date"], x["stock_code"]))
+    return aggregated
+
 def aggregate_monthly_data(year: int, month: int, is_paper: bool = False) -> Dict[str, Any]:
     """
     聚合當月實盤 (is_paper=False) 所有硬指標與歷史資料：
@@ -137,7 +199,9 @@ def aggregate_monthly_data(year: int, month: int, is_paper: bool = False) -> Dic
                 .in_("daily_analysis_id", daily_analysis_ids) \
                 .eq("is_paper", is_paper) \
                 .execute()
-            scores_list = res.data or []
+            raw_scores = res.data or []
+            # 同日多筆分析聚合：各項分數算術平均，策略若有 BUY/SELL 則優先判定為 BUY/SELL
+            scores_list = aggregate_daily_scores(raw_scores)
         except Exception as e:
             print(f" [Monthly Aggregator] 警告: 撈取 stock_analysis_scores 失敗: {e}")
 
