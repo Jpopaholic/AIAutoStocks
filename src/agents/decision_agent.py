@@ -162,9 +162,17 @@ def generate_portfolio_decisions(
         )
 
     # 10. 構建經理人系統指令
+    from src.services.trading_memory import get_experience_context, get_active_skills_context
+    active_skills_text = get_active_skills_context(is_paper=False)
+    experience_text = get_experience_context(limit=3)
+
     pm_system_instruction = f"""
 你是一個極其資深且穩健的台股投資組合配置經理 (Portfolio Manager)。
 你的任務是審查分析師提供的個股技術評分報告，並根據當前大盤氣候環境、可用資金及目前持股，產出最終的交易決策與部位資金分配比例。
+
+{active_skills_text}
+
+{experience_text}
 
 【中長期穩健投資哲學】：
 1. 你的投資風格是「中長期穩健投資」，必須極力避免頻繁交易、微調調倉及短線投機。交易印花稅與手續費滑價是利潤的殺手。
@@ -288,24 +296,19 @@ def generate_portfolio_decisions(
         matching_holding = next((h for h in current_holdings if h["stock_code"] == code), None)
         holding_qty = float(matching_holding.get("quantity", 0)) if matching_holding else 0.0
         
-        # 護欄 1：智慧等候平倉排隊中股票強制干預
+        # 護欄 1：智慧等候平倉排隊中股票處理 (尊重 AI 決策，移除硬編碼 score < 70 強退)
         if code in pending_stocks:
             if holding_qty <= 0:
                 action = "HOLD"
                 qty = 0.0
                 decision_reason = f"【智慧平倉安全過濾】無持股庫存，強制觀望。{merged_reason}"
-            elif action == "SELL" or total_score < 70:
-                original_action = action
-                action = "SELL"
+            elif action == "SELL":
                 qty = holding_qty
-                if original_action != "SELL" and total_score < 70:
-                    decision_reason = f"【智慧平倉強制賣出】因該股列於等候平倉名單且評分 {total_score} 分低於門檻 70，觸發強制平倉覆寫（經理人原意為：{pm_reason}）。【量化評分: {total_score}分】{analyst_reason}"
-                else:
-                    decision_reason = f"【智慧平倉排隊】總評分 {total_score} 分表現疲弱，維持賣出平倉。{merged_reason}"
+                decision_reason = f"【智慧平倉排隊賣出】總評分 {total_score} 分，經理人建議賣出平倉。{merged_reason}"
             else:
                 action = "HOLD"
                 qty = 0.0
-                decision_reason = f"【智慧平倉排隊】總評分 {total_score} 分表現回彈，暫緩賣出觀望。{merged_reason}"
+                decision_reason = f"【智慧平倉排隊暫緩】總評分 {total_score} 分，經理人評估暫緩賣出觀望。{merged_reason}"
             
             final_decisions.append({
                 "stock_code": code,
@@ -342,21 +345,15 @@ def generate_portfolio_decisions(
             })
             continue
 
-        # 已持有倉位
+        # 已持有倉位 (解耦 score < 60 強制賣出，全權依據經理人動態 Skills 與 action 推理)
         if holding_qty > 0:
-            # 賣出持股風控防線
-            if action == "SELL" or total_score < 60:
-                original_action = action
-                action = "SELL"
+            if action == "SELL":
                 qty = holding_qty
-                if original_action != "SELL" and total_score < 60:
-                    decision_reason = f"【風控強制賣出】總分 {total_score} 分低於持有門檻 60 (趨勢: {trend}, 動能: {momentum}, 量能: {volume}, 安全: {safety}, 大盤: {regime_s})，觸發風控護欄覆寫（經理人原意為：{pm_reason}）。【量化評分: {total_score}分】{analyst_reason}"
-                else:
-                    decision_reason = f"【量化評分賣出】總分 {total_score} 分低於持有門檻 60 (趨勢: {trend}, 動能: {momentum}, 量能: {volume}, 安全: {safety}, 大盤: {regime_s})。{merged_reason}"
+                decision_reason = f"【經理人決策賣出】總分 {total_score} 分，經理人依據動態戰術 Skills 建議賣出平倉。{merged_reason}"
             else:
                 action = "HOLD"
                 qty = 0.0
-                decision_reason = f"【量化評分續抱】總分 {total_score} 分維持在持有區間 60~100 (趨勢: {trend}, 動能: {momentum}, 量能: {volume}, 安全: {safety}, 大盤: {regime_s})。{merged_reason}"
+                decision_reason = f"【經理人決策續抱】總分 {total_score} 分，經理人依據動態戰術 Skills 建議觀望續抱。{merged_reason}"
             
             final_decisions.append({
                 "stock_code": code,
@@ -391,33 +388,17 @@ def generate_portfolio_decisions(
                     "total_score": total_score
                 })
             elif action == "BUY":
-                # 防禦性最低評分過濾 (總分低於 50 分底線進行安全過濾)
-                if total_score < 50:
-                    final_decisions.append({
-                        "stock_code": code,
-                        "action": "HOLD",
-                        "price": price,
-                        "quantity": 0.0,
-                        "confidence": total_score / 100.0,
-                        "reason": f"【量化安全過濾】經理人建議買入，但技術量化評分極低 ({total_score} 分 < 50 分底線)，進行安全過濾。{merged_reason}",
-                        "trend_score": trend,
-                        "momentum_score": momentum,
-                        "volume_score": volume,
-                        "safety_score": safety,
-                        "regime_score": regime_s,
-                        "total_score": total_score
-                    })
-                else:
-                    raw_w = d.get("allocation_weight")
-                    alloc_weight = safe_int(raw_w, default=3, min_val=1, max_val=5)
+                # 解耦 score < 50 強制禁買，全權依據經理人動態 Skills 與 action 推理 (後端保留資金餘額與單筆限額防線)
+                raw_w = d.get("allocation_weight")
+                alloc_weight = safe_int(raw_w, default=3, min_val=1, max_val=5)
 
-                    if alloc_weight < 1:
-                        alloc_weight = 1
-                    elif alloc_weight > 5:
-                        alloc_weight = 5
-                        
-                    buy_candidates.append({
-                        "stock_code": code,
+                if alloc_weight < 1:
+                    alloc_weight = 1
+                elif alloc_weight > 5:
+                    alloc_weight = 5
+                    
+                buy_candidates.append({
+                    "stock_code": code,
                         "total_score": total_score,
                         "allocation_weight": alloc_weight,
                         "trend": trend,

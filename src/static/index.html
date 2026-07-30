@@ -1164,6 +1164,36 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- 🤖 AI 月度自我檢討與策略演化控制卡片 -->
+                <div class="glass-card" style="margin-top: 20px;">
+                    <div class="section-title">
+                        <span>
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                            🤖 AI 月度自我檢討與策略演化
+                        </span>
+                    </div>
+
+                    <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 12px; line-height: 1.5;">
+                        <span id="weekend-status-badge" style="display: inline-block; padding: 2px 8px; border-radius: 4px; font-weight: 600; font-size: 11px; margin-bottom: 6px;"></span>
+                        <div id="weekend-notice-text">⚠️ 手動檢討僅限週六/週日開放，避免干擾平日盤中交易。</div>
+                    </div>
+
+                    <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+                        <input type="month" id="monthly-review-month-picker" class="form-control" style="flex: 1; font-size: 12px;">
+                        <button class="btn btn-primary" id="btn-run-monthly-review" onclick="runMonthlyReviewUI()" style="padding: 6px 14px; font-size: 12px; font-weight: 600;">
+                            一鍵月度檢討
+                        </button>
+                    </div>
+
+                    <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid var(--glass-border); border-radius: 8px; padding: 12px;">
+                        <div style="font-size: 12px; font-weight: 600; color: var(--text-primary); margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
+                            <span>當前生效 JSON Skills 規範</span>
+                            <span id="active-skill-version" style="font-size: 10px; color: var(--color-primary);">載入中...</span>
+                        </div>
+                        <pre id="active-skill-json-display" style="font-size: 11px; color: #a5f3fc; font-family: monospace; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto; background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; margin: 0;">目前無生效中的 Skills</pre>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -2347,6 +2377,102 @@
                 showToast("連線伺服器時發生錯誤。", "error");
             }
         }
+
+        // 🤖 月度 AI 檢討與 Skills UI 邏輯
+        async function loadActiveSkillsUI() {
+            try {
+                const response = await authFetch(`${API_BASE}/api/monthly-skills/active`);
+                if (!response.ok) return;
+                const data = await response.json();
+                const jsonDisplay = document.getElementById("active-skill-json-display");
+                const verDisplay = document.getElementById("active-skill-version");
+                
+                if (data.active_skill && data.active_skill.skills) {
+                    if (verDisplay) verDisplay.innerText = `版本: ${data.active_skill.review_month || "最新"}`;
+                    if (jsonDisplay) jsonDisplay.innerText = JSON.stringify(data.active_skill.skills, null, 2);
+                } else {
+                    if (verDisplay) verDisplay.innerText = "基準策略";
+                    if (jsonDisplay) jsonDisplay.innerText = "目前無月度演化出的 Skills 紀錄，使用系統預設基準策略。";
+                }
+            } catch (err) {
+                console.error("載入 Skills 失敗:", err);
+            }
+        }
+
+        function checkWeekendStatusUI() {
+            const badge = document.getElementById("weekend-status-badge");
+            const btn = document.getElementById("btn-run-monthly-review");
+            const notice = document.getElementById("weekend-notice-text");
+            const now = new Date();
+            const day = now.getDay(); // 0 is Sunday, 6 is Saturday
+            const isWeekend = (day === 0 || day === 6);
+
+            if (isWeekend) {
+                if (badge) {
+                    badge.style.background = "rgba(16, 185, 129, 0.2)";
+                    badge.style.color = "#6ee7b7";
+                    badge.style.border = "1px solid rgba(16, 185, 129, 0.4)";
+                    badge.innerText = "🟢 週末假日開放中";
+                }
+                if (notice) notice.innerText = "今日為週末，可以點擊下方按鈕手動觸發月度 AI 復盤。";
+                if (btn) btn.disabled = false;
+            } else {
+                if (badge) {
+                    badge.style.background = "rgba(245, 158, 11, 0.2)";
+                    badge.style.color = "#fde047";
+                    badge.style.border = "1px solid rgba(245, 158, 11, 0.4)";
+                    badge.innerText = "🔒 平日盤中鎖定中";
+                }
+                if (notice) notice.innerText = "⚠️ 手動檢討僅限週六/週日開放，避免干擾平日盤中交易。";
+                if (btn) btn.disabled = true;
+            }
+        }
+
+        async function runMonthlyReviewUI() {
+            const picker = document.getElementById("monthly-review-month-picker");
+            const targetMonth = picker ? picker.value : "";
+            
+            if (!confirm(`確定要手動觸發月度 AI 復盤與 Skills 演化嗎？${targetMonth ? '\n指定月份: ' + targetMonth : '\n(將會自動推算對應的完整結算月份)'}`)) {
+                return;
+            }
+
+            const btn = document.getElementById("btn-run-monthly-review");
+            const originalHTML = btn ? btn.innerHTML : "";
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = `<span class="loading-spinner" style="width:12px;height:12px;border-width:2px;"></span> 檢討中...`;
+            }
+
+            try {
+                const response = await authFetch(`${API_BASE}/api/monthly-skills/run`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ target_month: targetMonth })
+                });
+
+                const data = await response.json();
+                if (!response.ok) {
+                    showToast(data.detail || data.message || "檢討失敗", "error");
+                } else {
+                    showToast(data.message || "成功完成月度 AI 復盤！", "success");
+                    loadActiveSkillsUI();
+                    loadLogs();
+                }
+            } catch (err) {
+                console.error("執行月度檢討失敗:", err);
+                showToast("連線後端伺服器時發生錯誤。", "error");
+            } finally {
+                checkWeekendStatusUI();
+                if (btn && !btn.disabled) btn.innerHTML = originalHTML;
+            }
+        }
+
+        // 初始化時呼叫
+        document.addEventListener("DOMContentLoaded", () => {
+            loadActiveSkillsUI();
+            checkWeekendStatusUI();
+        });
+
     </script>
 </body>
 </html>

@@ -231,3 +231,22 @@ CREATE INDEX IF NOT EXISTS idx_stock_analysis_scores_analysis_id ON stock_analys
 ALTER TABLE stock_analysis_scores ENABLE ROW LEVEL SECURITY;
 
 
+-- -----------------------------------------------------------------------------
+-- 11. monthly_skills — 月度 AI 決策檢討與動態 JSON Skills 戰術庫 (極簡全自動 Schema)
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS monthly_skills (
+    id                 BIGSERIAL PRIMARY KEY,
+    review_month       TEXT NOT NULL,                  -- 分析月份，格式如 '2026-07'
+    daily_analysis_ids JSONB NOT NULL DEFAULT '[]',   -- 本月引用的 is_paper=FALSE daily_analysis.id 列表
+    skills             JSONB NOT NULL,                 -- AI 檢討產出的精簡 JSON 格式化戰術 Skills
+    is_paper           BOOLEAN NOT NULL DEFAULT FALSE, -- 預設 FALSE (僅記錄真實操盤檢討)
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_monthly_skills_month ON monthly_skills (review_month DESC);
+CREATE INDEX IF NOT EXISTS idx_monthly_skills_paper ON monthly_skills (is_paper);
+
+ALTER TABLE monthly_skills ENABLE ROW LEVEL SECURITY;
+
+
+

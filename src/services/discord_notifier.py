@@ -476,3 +476,71 @@ def send_emergency_alert(subject: str, message: str) -> None:
     except Exception as e:
         log_system_event("ERROR", f"發送緊急警報至 Discord Webhook 發生異常: {str(e)}")
         raise
+
+def send_monthly_review_notification(review_result: Dict[str, Any]) -> None:
+    """
+    發送月度 AI 復盤與 Skills 演化報告至專屬的 DISCORD_WEBHOOK_REVIEW 頻道。
+    包含 Phase 1 個股獨立診斷卡片與 Phase 2 組合整體復盤與 JSON Skills。
+    """
+    webhook_url = config.discord.webhook_monthly_review or config.discord.webhook_live
+    if not webhook_url:
+        print(" [Discord通知器] 警告: 未配置 DISCORD_WEBHOOK_MONTHLY_REVIEW 網址，跳過推播。")
+        return
+
+    review_month = review_result.get("review_month", "未知月份")
+    metrics = review_result.get("metrics", {})
+    stock_reports = review_result.get("stock_reports", [])
+    overall_summary = review_result.get("overall_summary", "")
+    key_learnings = review_result.get("key_learnings", [])
+    skills_json = review_result.get("skills_json", {})
+
+    from datetime import datetime, timezone
+    ts = datetime.now(timezone.utc).isoformat()
+
+    # 1. 發送 Phase 1 個股獨立復盤診斷卡片
+    for s_rep in stock_reports:
+        sc = s_rep.get("stock_code", "")
+        retro = s_rep.get("stock_retrospective", "")
+        stock_payload = {
+            "username": "AI 檢討 AI - 個股獨立診斷",
+            "embeds": [
+                {
+                    "title": f"🔍 個股復盤診斷: {sc} (月份: {review_month})",
+                    "description": retro,
+                    "color": 3447003, # 藍色
+                    "footer": {"text": f"AIAutoStocks 月度復盤 · {sc}"},
+                    "timestamp": ts
+                }
+            ]
+        }
+        _send_discord_webhook(webhook_url, stock_payload)
+        time.sleep(0.5)
+
+    # 2. 發送 Phase 2 組合整體復盤與演化 JSON Skills 總結卡片
+    learnings_text = "\n".join([f"• {item}" for item in key_learnings]) if key_learnings else "無"
+    skills_pretty = json.dumps(skills_json, ensure_ascii=False, indent=2)
+
+    overall_payload = {
+        "username": "AI 檢討 AI - 月度整體策略演化",
+        "embeds": [
+            {
+                "title": f"📊 月度整體復盤與策略演化總結 (月份: {review_month})",
+                "description": (
+                    f"**【月度硬指標統計】**\n"
+                    f"• 平倉總筆數: **{metrics.get('total_trades', 0)}** 筆 | 勝率: **{metrics.get('win_rate', 0)}%**\n"
+                    f"• 實現總損益: **{metrics.get('total_realized_pnl', 0):,}** 元 | 盈虧比: **{metrics.get('payoff_ratio', 0)}** | 獲利因子: **{metrics.get('profit_factor', 0)}**\n"
+                    f"• 期望潛在漲幅 Mean: **+{metrics.get('mean_upside_ratio', 0)*100:.2f}%** (Std: {metrics.get('std_upside_ratio', 0)})\n"
+                    f"• 期望潛在回撤 Mean: **{metrics.get('mean_drawdown_ratio', 0)*100:.2f}%** (Std: {metrics.get('std_drawdown_ratio', 0)})\n\n"
+                    f"**【CIO 組合整體檢討總評】**\n{overall_summary}\n\n"
+                    f"**【核心反思與學習點】**\n{learnings_text}\n\n"
+                    f"**【下月最新動態 JSON Skills 戰術規範】**\n```json\n{skills_pretty}\n```"
+                ),
+                "color": 10181046, # 紫色
+                "footer": {"text": "此報告由 Monthly Review Agent 檢討引擎自動產出與發送。"},
+                "timestamp": ts
+            }
+        ]
+    }
+    _send_discord_webhook(webhook_url, overall_payload)
+    log_system_event("INFO", f"已成功發送 {review_month} 月度復盤與演化 Skills 至 Discord Webhook。")
+

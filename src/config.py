@@ -136,6 +136,12 @@ def _merge_decrypted_credentials(cfg: dict):
                 cfg["DISCORD_WEBHOOK_SANDBOX"] = d_creds["webhookSandbox"]
             if d_creds.get("webhookLive"):
                 cfg["DISCORD_WEBHOOK_LIVE"] = d_creds["webhookLive"]
+            if d_creds.get("webhookMonthlyReview"):
+                cfg["DISCORD_WEBHOOK_MONTHLY_REVIEW"] = d_creds["webhookMonthlyReview"]
+            if d_creds.get("webhookQuarterlyReview"):
+                cfg["DISCORD_WEBHOOK_QUARTERLY_REVIEW"] = d_creds["webhookQuarterlyReview"]
+            if d_creds.get("webhookYearlyReview"):
+                cfg["DISCORD_WEBHOOK_YEARLY_REVIEW"] = d_creds["webhookYearlyReview"]
 
         # 5. 整合 Shioaji 模擬設定
         if "brokerCredentials" in decrypted_creds:
@@ -298,6 +304,9 @@ class CredentialsConfig:
 class DiscordConfig:
     webhook_sandbox: str
     webhook_live: str
+    webhook_monthly_review: str = ""
+    webhook_quarterly_review: str = ""
+    webhook_yearly_review: str = ""
 
 class LimitsConfig:
     def __init__(self, single_stock: float, daily_total: float, is_paper_trading: bool,
@@ -526,6 +535,9 @@ _credentials_file = get_config_val("CREDENTIALS_FILE_PATH") or str(Path(os.getcw
 # 解析 Discord 與 Shioaji 模擬配置
 _discord_webhook_sandbox = get_config_val("DISCORD_WEBHOOK_SANDBOX") or ""
 _discord_webhook_live = get_config_val("DISCORD_WEBHOOK_LIVE") or ""
+_discord_webhook_monthly_review = get_config_val("DISCORD_WEBHOOK_MONTHLY_REVIEW") or ""
+_discord_webhook_quarterly_review = get_config_val("DISCORD_WEBHOOK_QUARTERLY_REVIEW") or ""
+_discord_webhook_yearly_review = get_config_val("DISCORD_WEBHOOK_YEARLY_REVIEW") or ""
 _shioaji_sim = (get_config_val("SHIOAJI_SIMULATION") or "false").lower() != "false"
 
 _gemini_model = get_config_val("GEMINI_MODEL") or "gemini-1.5-flash"
@@ -545,7 +557,10 @@ config = AppConfig(
     ),
     discord=DiscordConfig(
         webhook_sandbox=_discord_webhook_sandbox,
-        webhook_live=_discord_webhook_live
+        webhook_live=_discord_webhook_live,
+        webhook_monthly_review=_discord_webhook_monthly_review,
+        webhook_quarterly_review=_discord_webhook_quarterly_review,
+        webhook_yearly_review=_discord_webhook_yearly_review
     ),
     limits=LimitsConfig(
         single_stock=_limit_single,

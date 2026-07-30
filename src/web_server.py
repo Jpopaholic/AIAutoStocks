@@ -4,7 +4,7 @@ import sys
 import time
 import threading
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -858,6 +858,88 @@ def api_clear_system_fault():
         return {"status": "ok", "message": "已成功手動解除全局系統故障鎖，恢復自動交易"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"清除全局系統故障鎖失敗: {str(e)}")
+
+# =====================================================================
+# 月度 AI 決策檢討與 Skills 演化相關 Web API
+# =====================================================================
+class MonthlyReviewRequest(BaseModel):
+    target_month: Optional[str] = None
+    override_weekend_check: Optional[bool] = False
+
+def is_weekend_taiwan() -> bool:
+    from src.time_manager import get_local_taiwan_datetime
+    weekday = get_local_taiwan_datetime().weekday()  # 5=Saturday, 6=Sunday
+    return weekday in (5, 6)
+
+@app.post("/api/monthly-skills/run")
+def api_run_monthly_review(payload: MonthlyReviewRequest):
+    """
+    手動觸發月度 AI 復盤與 Skills 演化（限制僅限週末假日執行以維持平日下盤穩定）。
+    """
+    if not is_weekend_taiwan() and not payload.override_weekend_check:
+        raise HTTPException(
+            status_code=400,
+            detail="為維護平日實盤交易穩定，手動執行 AI 月度檢討僅限於週末假日 (週六與週日) 執行。"
+        )
+
+    try:
+        from src.services.monthly_aggregator import resolve_manual_review_month
+        from src.agents.monthly_review_agent import run_monthly_review
+        from src.services.discord_notifier import send_monthly_review_notification
+
+        year, month = resolve_manual_review_month(payload.target_month)
+        is_paper = config.limits.is_paper_trading
+
+        print(f" [Web API] 開始手動觸發 {year}-{month:02d} 月度 AI 自我檢討與演化...")
+        review_result = run_monthly_review(year, month, is_paper=is_paper)
+
+        # 觸發 Discord Webhook 通知
+        try:
+            send_monthly_review_notification(review_result)
+        except Exception as notify_err:
+            print(f" [Web API] 警告: 月度復盤通知發送失敗: {notify_err}")
+
+        return {
+            "status": "ok",
+            "message": f"成功完成 {year}-{month:02d} 月度 AI 自我檢討與 Skills 演化！",
+            "data": review_result
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"執行月度 AI 檢討失敗: {str(e)}")
+
+@app.get("/api/monthly-skills/active")
+def api_get_active_skills():
+    """撈取當前最新生效的單一筆 (LIMIT 1) JSON Skills 規範"""
+    try:
+        is_paper = config.limits.is_paper_trading
+        res = supabase.table("monthly_skills") \
+            .select("*") \
+            .eq("is_paper", is_paper) \
+            .order("created_at", desc=True) \
+            .limit(1) \
+            .execute()
+        data = res.data or []
+        if data:
+            return {"status": "ok", "active_skill": data[0]}
+        else:
+            return {"status": "ok", "active_skill": None, "message": "目前尚無月度演化出的 Skills 紀錄，使用系統預設基準策略。"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"獲取最新 Skills 失敗: {str(e)}")
+
+@app.get("/api/monthly-skills/history")
+def api_get_skills_history():
+    """撈取歷史所有月度檢討與 Skills 紀錄"""
+    try:
+        is_paper = config.limits.is_paper_trading
+        res = supabase.table("monthly_skills") \
+            .select("*") \
+            .eq("is_paper", is_paper) \
+            .order("created_at", desc=True) \
+            .execute()
+        return {"status": "ok", "history": res.data or []}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"獲取歷史 Skills 紀錄失敗: {str(e)}")
+
 
 # Serve static files directory
 os.makedirs(os.path.join(os.path.dirname(__file__), "static"), exist_ok=True)

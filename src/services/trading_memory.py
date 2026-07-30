@@ -94,3 +94,61 @@ def get_experience_context(limit: int = 3) -> str:
     lines.append("\n請 AI 決策引擎參考上述成功與失敗交易經驗的投報率特徵，在本次分析中避免追高殺低，優化進出場邏輯。")
 
     return "\n".join(lines)
+
+def get_active_skills_context(is_paper: bool = False) -> str:
+    """
+    從 Supabase monthly_skills 表中，精準撈取最新單一筆 (ORDER BY created_at DESC LIMIT 1) 之 JSON 戰術 Skills，
+    組裝為 System Prompt 文字傳給 decision_agent。
+    """
+    from src.services.supabase_client import supabase
+    import json
+
+    default_skills = {
+        "version": "baseline-v1",
+        "min_buy_score": 60,
+        "max_single_stock_weight": 4,
+        "stop_loss_pct": -0.05,
+        "take_profit_pct": 0.12,
+        "regime_posture": {
+            "BULLISH_TREND": "AGGRESSIVE",
+            "BEARISH_TREND": "DEFENSIVE",
+            "HIGH_VOLATILITY": "CONSERVATIVE"
+        },
+        "tactical_rules": [
+            "Maintain strict risk management and follow analyst scores."
+        ]
+    }
+
+    try:
+        res = supabase.table("monthly_skills") \
+            .select("skills, review_month, created_at") \
+            .eq("is_paper", is_paper) \
+            .order("created_at", desc=True) \
+            .limit(1) \
+            .execute()
+        data = res.data or []
+        if data and "skills" in data[0]:
+            raw_skills = data[0]["skills"]
+            if isinstance(raw_skills, dict):
+                skills_json = raw_skills
+            elif isinstance(raw_skills, str):
+                skills_json = json.loads(raw_skills)
+            else:
+                skills_json = default_skills
+            rev_month = data[0].get("review_month", "最新")
+        else:
+            skills_json = default_skills
+            rev_month = "預設基準"
+    except Exception as e:
+        print(f" [交易記憶管理器] 警告: 撈取最新 monthly_skills 失敗，使用預設 Skills: {e}")
+        skills_json = default_skills
+        rev_month = "預設基準"
+
+    skills_pretty = json.dumps(skills_json, ensure_ascii=False, indent=2)
+
+    return (
+        f"【當前生效之動態交易戰術規範 (Active Dynamic JSON Skills - 月份: {rev_month})】\n"
+        f"(此規範由「月度檢討 Agent」根據實盤損益全權演化產出，徹底替代傳統硬編碼程式覆寫)：\n"
+        f"```json\n{skills_pretty}\n```\n"
+        f"請投資組合經理 AI 嚴格遵守上述演化出的最新買入門檻得分、部位權重與風控停損比率。"
+    )
