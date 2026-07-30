@@ -105,7 +105,7 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
             map_res = call_gemini_fn(
                 prompt=map_prompt,
                 response_schema=StockReviewOutput,
-                temperature=0.3
+                temperature=0.1
             )
             stock_reports.append(map_res.dict())
         except Exception as e:
@@ -145,7 +145,7 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
         reduce_res = call_gemini_fn(
             prompt=reduce_prompt,
             response_schema=OverallReviewOutput,
-            temperature=0.3
+            temperature=0.1
         )
         overall_data = reduce_res.dict()
     except Exception as e:
