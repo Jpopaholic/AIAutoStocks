@@ -204,6 +204,33 @@ def aggregate_monthly_data(year: int, month: int, is_paper: bool = False) -> Dic
     gross_loss = abs(sum(loss_pnls))
     profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (999.0 if gross_profit > 0 else 0.0)
 
+    # 5b. 成交滑價 (Slippage) 統計計算 (以委託預估價與實際成交價之偏差率計算)
+    filled_all_orders = [o for o in all_orders if o.get("status") == "FILLED"]
+    slippage_ratios: List[float] = []
+    for o in filled_all_orders:
+        target_p = float(o.get("price") or 0.0)
+        exec_p = float(o.get("execution_price") or target_p)
+        action = str(o.get("action") or "").upper()
+        if target_p > 0 and exec_p > 0:
+            if action == "BUY":
+                slip = (exec_p - target_p) / target_p
+            elif action == "SELL":
+                slip = (target_p - exec_p) / target_p
+            else:
+                slip = 0.0
+            slippage_ratios.append(slip)
+    
+    mean_slippage_ratio, std_slippage_ratio = calculate_mean_and_std(slippage_ratios)
+
+    # 5c. 統計未成交與被取消之委託單 (Cancelled / Rejected / Expired Orders)
+    cancelled_orders = [
+        o for o in all_orders 
+        if str(o.get("status") or "").upper() in ("CANCELLED", "REJECTED", "EXPIRED", "UNFILLED")
+    ]
+    total_cancelled_orders = len(cancelled_orders)
+    total_orders_count = len(all_orders)
+    cancellation_rate = (total_cancelled_orders / total_orders_count * 100.0) if total_orders_count > 0 else 0.0
+
     # 6. 計算每日 AI 分析推薦之【期望值 (Expected Value)】 (Upside & Drawdown Mean & Std Dev)
     upside_ratios: List[float] = []
     drawdown_ratios: List[float] = []
@@ -256,6 +283,8 @@ def aggregate_monthly_data(year: int, month: int, is_paper: bool = False) -> Dic
     for sc in all_stocks:
         sc_scores = [s for s in scores_list if s.get("stock_code") == sc]
         sc_orders = [o for o in all_orders if o.get("stock_code") == sc]
+        sc_filled_orders = [o for o in sc_orders if o.get("status") == "FILLED"]
+        sc_cancelled_orders = [o for o in sc_orders if str(o.get("status") or "").upper() in ("CANCELLED", "REJECTED", "EXPIRED", "UNFILLED")]
         sc_klines = klines_map.get(sc, [])
         sc_range = stock_price_ranges.get(sc, 0.0)
 
@@ -263,6 +292,8 @@ def aggregate_monthly_data(year: int, month: int, is_paper: bool = False) -> Dic
             "stock_code": sc,
             "scores": sc_scores,
             "orders": sc_orders,
+            "filled_orders": sc_filled_orders,
+            "cancelled_orders": sc_cancelled_orders,
             "klines": sc_klines,
             "price_range_ratio": round(sc_range, 4)
         }
@@ -289,6 +320,10 @@ def aggregate_monthly_data(year: int, month: int, is_paper: bool = False) -> Dic
             "std_upside_ratio": round(std_upside_ratio, 4),
             "mean_drawdown_ratio": round(mean_drawdown_ratio, 4),
             "std_drawdown_ratio": round(std_drawdown_ratio, 4),
+            "mean_slippage_ratio": round(mean_slippage_ratio, 4),
+            "std_slippage_ratio": round(std_slippage_ratio, 4),
+            "total_cancelled_orders": total_cancelled_orders,
+            "cancellation_rate_pct": round(cancellation_rate, 2),
         },
         "score_calibration": {
             "high_score_count": len(high_scores),
