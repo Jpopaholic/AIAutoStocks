@@ -101,13 +101,18 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
             f"- 被取消/未成交單紀錄: {json.dumps(stock_info.get('cancelled_orders', []), ensure_ascii=False)}\n\n"
             f"請評估該股：買入 timing 準確度、進場後 Upside/Drawdown 表現、未成交/取消單原因 (如滑價過大或掛價不及)，以及分析師給分品質。"
         )
+        generation_config_map = {
+            "response_mime_type": "application/json",
+            "response_schema": StockReviewOutput,
+            "temperature": 0.1
+        }
         try:
             map_res = call_gemini_fn(
                 prompt=map_prompt,
-                response_schema=StockReviewOutput,
-                temperature=0.1
+                generation_config=generation_config_map
             )
-            stock_reports.append(map_res.dict())
+            map_data = json.loads(map_res)
+            stock_reports.append(map_data)
         except Exception as e:
             print(f" [Monthly Review Agent] 警告: 個股 {stock_code} Map 檢討失敗: {e}")
             stock_reports.append({
@@ -141,13 +146,18 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
         f"請產出整體復盤報告以及演化出的極簡 JSON 格式化戰術 Skills。"
     )
 
+    generation_config_reduce = {
+        "response_mime_type": "application/json",
+        "response_schema": OverallReviewOutput,
+        "temperature": 0.1
+    }
+
     try:
         reduce_res = call_gemini_fn(
             prompt=reduce_prompt,
-            response_schema=OverallReviewOutput,
-            temperature=0.1
+            generation_config=generation_config_reduce
         )
-        overall_data = reduce_res.dict()
+        overall_data = json.loads(reduce_res)
     except Exception as e:
         print(f" [Monthly Review Agent] 錯誤: Reduce 總體檢討失敗: {e}")
         # 後備結構

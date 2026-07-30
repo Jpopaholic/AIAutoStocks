@@ -1,11 +1,18 @@
-# Path: src/config.py
 import os
+import sys
 import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Any
 from dotenv import load_dotenv
+
+# 解除 Python 3.11+ 預設 4,300 位數整數字串轉換上限 (如 LLM 幻覺回傳 4365 位數巨大數字)，配合 safe_int 自動安全收斂
+if hasattr(sys, "set_int_max_str_digits"):
+    try:
+        sys.set_int_max_str_digits(0)
+    except Exception:
+        pass
 
 def safe_int(val: Any, default: int = 0, min_val: Optional[int] = None, max_val: Optional[int] = None) -> int:
     """

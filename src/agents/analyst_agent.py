@@ -1,5 +1,6 @@
 # Path: src/agents/analyst_agent.py
 import json
+import time
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 
@@ -114,51 +115,50 @@ def generate_analyst_assessments(
 
     generation_config_analyst = {
         "response_mime_type": "application/json",
-        "response_schema": AnalystAssessment,
-        "temperature": 0.0
+        "response_schema": AnalystStockScore,
+        "temperature": 0.1
     }
 
     raw_scores = []
-    batch_size = 5
 
-    for i in range(0, len(valid_stock_codes), batch_size):
-        batch_codes = valid_stock_codes[i:i+batch_size]
-        print(f" [分析師代理] 正在呼叫分析師評估層分析股票批次 ({i+1}~{min(i+batch_size, len(valid_stock_codes))} / {len(valid_stock_codes)}): {batch_codes}...")
+    skills_text = "\n".join([f"{idx+1}. {s}" for idx, s in enumerate(skills)])
+
+    # 獲取大盤資訊
+    taiex_info = ""
+    taiex_klines = klines_map.get("TAIEX", [])
+    if taiex_klines:
+        latest_taiex = taiex_klines[-1]
+        taiex_info = f"當前大盤加權指數 (TAIEX) 收盤價: {latest_taiex['close']} 元 | MA20: {latest_taiex.get('ma20', 'N/A')} | MA60: {latest_taiex.get('ma60', 'N/A')}"
+
+    for idx, code in enumerate(valid_stock_codes):
+        print(f" [分析師代理] 正在呼叫分析師評估單股 ({idx+1}/{len(valid_stock_codes)}): {code}...")
         
-        batch_klines_sections = []
-        for code in batch_codes:
-            klines = klines_map.get(code, [])
-            recent_klines = klines[-20:]
-            klines_lines = []
-            for k in recent_klines:
-                ma5_str = f"{k['ma5']:.2f}" if k.get('ma5') is not None else "N/A"
-                ma20_str = f"{k['ma20']:.2f}" if k.get('ma20') is not None else "N/A"
-                ma60_str = f"{k['ma60']:.2f}" if k.get('ma60') is not None else "N/A"
-                rsi_str = f"{k['rsi14']:.2f}" if k.get('rsi14') is not None else "N/A"
-                vol_ma5_str = f"{k['vol_ma5']:,.0f}" if k.get('vol_ma5') is not None else "N/A"
-                vol_ma20_str = f"{k['vol_ma20']:,.0f}" if k.get('vol_ma20') is not None else "N/A"
-                macd_str = f"(快線:{k['macd']:.2f}, 慢線:{k['macd_signal']:.2f}, 柱狀圖:{k['macd_hist']:.2f})" if (k.get('macd') is not None and k.get('macd_signal') is not None and k.get('macd_hist') is not None) else "N/A"
-                dmi_str = f"(+DI:{k['plus_di']:.1f}, -DI:{k['minus_di']:.1f}, ADX:{k['adx']:.1f})" if (k.get('adx') is not None and k.get('plus_di') is not None and k.get('minus_di') is not None) else "N/A"
-                klines_lines.append(
-                    f"  日期: {k['date']} | 開盤: {k['open']} | 最高: {k['high']} | 最低: {k['low']} | 收盤: {k['close']} | MA5: {ma5_str} | MA20: {ma20_str} | MA60 (季線): {ma60_str} | RSI: {rsi_str} | "
-                    f"成交量: {k['volume']:,.0f} (VOL_MA5: {vol_ma5_str}, VOL_MA20: {vol_ma20_str}) | MACD: {macd_str} | DMI: {dmi_str}"
-                )
-            klines_text = "\n".join(klines_lines)
-            batch_klines_sections.append(
-                f"● 股票代號 {code} 最近 20 天 K 線數據 (最下方為最新一日行情)：\n{klines_text}"
+        klines = klines_map.get(code, [])
+        recent_klines = klines[-15:]
+        klines_lines = []
+        for k in recent_klines:
+            ma5_str = f"{k['ma5']:.2f}" if k.get('ma5') is not None else "N/A"
+            ma20_str = f"{k['ma20']:.2f}" if k.get('ma20') is not None else "N/A"
+            ma60_str = f"{k['ma60']:.2f}" if k.get('ma60') is not None else "N/A"
+            rsi_str = f"{k['rsi14']:.2f}" if k.get('rsi14') is not None else "N/A"
+            vol_ma5_str = f"{k['vol_ma5']:,.0f}" if k.get('vol_ma5') is not None else "N/A"
+            vol_ma20_str = f"{k['vol_ma20']:,.0f}" if k.get('vol_ma20') is not None else "N/A"
+            macd_str = f"(快線:{k['macd']:.2f}, 慢線:{k['macd_signal']:.2f}, 柱狀圖:{k['macd_hist']:.2f})" if (k.get('macd') is not None and k.get('macd_signal') is not None and k.get('macd_hist') is not None) else "N/A"
+            dmi_str = f"(+DI:{k['plus_di']:.1f}, -DI:{k['minus_di']:.1f}, ADX:{k['adx']:.1f})" if (k.get('adx') is not None and k.get('plus_di') is not None and k.get('minus_di') is not None) else "N/A"
+            klines_lines.append(
+                f"  日期: {k['date']} | 開盤: {k['open']} | 最高: {k['high']} | 最低: {k['low']} | 收盤: {k['close']} | MA5: {ma5_str} | MA20: {ma20_str} | MA60 (季線): {ma60_str} | RSI: {rsi_str} | "
+                f"成交量: {k['volume']:,.0f} (VOL_MA5: {vol_ma5_str}, VOL_MA20: {vol_ma20_str}) | MACD: {macd_str} | DMI: {dmi_str}"
             )
-        all_klines_text = "\n\n".join(batch_klines_sections)
-
-        skills_text = "\n".join([f"{idx+1}. {s}" for idx, s in enumerate(skills)])
+        klines_text = "\n".join(klines_lines)
 
         analyst_system_instruction = f"""
 你是一個極其資深且敏銳的台股量化投資分析師。你熟悉台股市場特性與技術線圖分析。
-你的任務是分析給定的多個個股的日 K 線數據，進行獨立且客觀的量化評分與技術指標分析。
-你需要為每檔個股進行五個維度的評分 (各個維度為 0 ~ 20 分，總分會由 Python 程式加總計算，你不需回傳總分，也不需填寫股票收盤價)。
+你的任務是分析給定個股的日 K 線數據，進行獨立且客觀的量化評分與技術指標分析。
+你需要為該檔個股進行五個維度的評分 (各個維度為 0 ~ 20 分，總分會由 Python 程式加總計算，你不需回傳總分，也不需填寫股票收盤價)。
 
 【重要評分提示】：
 - 你的評分是為了反映個股強弱。如果個股呈現多頭排列、放量突破、MACD翻紅或RSI強勢等信號，請勇敢地給予高分（趨勢得分與動能得分可達16~20分）。
-- 請拉開評分差距，切忌盲目保守。不要將所有的股票都擠在 10 ~ 13 分的中庸區間（即總分 50 ~ 65 區間）。強勢股給予高分，弱勢股給予低分。
+- 請拉開評分差距，切忌盲目保守。強勢股給予高分，弱勢股給予低分。
 - 切忌僅憑單一負面訊號就直接全盤否定個股價值。
 - 請同時為你的分析結果給出信心指數 `confidence` (0.0 到 1.0)。
 
@@ -173,25 +173,19 @@ def generate_analyst_assessments(
 {skills_text}
 
 請嚴格遵守以下指示：
-1. 你的輸出必須完全符合所規規定的 JSON Schema (AnalystAssessment)，不可包含額外文字。
+1. 你的輸出必須完全符合所規定的 JSON Schema (AnalystStockScore)，不可包含額外文字。
 2. 你的分析理由請一律使用「繁體中文」，限制在 80 到 150 字以內，精簡指出關鍵指標，請勿贅述每日歷史細節。
 """
 
-        # 獲取大盤資訊
-        taiex_info = ""
-        taiex_klines = klines_map.get("TAIEX", [])
-        if taiex_klines:
-            latest_taiex = taiex_klines[-1]
-            taiex_info = f"當前大盤加權指數 (TAIEX) 收盤價: {latest_taiex['close']} 元 | MA20: {latest_taiex.get('ma20', 'N/A')} | MA60: {latest_taiex.get('ma60', 'N/A')}"
-
         analyst_user_prompt = f"""
-請針對股票列表 {batch_codes} 進行個股日 K 線的技術分析與評分。
+請針對股票代號 {code} 進行個股日 K 線的技術分析與評分。
 
 {taiex_info}
 
-{all_klines_text}
+● 股票代號 {code} 最近 15 天 K 線數據 (最下方為最新一日行情)：
+{klines_text}
 
-請基於上述數據，產出各股票的量化評分與詳細原因。
+請基於上述數據，產出該股票的量化評分與詳細原因。
 """
 
         try:
@@ -201,42 +195,29 @@ def generate_analyst_assessments(
                 model_name=config.gemini_model,
                 generation_config=generation_config_analyst
             )
-            analyst_data = json.loads(raw_analyst_response)
-            batch_scores = analyst_data.get("scores", [])
-            raw_scores.extend(batch_scores)
-            # 確認本批次每檔股票都有回傳結果；若有漏掉，補上最低預設分
-            returned_codes = {s.get("stock_code") for s in batch_scores}
-            for code in batch_codes:
-                if code not in returned_codes:
-                    klines = klines_map.get(code, [])
-                    price = klines[-1]["close"] if klines else 10.0
-                    print(f" [分析師代理] 警告: 批次評分中缺少股票 {code} 的結果，補上預設中性分。")
-                    raw_scores.append({
-                        "stock_code": code,
-                        "trend_score": 13,
-                        "momentum_score": 13,
-                        "volume_score": 13,
-                        "safety_score": 13,
-                        "regime_score": 13,
-                        "confidence": 0.3,
-                        "reason": "（本批次 AI 評分結果遺漏此股，已補上預設中性評分 65 分，系統強制觀望，請以審慎態度參考此數據。）"
-                    })
+            s_item = json.loads(raw_analyst_response)
+            if isinstance(s_item, dict):
+                s_item["stock_code"] = code
+                raw_scores.append(s_item)
+            else:
+                raise ValueError("LLM 未返回字典格式")
         except DailyRateLimitExceeded as rpd_err:
             raise rpd_err
         except Exception as e:
-            print(f" [分析師代理] 警告: 分析股票批次 {batch_codes} 失敗: {str(e)}，補上批次內所有股票的預設中性分。")
-            for code in batch_codes:
-                klines = klines_map.get(code, [])
-                raw_scores.append({
-                    "stock_code": code,
-                    "trend_score": 13,
-                    "momentum_score": 13,
-                    "volume_score": 13,
-                    "safety_score": 13,
-                    "regime_score": 13,
-                    "confidence": 0.3,
-                    "reason": f"（本批次 Gemini 呼叫失敗，已補上預設中性評分 65 分，系統強制觀望。原因: {str(e)[:80]}）"
-                })
+            print(f" [分析師代理] 警告: 分析股票 {code} 失敗: {str(e)}，補上預設中性分。")
+            raw_scores.append({
+                "stock_code": code,
+                "trend_score": 13,
+                "momentum_score": 13,
+                "volume_score": 13,
+                "safety_score": 13,
+                "regime_score": 13,
+                "confidence": 0.3,
+                "reason": f"（本股 Gemini 呼叫失敗，已補上預設中性評分 65 分，系統強制觀望。原因: {str(e)[:80]}）"
+            })
+
+        # 主動平滑停頓 10.0 秒，避免平滑發送時觸發 Gemini API 伺服器端排隊或 Rate Limit
+        time.sleep(10.0)
 
     # Python 計算價格與總分
     analyst_scores = []
@@ -275,4 +256,5 @@ def generate_analyst_assessments(
             "reason": s_item.get("reason", "技術量化指標尚可。")
         })
 
+    analyst_scores.sort(key=lambda x: x["total_score"], reverse=True)
     return analyst_scores

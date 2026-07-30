@@ -34,18 +34,14 @@ class TestNumericOverflowSafeguards(unittest.TestCase):
         """測試分析師代理面對 LLM 回傳巨大整數時的抗性"""
         huge_int = 10**350
         mock_raw_response = f"""{{
-            "scores": [
-                {{
-                    "stock_code": "2330",
-                    "trend_score": {huge_int},
-                    "momentum_score": {huge_int},
-                    "volume_score": 15,
-                    "safety_score": 15,
-                    "regime_score": 15,
-                    "confidence": {huge_int},
-                    "reason": "評分測試"
-                }}
-            ]
+            "stock_code": "2330",
+            "trend_score": {huge_int},
+            "momentum_score": {huge_int},
+            "volume_score": 15,
+            "safety_score": 15,
+            "regime_score": 15,
+            "confidence": {huge_int},
+            "reason": "評分測試"
         }}"""
 
         klines_map = {
@@ -68,6 +64,32 @@ class TestNumericOverflowSafeguards(unittest.TestCase):
         self.assertLessEqual(res["momentum_score"], 20)
         self.assertLessEqual(res["total_score"], 100)
         self.assertLessEqual(res["confidence"], 1.0)
+
+    def test_4500_digits_integer_conversion(self):
+        """測試 4500 位數以上巨大整數字串 (如 LLM 幻覺 4365 位數) 不會觸發 Exceeds the limit (4300 digits)"""
+        extreme_digits_str = "9" * 4500
+        mock_raw_response = f"""{{
+            "stock_code": "2449",
+            "trend_score": {extreme_digits_str},
+            "momentum_score": 15,
+            "volume_score": 15,
+            "safety_score": 15,
+            "regime_score": 15,
+            "confidence": 0.9,
+            "reason": "4500位數測試"
+        }}"""
+        klines_map = {
+            "2449": [{"date": "2026-07-24", "open": 100, "high": 105, "low": 99, "close": 104, "volume": 1000}]
+        }
+        mock_call_gemini = MagicMock(return_value=mock_raw_response)
+        scores = generate_analyst_assessments(
+            stock_codes=["2449"],
+            klines_map=klines_map,
+            call_gemini_fn=mock_call_gemini
+        )
+        self.assertEqual(len(scores), 1)
+        self.assertEqual(scores[0]["stock_code"], "2449")
+        self.assertEqual(scores[0]["trend_score"], 20)
 
     def test_decision_agent_overflow_resilience(self):
         """測試決策代理面對 LLM 回傳巨大整數與溢位權重時的抗性"""

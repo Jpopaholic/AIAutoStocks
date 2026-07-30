@@ -248,7 +248,8 @@ def call_gemini_with_rotation(
     system_instruction: Optional[str] = None,
     model_name: str = "gemini-1.5-flash",
     generation_config: Optional[Dict[str, Any]] = None,
-    max_api_retries: int = 5
+    max_api_retries: int = 5,
+    timeout: int = 45
 ) -> str:
     """
     包裝 google-generativeai 接口，自動執行金鑰輪替、主動速率限制 Pacing 及冷卻與重試機制
@@ -283,7 +284,7 @@ def call_gemini_with_rotation(
             response = model.generate_content(
                 prompt,
                 generation_config=generation_config,
-                request_options={"timeout": 120}
+                request_options={"timeout": timeout}
             )
             
             # 解析實際消耗的 Tokens 並記錄

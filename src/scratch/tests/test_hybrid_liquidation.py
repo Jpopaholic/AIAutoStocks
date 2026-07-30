@@ -53,34 +53,31 @@ class TestHybridLiquidation(unittest.TestCase):
         mock_get_fault.return_value = {"status": "OK", "detail": ""}
         mock_get_pending.return_value = ["2330"]  # 2330 處於智慧等候平倉排隊中
         
-        # 模擬兩次 Gemini 呼叫：第一次回傳分析師評估 (無 price, 無 total_score, 有 confidence)，第二次回傳經理人決策
+        # 模擬三次 Gemini 呼叫：第 1 點為 2330 單股評估，第 2 點為 2454 單股評估，第 3 點為經理人決策
         mock_call_gemini.side_effect = [
-            # 呼叫 1: 分析師評估
+            # 呼叫 1: 2330 分析師評估
             """{
-                "scores": [
-                    {
-                        "stock_code": "2330",
-                        "trend_score": 10,
-                        "momentum_score": 10,
-                        "volume_score": 10,
-                        "safety_score": 10,
-                        "regime_score": 10,
-                        "confidence": 0.9,
-                        "reason": "技術指標尚可"
-                    },
-                    {
-                        "stock_code": "2454",
-                        "trend_score": 12,
-                        "momentum_score": 12,
-                        "volume_score": 12,
-                        "safety_score": 12,
-                        "regime_score": 12,
-                        "confidence": 0.85,
-                        "reason": "均線呈現多頭形態"
-                    }
-                ]
+                "stock_code": "2330",
+                "trend_score": 10,
+                "momentum_score": 10,
+                "volume_score": 10,
+                "safety_score": 10,
+                "regime_score": 10,
+                "confidence": 0.9,
+                "reason": "技術指標尚可"
             }""",
-            # 呼叫 2: 投資組合經理決策
+            # 呼叫 2: 2454 分析師評估
+            """{
+                "stock_code": "2454",
+                "trend_score": 12,
+                "momentum_score": 12,
+                "volume_score": 12,
+                "safety_score": 12,
+                "regime_score": 12,
+                "confidence": 0.85,
+                "reason": "均線呈現多頭形態"
+            }""",
+            # 呼叫 3: 投資組合經理決策
             """{
                 "ranking_analysis": "2330較強但智慧平倉中，2454觀望",
                 "decisions": [
@@ -145,34 +142,29 @@ class TestHybridLiquidation(unittest.TestCase):
         mock_calc_nav.return_value = (20000.0, 0.0, 500000.0)
         
         mock_call_gemini.side_effect = [
-            # 1. 分析師技術分析評估：
-            # 2330: 80 分，價格 600 元
-            # 2454: 70 分，價格 1000 元
+            # 1. 2330 分析師評估
             """{
-                "scores": [
-                    {
-                        "stock_code": "2330",
-                        "trend_score": 16,
-                        "momentum_score": 16,
-                        "volume_score": 16,
-                        "safety_score": 16,
-                        "regime_score": 16,
-                        "confidence": 0.9,
-                        "reason": "多頭格局"
-                    },
-                    {
-                        "stock_code": "2454",
-                        "trend_score": 14,
-                        "momentum_score": 14,
-                        "volume_score": 14,
-                        "safety_score": 14,
-                        "regime_score": 14,
-                        "confidence": 0.8,
-                        "reason": "區間整理"
-                    }
-                ]
+                "stock_code": "2330",
+                "trend_score": 16,
+                "momentum_score": 16,
+                "volume_score": 16,
+                "safety_score": 16,
+                "regime_score": 16,
+                "confidence": 0.9,
+                "reason": "多頭格局"
             }""",
-            # 2. 投資組合經理決策：
+            # 2. 2454 分析師評估
+            """{
+                "stock_code": "2454",
+                "trend_score": 14,
+                "momentum_score": 14,
+                "volume_score": 14,
+                "safety_score": 14,
+                "regime_score": 14,
+                "confidence": 0.8,
+                "reason": "區間整理"
+            }""",
+            # 3. 投資組合經理決策：
             # 2330: BUY, allocation_weight = 5. 加權因子 = 80 * 5 = 400
             # 2454: BUY, allocation_weight = 3. 加權因子 = 70 * 3 = 210
             # 總權重因子 = 400 + 210 = 610.
@@ -272,20 +264,16 @@ class TestHybridLiquidation(unittest.TestCase):
         
         # 模擬 Gemini 呼叫：2618 總分 34 觸發風控，經理人原決策為 HOLD
         mock_call_gemini.side_effect = [
-            # 呼叫 1: 分析師評估
+            # 呼叫 1: 2618 分析師評估
             """{
-                "scores": [
-                    {
-                        "stock_code": "2618",
-                        "trend_score": 8,
-                        "momentum_score": 6,
-                        "volume_score": 6,
-                        "safety_score": 6,
-                        "regime_score": 8,
-                        "confidence": 0.5,
-                        "reason": "技術面疲弱"
-                    }
-                ]
+                "stock_code": "2618",
+                "trend_score": 8,
+                "momentum_score": 6,
+                "volume_score": 6,
+                "safety_score": 6,
+                "regime_score": 8,
+                "confidence": 0.5,
+                "reason": "技術面疲弱"
             }""",
             # 呼叫 2: 投資組合經理決策
             """{
@@ -306,22 +294,15 @@ class TestHybridLiquidation(unittest.TestCase):
             "2618": [{"date": "2026-06-09", "open": 30.0, "high": 30.0, "low": 30.0, "close": 30.0, "volume": 100.0}],
             "TAIEX": [{"date": "2026-06-09", "open": 16000.0, "high": 16000.0, "low": 16000.0, "close": 16000.0, "volume": 100.0}]
         }
-        # 模擬持股中包含 2618，因此會檢查總分門檻 (34 < 60) 觸發 SELL 覆寫
+        # 模擬持股中包含 2618，驗證經理人 AI 決策被尊重（解耦後端硬編碼分數覆寫）
         current_holdings = [{"stock_code": "2618", "quantity": 200.0, "average_price": 35.0}]
         
         result = generate_portfolio_decisions(stock_codes, klines_map, current_holdings)
         
-        # 驗證 2618 被覆寫為 SELL
+        # 驗證 2618 尊重經理人 AI 決策 HOLD
         decisions = result["decisions"]
         dec_2618 = next(d for d in decisions if d["stock_code"] == "2618")
-        self.assertEqual(dec_2618["action"], "SELL")
-        
-        # 驗證 ranking_analysis 中有出現 [風控護欄提示] 的警告內容
-        ranking_analysis = result["ranking_analysis"]
-        self.assertIn("風控護欄提示", ranking_analysis)
-        self.assertIn("2618", ranking_analysis)
-        self.assertIn("長榮航", ranking_analysis)
-        self.assertIn("HOLD ➔ SELL", ranking_analysis)
+        self.assertEqual(dec_2618["action"], "HOLD")
 
 if __name__ == "__main__":
     unittest.main()

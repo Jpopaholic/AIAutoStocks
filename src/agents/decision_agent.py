@@ -232,7 +232,15 @@ def generate_portfolio_decisions(
             model_name=config.gemini_model,
             generation_config=generation_config_pm
         )
-        pm_data = json.loads(raw_pm_response)
+        clean_str = raw_pm_response.strip()
+        if clean_str.startswith("```"):
+            lines = clean_str.split("\n")
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            clean_str = "\n".join(lines).strip()
+        pm_data = json.loads(clean_str)
         ranking_analysis = pm_data.get("ranking_analysis", "多股橫向配置分析。")
         raw_decisions = pm_data.get("decisions", [])
     except DailyRateLimitExceeded as rpd_err:
