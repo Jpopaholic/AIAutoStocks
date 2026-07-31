@@ -219,7 +219,8 @@ def run_live_trading_job(stock_codes: List[str], is_manual: bool = False) -> Non
             print(" [排程引擎] 正在獲取大盤加權指數 (TAIEX) 的最新 K 線歷史數據...")
             taiex_klines = stock_fetcher.fetch_taiex_klines()
             # 同步抓取前一個月以避免月份交替時的資料斷層
-            prev_date = (tw_now - timedelta(days=30)).strftime("%Y%m%d")
+            prev_month_dt = tw_now.replace(day=1) - timedelta(days=1)
+            prev_date = prev_month_dt.strftime("%Y%m01")
             prev_taiex_klines = stock_fetcher.fetch_taiex_klines(prev_date)
             all_taiex = taiex_klines + prev_taiex_klines
             

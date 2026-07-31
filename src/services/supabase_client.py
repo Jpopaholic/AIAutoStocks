@@ -110,9 +110,10 @@ def save_stock_klines(klines: List[Dict[str, Any]]) -> Any:
     if not klines:
         return []
 
-    records = []
+    records_map = {}
     for k in klines:
-        records.append({
+        key = (k["stockCode"], k["date"])
+        records_map[key] = {
             "stock_code": k["stockCode"],
             "date": k["date"],
             "open": k["open"],
@@ -121,7 +122,9 @@ def save_stock_klines(klines: List[Dict[str, Any]]) -> Any:
             "close": k["close"],
             "volume": k["volume"],
             "updated_at": _get_current_time_iso()
-        })
+        }
+
+    records = list(records_map.values())
 
     return execute_with_retry(
         lambda: supabase.table("stock_klines")

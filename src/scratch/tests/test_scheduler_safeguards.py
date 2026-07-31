@@ -418,6 +418,36 @@ class TestSchedulerSafeguards(unittest.TestCase):
         self.assertEqual(inserted_records[0]["daily_analysis_id"], 99)
         self.assertEqual(inserted_records[0]["decision"], "BUY")
 
+    @patch("src.services.supabase_client.execute_with_retry", side_effect=lambda fn: fn())
+    @patch("src.services.supabase_client.supabase")
+    def test_save_stock_klines_deduplication(self, mock_supabase, mock_retry):
+        """
+        測試 save_stock_klines 是否能自動去除重複的 (stock_code, date) 紀錄，
+        避免觸發 Supabase ON CONFLICT DO UPDATE 21000 錯誤。
+        """
+        from src.services.supabase_client import save_stock_klines
+
+        duplicate_klines = [
+            {"stockCode": "TAIEX", "date": "2026-07-31", "open": 20000, "high": 20100, "low": 19900, "close": 20050, "volume": 1000},
+            {"stockCode": "TAIEX", "date": "2026-07-31", "open": 20000, "high": 20100, "low": 19900, "close": 20050, "volume": 1000},
+            {"stockCode": "TAIEX", "date": "2026-07-30", "open": 19900, "high": 20000, "low": 19800, "close": 19950, "volume": 900},
+        ]
+
+        mock_query = MagicMock()
+        mock_supabase.table.return_value = mock_query
+        mock_query.upsert.return_value = mock_query
+        mock_query.execute.return_value = MagicMock(data=[])
+
+        save_stock_klines(duplicate_klines)
+
+        mock_supabase.table.assert_called_with("stock_klines")
+        upsert_args, upsert_kwargs = mock_query.upsert.call_args
+        records_upserted = upsert_args[0]
+
+        # 3 筆輸入數據去重後應為 2 筆
+        self.assertEqual(len(records_upserted), 2)
+        self.assertEqual(upsert_kwargs.get("on_conflict"), "stock_code,date")
+
 if __name__ == "__main__":
     unittest.main()
 
