@@ -87,19 +87,28 @@ def generate_portfolio_decisions(
             print(f" [決策代理] 警告: 無法讀取智慧平倉列表: {e}")
             pending_stocks = []
 
-    # 5. 載入今日停損買回冷卻名單
+    # 5. 載入今日交易紀錄，構建今日買入與賣出冷卻清單 (防範同日買了又賣、賣了又買)
+    today_bought_stocks = set()
+    today_sold_stocks = set()
     cooldown_stocks = set()
     try:
         from src.time_manager import get_local_taiwan_midnight_utc_range
         start_utc, end_utc = get_local_taiwan_midnight_utc_range()
         orders = get_orders(start_date=start_utc, end_date=end_utc)
         for o in orders:
-            if o.get("action") == "SELL" and o.get("status", "FILLED") == "FILLED":
-                realized_pnl = float(o.get("realized_pnl") or 0.0)
-                if realized_pnl < 0:
-                    cooldown_stocks.add(o.get("stock_code"))
+            status = str(o.get("status") or "").upper()
+            action = str(o.get("action") or "").upper()
+            sc = o.get("stock_code")
+            if sc and status == "FILLED":
+                if action == "BUY":
+                    today_bought_stocks.add(sc)
+                elif action == "SELL":
+                    today_sold_stocks.add(sc)
+                    realized_pnl = float(o.get("realized_pnl") or 0.0)
+                    if realized_pnl < 0:
+                        cooldown_stocks.add(sc)
     except Exception as e:
-        print(f" [決策代理] 警告: 載入今日停損冷卻名單失敗: {str(e)}")
+        print(f" [決策代理] 警告: 載入今日成交防沖名單失敗: {str(e)}")
 
     # 6. 準備近期訂單資訊供 PM 參考
     recent_orders_info = ""
@@ -162,17 +171,14 @@ def generate_portfolio_decisions(
         )
 
     # 10. 構建經理人系統指令
-    from src.services.trading_memory import get_experience_context, get_active_skills_context
+    from src.services.trading_memory import get_active_skills_context
     active_skills_text = get_active_skills_context(is_paper=False)
-    experience_text = get_experience_context(limit=3)
 
     pm_system_instruction = f"""
 你是一個極其資深且穩健的台股投資組合配置經理 (Portfolio Manager)。
 你的任務是審查分析師提供的個股技術評分報告，並根據當前大盤氣候環境、可用資金及目前持股，產出最終的交易決策與部位資金分配比例。
 
 {active_skills_text}
-
-{experience_text}
 
 【中長期穩健投資哲學】：
 1. 你的投資風格是「中長期穩健投資」，必須極力避免頻繁交易、微調調倉及短線投機。交易印花稅與手續費滑價是利潤的殺手。
@@ -181,9 +187,14 @@ def generate_portfolio_decisions(
 4. 在一般評分或無極端行情下，你應該極度傾向給予 `HOLD` (觀望續抱/不做買賣)，以控制週轉率。
 5. 買入決策時，技術面總分必須是群體中最優秀的前列；賣出決策時，總分必須顯著低於其他標的。
 
+【嚴格禁止當日同股對沖翻轉 (Anti-Churning & Same-day Reversal Safeguard)】：
+1. 若今日已經買入/成交某檔股票，今日絕對禁止再發出 SELL (賣出) 決策。
+2. 若今日已經賣出/平倉某檔股票，今日絕對禁止再發出 BUY (買入) 決策，防止「高價買完當天賣、或低價賣完當天又買回」的價差與滑價無效損耗。
+
 請嚴格遵守以下交易配置限制：
 1. 配置權重 `allocation_weight` 代表買入優先度 (1-5)。若 action 為 SELL 或 HOLD 且你打算出清此檔，權重應填寫 0。
 2. 【大盤防禦降額】：如果大盤氣候呈現 BEARISH_TREND 或交易姿態為 DEFENSIVE / STRONG_DEFENSIVE，請大幅降低持股權重或增加現金比例，在此氣候下原則上「禁止新買入任何個股」。
+
 
 請嚴格遵守以下指示：
 1. 你的 decisions 列表中，必須包含所有輸入研究員評估之股票的決策，每檔股票必須且只能出現一次，絕對不可有任何漏遺或省略！即使該檔股票的決策是 HOLD，也必須包含在 decisions 列表中。
@@ -356,8 +367,13 @@ def generate_portfolio_decisions(
         # 已持有倉位 (解耦 score < 60 強制賣出，全權依據經理人動態 Skills 與 action 推理)
         if holding_qty > 0:
             if action == "SELL":
-                qty = holding_qty
-                decision_reason = f"【經理人決策賣出】總分 {total_score} 分，經理人依據動態戰術 Skills 建議賣出平倉。{merged_reason}"
+                if code in today_bought_stocks:
+                    action = "HOLD"
+                    qty = 0.0
+                    decision_reason = f"【同日對沖防護護欄】今日已有買入成交紀錄，禁止同日反向賣出，維護交易紀律。{merged_reason}"
+                else:
+                    qty = holding_qty
+                    decision_reason = f"【經理人決策賣出】總分 {total_score} 分，經理人依據動態戰術 Skills 建議賣出平倉。{merged_reason}"
             else:
                 action = "HOLD"
                 qty = 0.0
@@ -380,14 +396,14 @@ def generate_portfolio_decisions(
         
         # 未持有倉位
         else:
-            if code in cooldown_stocks:
+            if code in cooldown_stocks or code in today_sold_stocks:
                 final_decisions.append({
                     "stock_code": code,
                     "action": "HOLD",
                     "price": price,
                     "quantity": 0.0,
                     "confidence": total_score / 100.0,
-                    "reason": f"【停損買回冷卻】今日已執行過該股虧損平倉（停損），今日禁買。量化總分 {total_score} 分。{merged_reason}",
+                    "reason": f"【同日對沖防護護欄】今日已有賣出/平倉紀錄，禁止同日反向重新買回，避免滑價與摩擦成本損耗。{merged_reason}",
                     "trend_score": trend,
                     "momentum_score": momentum,
                     "volume_score": volume,

@@ -99,7 +99,15 @@ def generate_analyst_assessments(
     if extra_skills:
         skills.extend(extra_skills)
 
-    # ── [前置注入：今日已停損清單] ────────────────────────────────────
+    # ── [前置注入：月度演化指標 Skills 與今日已停損清單] ──────────────────
+    try:
+        from src.services.trading_memory import get_indicator_skills_context
+        ind_skills_text = get_indicator_skills_context(is_paper=config.limits.is_paper_trading)
+        if ind_skills_text:
+            skills.append(ind_skills_text)
+    except Exception as e:
+        print(f" [分析師代理] 獲取月度指標 Skills 失敗: {e}")
+
     try:
         from src.services.supabase_client import get_stop_loss_stocks_today
         stop_loss_stocks = get_stop_loss_stocks_today()

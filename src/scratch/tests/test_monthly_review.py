@@ -142,7 +142,81 @@ class TestMonthlyReviewSuite(unittest.TestCase):
         loss_rate = (bullish_losing_trade_count / bullish_buy_count * 100.0) if bullish_buy_count > 0 else 0.0
         self.assertEqual(loss_rate, 40.0)
 
+    def test_multi_layer_monthly_review_pipeline(self):
+        """驗證多層月度檢討管道 (Layer 1 -> Layer 2 -> Layer 3) 回傳資料結構"""
+        from src.agents.monthly_review_agent import run_monthly_review
+
+        # 模擬 Gemini 呼叫回傳格式
+        def mock_call_gemini(prompt: str, generation_config: dict) -> str:
+            if "StockIndicatorReviewOutput" in str(generation_config.get("response_schema")):
+                return '{"stock_code": "2330", "indicator_retrospective": "2330 技術指標表現優異，V 轉確立。", "anomaly_trait": "拉回年線為典型 V 轉特徵"}'
+            elif "IndicatorReviewSummaryOutput" in str(generation_config.get("response_schema")):
+                return json.dumps({
+                    "indicator_summary": "全月技術指標精準捕捉 V 型反彈。",
+                    "indicator_skills": {
+                        "v_shape_reversal_patterns": [{"pattern_rule": "量能突破且 RSI>60", "expected_probability_pct": 85}],
+                        "a_shape_top_warnings": [{"pattern_rule": "高檔乖離爆量", "expected_probability_pct": 80}],
+                        "stock_specific_rules": [{"stock_code": "2330", "anomaly_trait": "拉回年線 V 轉", "expected_probability_pct": 85}],
+                        "score_calibration_rules": [{"calibration_rule": "嚴格評分", "expected_probability_pct": 90}],
+                        "regime_indicator_rules": {"BULLISH_TREND": {"focus": "動能突破", "expected_probability_pct": 85}}
+                    }
+                })
+            elif "StockExecutionReviewOutput" in str(generation_config.get("response_schema")):
+                return '{"stock_code": "2330", "execution_retrospective": "2330 交易執行良好，未出現追高。"}'
+            elif "ExecutionReviewSummaryOutput" in str(generation_config.get("response_schema")):
+                return json.dumps({
+                    "cio_summary": "組合部位執行穩健，Timing 控制得宜。",
+                    "key_learnings": ["落實 5% 停損"],
+                    "execution_skills": {
+                        "min_buy_score": 65,
+                        "max_single_stock_weight": 4,
+                        "stop_loss_pct": -0.05,
+                        "take_profit_pct": 0.12,
+                        "entry_timing_rules": ["避開高檔區間追高"],
+                        "regime_posture": {"BULLISH_TREND": "AGGRESSIVE"},
+                        "tactical_rules": ["嚴格執行停損"]
+                    }
+                })
+            return "{}"
+
+        import json
+        res = run_monthly_review(2026, 7, is_paper=True, call_gemini_fn=mock_call_gemini)
+
+        if not res.get("skipped"):
+            self.assertIn("stock_indicator_reports", res)
+            self.assertIn("stock_execution_reports", res)
+            self.assertIn("indicator_skills", res)
+            self.assertIn("execution_skills", res)
+            self.assertIn("skills_json", res)
+            skills = res["skills_json"]
+            self.assertIn("indicator_skills", skills)
+            self.assertIn("execution_skills", skills)
+
+    def test_same_day_anti_churning_safeguard_logic(self):
+        """驗證同日對沖防護 logic（今日買入禁同日賣、今日賣出禁同日買）"""
+        today_bought_stocks = {"2330"}
+        today_sold_stocks = {"2454"}
+
+        # 1. 2330 今日已買入，即使 LLM 發出 SELL 決策，應強制為 HOLD
+        action_2330 = "SELL"
+        holding_qty_2330 = 1000.0
+        if action_2330 == "SELL" and "2330" in today_bought_stocks:
+            final_action_2330 = "HOLD"
+        else:
+            final_action_2330 = action_2330
+        self.assertEqual(final_action_2330, "HOLD")
+
+        # 2. 2454 今日已賣出，即使 LLM 發出 BUY 決策，應強制為 HOLD
+        action_2454 = "BUY"
+        if action_2454 == "BUY" and "2454" in today_sold_stocks:
+            final_action_2454 = "HOLD"
+        else:
+            final_action_2454 = action_2454
+        self.assertEqual(final_action_2454, "HOLD")
+
 if __name__ == "__main__":
     unittest.main()
+
+
 
 

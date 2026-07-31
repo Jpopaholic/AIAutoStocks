@@ -479,8 +479,8 @@ def send_emergency_alert(subject: str, message: str) -> None:
 
 def send_monthly_review_notification(review_result: Dict[str, Any]) -> None:
     """
-    發送月度 AI 復盤與 Skills 演化報告至專屬的 DISCORD_WEBHOOK_REVIEW 頻道。
-    包含 Phase 1 個股獨立診斷卡片與 Phase 2 組合整體復盤與 JSON Skills。
+    發送多層月度 AI 復盤與 Skills 演化報告至專屬的 DISCORD_WEBHOOK_REVIEW 頻道。
+    依據 Layer 1 (指標診斷) -> Layer 2 (交易執行診斷) -> Layer 3 (整體策略總結) 有序推播。
     """
     webhook_url = config.discord.webhook_monthly_review or config.discord.webhook_live
     if not webhook_url:
@@ -489,26 +489,40 @@ def send_monthly_review_notification(review_result: Dict[str, Any]) -> None:
 
     review_month = review_result.get("review_month", "未知月份")
     metrics = review_result.get("metrics", {})
+    stock_ind_reports = review_result.get("stock_indicator_reports", [])
+    stock_exe_reports = review_result.get("stock_execution_reports", [])
     stock_reports = review_result.get("stock_reports", [])
+    
+    indicator_summary = review_result.get("indicator_summary", "")
+    cio_summary = review_result.get("cio_summary", "")
     overall_summary = review_result.get("overall_summary", "")
     key_learnings = review_result.get("key_learnings", [])
-    skills_json = review_result.get("skills_json", {})
+    
+    ind_skills = review_result.get("indicator_skills") or {}
+    exe_skills = review_result.get("execution_skills") or {}
 
     from datetime import datetime, timezone
     ts = datetime.now(timezone.utc).isoformat()
 
-    # 1. 發送 Phase 1 個股獨立復盤診斷卡片
-    for s_rep in stock_reports:
+    # =====================================================================
+    # 1. 發送 Layer 1：技術指標與打分診斷卡片
+    # =====================================================================
+    # 1a. 個股指標診斷卡片
+    target_ind_reports = stock_ind_reports if stock_ind_reports else stock_reports
+    for s_rep in target_ind_reports:
         sc = s_rep.get("stock_code", "")
-        retro = s_rep.get("stock_retrospective", "")
+        retro = s_rep.get("indicator_retrospective") or s_rep.get("stock_retrospective", "")
+        anomaly = s_rep.get("anomaly_trait")
+        anomaly_text = f"\n\n**【個股特殊特徵與走勢慣性】**\n{anomaly}" if anomaly else ""
+
         stock_payload = {
-            "username": "AI 檢討 AI - 個股獨立診斷",
+            "username": "AI 檢討 AI - Layer 1 個股指標診斷",
             "embeds": [
                 {
-                    "title": f"🔍 個股復盤診斷: {sc} (月份: {review_month})",
-                    "description": retro,
+                    "title": f"📈 個股指標復盤: {sc} (月份: {review_month})",
+                    "description": f"{retro}{anomaly_text}",
                     "color": 3447003, # 藍色
-                    "footer": {"text": f"AIAutoStocks 月度復盤 · {sc}"},
+                    "footer": {"text": f"AIAutoStocks Layer 1 指標診斷 · {sc}"},
                     "timestamp": ts
                 }
             ]
@@ -516,26 +530,101 @@ def send_monthly_review_notification(review_result: Dict[str, Any]) -> None:
         _send_discord_webhook(webhook_url, stock_payload)
         time.sleep(0.5)
 
-    # 2. 發送 Phase 2 組合整體復盤與演化 JSON Skills 總結卡片
-    learnings_text = "\n".join([f"• {item}" for item in key_learnings]) if key_learnings else "無"
-    skills_pretty = json.dumps(skills_json, ensure_ascii=False, indent=2)
+    # 1b. Layer 1 指標綜合診斷卡片
+    v_rules = ind_skills.get("v_shape_reversal_patterns", [])
+    a_rules = ind_skills.get("a_shape_top_warnings", [])
+    v_text = "\n".join([f"• {item.get('pattern_rule')} (預期機率: {item.get('expected_probability_pct', 0)}%)" for item in v_rules if isinstance(item, dict)]) if v_rules else "無"
+    a_text = "\n".join([f"• {item.get('pattern_rule')} (預期機率: {item.get('expected_probability_pct', 0)}%)" for item in a_rules if isinstance(item, dict)]) if a_rules else "無"
 
-    overall_payload = {
-        "username": "AI 檢討 AI - 月度整體策略演化",
+    l1_summary_payload = {
+        "username": "AI 檢討 AI - Layer 1 指標總診斷",
         "embeds": [
             {
-                "title": f"📊 月度整體復盤與策略演化總結 (月份: {review_month})",
+                "title": f"📊 Layer 1 技術指標與打分品質總診斷 (月份: {review_month})",
                 "description": (
-                    f"**【月度硬指標統計】**\n"
+                    f"**【指標與打分品質總評】**\n{indicator_summary}\n\n"
+                    f"**【V 型強勢反彈特徵 Key Learnings】**\n{v_text}\n\n"
+                    f"**【A 型頂點/誘多警戒 Key Warnings】**\n{a_text}"
+                ),
+                "color": 3447003, # 藍色
+                "footer": {"text": "AIAutoStocks Layer 1 綜合診斷卡片"},
+                "timestamp": ts
+            }
+        ]
+    }
+    _send_discord_webhook(webhook_url, l1_summary_payload)
+    time.sleep(0.5)
+
+    # =====================================================================
+    # 2. 發送 Layer 2：交易與部位執行診斷卡片
+    # =====================================================================
+    # 2a. 個股交易執行診斷卡片
+    target_exe_reports = stock_exe_reports if stock_exe_reports else stock_reports
+    for s_rep in target_exe_reports:
+        sc = s_rep.get("stock_code", "")
+        retro = s_rep.get("execution_retrospective") or s_rep.get("stock_retrospective", "")
+
+        stock_payload = {
+            "username": "AI 檢討 AI - Layer 2 個股執行診斷",
+            "embeds": [
+                {
+                    "title": f"⚔️ 個股交易執行復盤: {sc} (月份: {review_month})",
+                    "description": retro,
+                    "color": 15844367, # 金黃色
+                    "footer": {"text": f"AIAutoStocks Layer 2 執行診斷 · {sc}"},
+                    "timestamp": ts
+                }
+            ]
+        }
+        _send_discord_webhook(webhook_url, stock_payload)
+        time.sleep(0.5)
+
+    # 2b. Layer 2 CIO 組合執行總評卡片
+    learnings_text = "\n".join([f"• {item}" for item in key_learnings]) if key_learnings else "無"
+
+    l2_summary_payload = {
+        "username": "AI 檢討 AI - Layer 2 CIO 執行總評",
+        "embeds": [
+            {
+                "title": f"🛡️ Layer 2 交易執行與部位風控 CIO 總評 (月份: {review_month})",
+                "description": (
+                    f"**【CIO 組合執行與 Timing 總評】**\n{cio_summary}\n\n"
+                    f"**【交易執行核心學習點】**\n{learnings_text}"
+                ),
+                "color": 15844367, # 金黃色
+                "footer": {"text": "AIAutoStocks Layer 2 CIO 執行卡片"},
+                "timestamp": ts
+            }
+        ]
+    }
+    _send_discord_webhook(webhook_url, l2_summary_payload)
+    time.sleep(0.5)
+
+    # =====================================================================
+    # 3. 發送 Layer 3：月度整體復盤與下月戰術策略總結卡片 (自然繁體中文)
+    # =====================================================================
+    min_score = exe_skills.get("min_buy_score", 65)
+    max_weight = exe_skills.get("max_single_stock_weight", 4)
+    stop_loss = exe_skills.get("stop_loss_pct", -0.05)
+    take_profit = exe_skills.get("take_profit_pct", 0.12)
+    tactical_rules = exe_skills.get("tactical_rules", [])
+    tactical_text = "\n".join([f"• {r}" for r in tactical_rules]) if tactical_rules else "• 維持穩健分批進場紀律"
+
+    overall_payload = {
+        "username": "AI 檢討 AI - Layer 3 策略總結",
+        "embeds": [
+            {
+                "title": f"🏆 月度整體復盤與下月戰術策略總結 (月份: {review_month})",
+                "description": (
+                    f"**【當月實盤硬指標統計】**\n"
                     f"• 平倉總筆數: **{metrics.get('total_trades', 0)}** 筆 | 勝率: **{metrics.get('win_rate', 0)}%**\n"
                     f"• 實現總損益: **{metrics.get('total_realized_pnl', 0):,}** 元 | 盈虧比: **{metrics.get('payoff_ratio', 0)}** | 獲利因子: **{metrics.get('profit_factor', 0)}**\n"
                     f"• 期望潛在漲幅 Mean: **+{metrics.get('mean_upside_ratio', 0)*100:.2f}%** (Std: {metrics.get('std_upside_ratio', 0)})\n"
                     f"• 期望潛在回撤 Mean: **{metrics.get('mean_drawdown_ratio', 0)*100:.2f}%** (Std: {metrics.get('std_drawdown_ratio', 0)})\n"
                     f"• 成交平均滑價 Mean: **{metrics.get('mean_slippage_ratio', 0)*100:.2f}%** (Std: {metrics.get('std_slippage_ratio', 0)})\n"
                     f"• 未成交取消單: **{metrics.get('total_cancelled_orders', 0)}** 筆 (取消率: **{metrics.get('cancellation_rate_pct', 0)}%**)\n\n"
-                    f"**【CIO 組合整體檢討總評】**\n{overall_summary}\n\n"
-                    f"**【核心反思與學習點】**\n{learnings_text}\n\n"
-                    f"**【下月最新動態 JSON Skills 戰術規範】**\n```json\n{skills_pretty}\n```"
+                    f"{overall_summary}\n\n"
+                    f"**【下月關鍵戰術執行守則】**\n{tactical_text}"
                 ),
                 "color": 10181046, # 紫色
                 "footer": {"text": "此報告由 Monthly Review Agent 檢討引擎自動產出與發送。"},

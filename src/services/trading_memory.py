@@ -105,18 +105,36 @@ def get_active_skills_context(is_paper: bool = False) -> str:
 
     default_skills = {
         "version": "baseline-v1",
-        "min_buy_score": 60,
-        "max_single_stock_weight": 4,
-        "stop_loss_pct": -0.05,
-        "take_profit_pct": 0.12,
-        "regime_posture": {
-            "BULLISH_TREND": "AGGRESSIVE",
-            "BEARISH_TREND": "DEFENSIVE",
-            "HIGH_VOLATILITY": "CONSERVATIVE"
+        "indicator_skills": {
+            "v_shape_reversal_patterns": [
+                {"pattern_rule": "量能突破且 RSI 於 50 以上向上黃金交叉時 V 型反彈機率高", "expected_probability_pct": 80}
+            ],
+            "a_shape_top_warnings": [
+                {"pattern_rule": "高檔乖離率過大且爆大量後無續攻力道時慎防 A 頂誘多", "expected_probability_pct": 85}
+            ],
+            "stock_specific_rules": [],
+            "score_calibration_rules": [
+                {"calibration_rule": "維持標準買入門檻，監督分析師打分品質", "expected_probability_pct": 90}
+            ],
+            "regime_indicator_rules": {
+                "BULLISH_TREND": {"focus": "著重動能與量能突破指標", "expected_probability_pct": 85},
+                "BEARISH_TREND": {"focus": "要求安全得分 >= 15 且有底線支撐", "expected_probability_pct": 90}
+            }
         },
-        "tactical_rules": [
-            "Maintain strict risk management and follow analyst scores."
-        ]
+        "execution_skills": {
+            "min_buy_score": 60,
+            "max_single_stock_weight": 4,
+            "stop_loss_pct": -0.05,
+            "take_profit_pct": 0.12,
+            "regime_posture": {
+                "BULLISH_TREND": "AGGRESSIVE",
+                "BEARISH_TREND": "DEFENSIVE",
+                "HIGH_VOLATILITY": "CONSERVATIVE"
+            },
+            "tactical_rules": [
+                "Maintain strict risk management and follow analyst scores."
+            ]
+        }
     }
 
     try:
@@ -152,3 +170,31 @@ def get_active_skills_context(is_paper: bool = False) -> str:
         f"```json\n{skills_pretty}\n```\n"
         f"請投資組合經理 AI 嚴格遵守上述演化出的最新買入門檻得分、部位權重與風控停損比率。"
     )
+
+def get_indicator_skills_context(is_paper: bool = False) -> str:
+    """
+    特別撈取 Layer 1 產出之 indicator_skills Context，供 analyst_agent 打分前置參考。
+    """
+    from src.services.supabase_client import supabase
+    import json
+
+    try:
+        res = supabase.table("monthly_skills") \
+            .select("skills, review_month") \
+            .eq("is_paper", is_paper) \
+            .order("created_at", desc=True) \
+            .limit(1) \
+            .execute()
+        data = res.data or []
+        if data and "skills" in data[0]:
+            skills_json = data[0]["skills"]
+            if isinstance(skills_json, str):
+                skills_json = json.loads(skills_json)
+            ind_skills = skills_json.get("indicator_skills", {})
+            if ind_skills:
+                ind_pretty = json.dumps(ind_skills, ensure_ascii=False, indent=2)
+                return f"【最新技術指標與評分 Skills 規範】:\n```json\n{ind_pretty}\n```"
+    except Exception as e:
+        print(f" [交易記憶管理器] 警告: 撈取 indicator_skills 失敗: {e}")
+    return ""
+
