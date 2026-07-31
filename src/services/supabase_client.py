@@ -659,6 +659,28 @@ def has_trading_job_run_today(is_paper: bool = False) -> bool:
         return False
 
 
+def has_monthly_review_run(year: int, month: int, is_paper: bool = False) -> bool:
+    """
+    從資料庫 monthly_skills 查詢指定月份與交易模式是否已有月度復盤與 Skills 紀錄（無論手動或自動執行）。
+    """
+    try:
+        review_month_str = f"{year}-{month:02d}"
+        res = execute_with_retry(
+            lambda: supabase.table("monthly_skills")
+            .select("id")
+            .eq("review_month", review_month_str)
+            .eq("is_paper", is_paper)
+            .limit(1)
+            .execute()
+        )
+        return len(res) > 0 if res else False
+    except Exception as e:
+        print(f" [Supabase] 檢查月度復盤紀錄失敗: {str(e)}")
+        return False
+
+
+
+
 def get_stop_loss_stocks_today() -> List[str]:
     """
     從資料庫 system_config 的 STOP_LOSS_STOCKS_TODAY 鍵值讀取今日已停損股票代號。

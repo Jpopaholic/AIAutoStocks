@@ -1,5 +1,6 @@
 # Path: src/scratch/tests/test_monthly_review.py
 import unittest
+from unittest.mock import patch, MagicMock
 from datetime import date
 from src.services.monthly_aggregator import (
     get_monthly_analysis_date,
@@ -214,8 +215,30 @@ class TestMonthlyReviewSuite(unittest.TestCase):
             final_action_2454 = action_2454
         self.assertEqual(final_action_2454, "HOLD")
 
+    @patch("src.services.supabase_client.supabase")
+    def test_has_monthly_review_run(self, mock_supabase):
+        """驗證 has_monthly_review_run 查詢 Supabase 歷程紀錄去重邏輯"""
+        from src.services.supabase_client import has_monthly_review_run
+
+        # 模擬有紀錄
+        mock_chain = MagicMock()
+        mock_chain.select.return_value = mock_chain
+        mock_chain.eq.return_value = mock_chain
+        mock_chain.limit.return_value = mock_chain
+        mock_chain.execute.return_value = MagicMock(data=[{"id": 1}])
+        mock_supabase.table.return_value = mock_chain
+
+        res_true = has_monthly_review_run(2026, 7, is_paper=True)
+        self.assertTrue(res_true)
+
+        # 模擬無紀錄
+        mock_chain.execute.return_value = MagicMock(data=[])
+        res_false = has_monthly_review_run(2026, 8, is_paper=True)
+        self.assertFalse(res_false)
+
 if __name__ == "__main__":
     unittest.main()
+
 
 
 

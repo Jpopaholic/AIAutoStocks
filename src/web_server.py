@@ -226,6 +226,7 @@ def run_trading_job_in_background(is_startup: bool = False):
             from src.time_manager import get_local_taiwan_datetime
             
             last_run_date_memory = None
+            last_monthly_review_memory = None
 
             if is_startup:
                 log_system_event("INFO", "[永動機] 伺服器重啟/重新部署自檢完成，進入等待排程狀態（無立即執行）。")
@@ -234,7 +235,7 @@ def run_trading_job_in_background(is_startup: bool = False):
                 run_live_trading_job(stock_codes, is_manual=True)
                 last_run_date_memory = get_local_taiwan_datetime().date()
             
-            log_system_event("INFO", f"[永動機] 進入每日定時自動交易循環 (目標時間: 每日 15:00-17:00 預約，排除週末)")
+            log_system_event("INFO", f"[永動機] 進入每日定時自動交易循環 (交易日 15:00-17:00 預約，週末 09:00 起月度檢討)")
             
             # 進入永動機定時排程循環
             while not stop_requested:
@@ -257,13 +258,13 @@ def run_trading_job_in_background(is_startup: bool = False):
                 
                 tw_now = get_local_taiwan_datetime()
                 current_date = tw_now.date()
-                
-                # 判斷是否在合法的自動下單時段內：
-                # 僅在 15:00 - 17:00 (次日盤中交易預約單) 執行
                 from datetime import time as dt_time
                 tw_time = tw_now.time()
-                in_pre_order_window = (dt_time(15, 0) <= tw_time <= dt_time(17, 0))
                 
+                # ---------------------------------------------------------
+                # 1. 平日自動下單排程 (週一至週五 15:00 - 17:00)
+                # ---------------------------------------------------------
+                in_pre_order_window = (dt_time(15, 0) <= tw_time <= dt_time(17, 0))
                 if in_pre_order_window and tw_now.weekday() not in (5, 6):
                     # 若今日尚未執行過 (記憶體層級判斷)
                     if last_run_date_memory != current_date:
@@ -292,6 +293,36 @@ def run_trading_job_in_background(is_startup: bool = False):
                         
                         # 標記為今日已處理，避免今日重複觸發
                         last_run_date_memory = current_date
+
+                # ---------------------------------------------------------
+                # 2. 週末月度 AI 自我檢討與 Skills 演化排程 (週六、週日 09:00 起)
+                # ---------------------------------------------------------
+                if tw_now.weekday() in (5, 6) and tw_time >= dt_time(9, 0):
+                    from src.services.monthly_aggregator import resolve_manual_review_month
+                    target_year, target_month = resolve_manual_review_month()
+                    
+                    if last_monthly_review_memory != (target_year, target_month):
+                        from src.services.supabase_client import has_monthly_review_run
+                        if not has_monthly_review_run(target_year, target_month, is_paper=start_mode_is_paper):
+                            log_system_event("INFO", f"[永動機] 進入週末月度復盤時段 ({tw_now.strftime('%H:%M:%S')})，開始執行 {target_year}-{target_month:02d} 月度 AI 自我檢討與演化...")
+                            try:
+                                from src.agents.monthly_review_agent import run_monthly_review
+                                from src.services.discord_notifier import send_monthly_review_notification
+
+                                review_result = run_monthly_review(target_year, target_month, is_paper=start_mode_is_paper)
+                                if not review_result.get("skipped"):
+                                    try:
+                                        send_monthly_review_notification(review_result)
+                                    except Exception as notify_err:
+                                        log_system_event("WARN", f"[永動機] 月度復盤 Discord 通知發送失敗: {notify_err}")
+                                log_system_event("INFO", f"[永動機] {target_year}-{target_month:02d} 月度 AI 復盤與 Skills 演化自動執行完成。")
+                            except Exception as ex:
+                                log_system_event("ERROR", f"[永動機] 執行月度 AI 復盤時發生異常: {ex}")
+                        else:
+                            log_system_event("INFO", f"[永動機] 偵測到 {target_year}-{target_month:02d} 月度 AI 檢討已執行過 (手動或先前自動)，跳過本次自動執行。")
+
+                        last_monthly_review_memory = (target_year, target_month)
+
         
         if stop_requested:
             last_run_status = "已被使用者手動停止"
