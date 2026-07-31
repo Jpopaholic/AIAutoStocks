@@ -4,6 +4,15 @@
 [![Database](https://img.shields.io/badge/Database-Supabase-green.svg)](https://supabase.com/)
 [![LLM Engine](https://img.shields.io/badge/LLM-Gemini_API-orange.svg)](https://ai.google.dev/)
 
+> [!CAUTION]
+> ### ⚠️ 免責聲明 (Disclaimer)
+> 
+> 1. **非投資建議**：本專案（`AIAutoStocks`）僅供學術研究、技術交流與量化交易實驗用途，專案內所產出之任何 AI 分析、評分、買賣建議或程式碼邏輯，**均不構成任何形式的投資諮詢、財務建議、買賣推薦或金融商品之招攬**。
+> 2. **風險自負與槓桿警示**：金融市場與股票投資具備高風險，過往之歷史數據回測、AI 模型預測或模擬績效，**絕不代表未來獲利保證**。若使用者進行信用交易、融資融券、現股當沖等槓桿操作，將倍數放大資產虧損與追繳風險，使用者應自行評估並承擔所有損益。
+> 3. **違約交割與資金責任**：使用者須自行確保證券交割帳戶具備足額資金與風險承受能力。若因系統下單異常、自動排程觸發委託、網路延遲、API 錯誤或個人資金調度不當，導致**扣款失敗、交割款不足、違約交割、保證金追繳、信用受損或面臨民刑事與違約罰則**，使用者須承擔全權責任，本專案作者及貢獻者概不負擔任何賠償或連帶責任。
+> 4. **無損害賠償責任**：本專案作者及貢獻者對於因使用、引用、部署或執行本系統所引發之任何直接、間接或衍生性損益、資金虧損、證券商 API 異常、網路中斷、系統故障或軟體瑕疵，**概不負擔任何法律責任或賠償責任**。
+> 5. **合規與安全**：使用者在啟用實盤交易功能前，應充分理解與遵守當地證券主管機關之相關法規、券商 API 之使用規範與風控防護機制。
+
 `AIAutoStocks` 是一個基於 Large Language Model (LLM - Google Gemini API) 與 Supabase 的台股自動化量化交易與排程控制系統。系統設計採用多層級 AI 決策架構，結合「交易記憶與經驗管理器（Few-Shot Learning）」，能自動擷取台股歷史日 K 線與技術指標，生成具備詳細理據的交易決策（買入、賣出、觀望）。
 
 系統支援**實時交易/模擬盤 (Live Trading)**、**永豐沙盒模擬交易 (Shioaji Simulation)**、**歷史數據沙盒回測演練 (Sandbox Simulation)**，並配備一個具備 TOTP 二階段驗證的安全**網頁控制台儀表板**，方便追蹤損益與控制交易流程。
@@ -179,16 +188,16 @@ pip install -r requirements.txt
 永豐金證券下單 (Shioaji) 在實盤交易時，必須使用電子憑證檔案（例如 `Sinopac.pfx`）。系統已針對此處理進行了安全與部署上的優化：
 
 1. **本機配置與加密**：
-   * 請向永豐金證券申請電子憑證，下載後命名為 `Sinopac.pfx` 並直接放置於**專案根目錄**下。
+   * 請向永豐金證券申請電子憑證，下載後置於**專案根目錄**下（例如 `Sinopac.pfx`）。
    * 專案的 `.gitignore` 已設定過濾 `*.pfx`，因此該憑證**絕對不會**被意外提交到 Git 儲存庫。
-   * 在 `credentials.json` 中的 `"brokerCredentials"` 內，將 `"certificatePath"` 設定為 `"Sinopac.pfx"`（即相對路徑），並填寫正確的憑證密碼等資訊。
+   * 在 `credentials.json` 中的 `"brokerCredentials"` 內，將 `"certificatePath"` 設定為憑證檔名或相對路徑（例如 `"Sinopac.pfx"`），並填寫正確的憑證密碼等資訊。
    * 執行 `python encrypt_credentials.py`，將密碼等敏感設定加密存入 `credentials.enc`。
 
-2. **Docker / 雲端部署 (如 Fly.io) 自動打包**：
-   * 專案的 `Dockerfile` 中已配置了條件式複製指令：`COPY Sinopac.pf[x] ./`。
-   * 當您在本地執行 `fly deploy`（或 `docker build`）時，若您的根目錄下存在 `Sinopac.pfx`，Docker 建置流程會**自動將該憑證打包進容器的 `/app` 工作目錄**中。
-   * 系統在容器內運行時，將會從解密後的設定檔中讀取到 `"certificatePath": "Sinopac.pfx"`，並直接在容器根目錄載入。
-   * **無需手動透過 SSH/SFTP 上傳憑證至雲端主機**。只要在部署前確保本機根目錄有 `Sinopac.pfx`，部署指令會一併處理。
+2. **Docker / 雲端部署 (如 Fly.io) 自動打包與動態解讀**：
+   * 專案的 `Dockerfile` 中已配置了條件式萬用複製指令：`COPY *.pf[x] ./`。
+   * 當您在本地執行 `fly deploy`（或 `docker build`）時，若根目錄下存在 `.pfx` 憑證檔，Docker 建置流程會**自動將該憑證打包進容器的 `/app` 工作目錄**中。
+   * 系統在容器內運行時，`broker_connector.py` 會自動讀取解密後設定檔中的 `"certificatePath"`，並具備容器內檔名與工作目錄的自動 Fallback 機制。
+   * **無需手動透過 SSH/SFTP 上傳憑證至雲端主機**。只要在部署前確保本機根目錄有憑證檔案，部署指令會一併處理。
 
 
 ---
