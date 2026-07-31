@@ -54,7 +54,7 @@ def resolve_manual_review_month(target_month_str: Optional[str] = None) -> Tuple
 
     if target_month_str and target_month_str.strip():
         parts = target_month_str.strip().split("-")
-        if len(parts) == 2:
+        if len(parts) >= 2:
             try:
                 return int(parts[0]), int(parts[1])
             except ValueError:
