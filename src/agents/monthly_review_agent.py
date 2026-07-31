@@ -15,7 +15,7 @@ class StockReviewOutput(BaseModel):
     stock_code: str = Field(..., description="股票代號，如 '2330'")
     stock_retrospective: str = Field(
         ...,
-        description="繁體中文 150-250 字個股獨立復盤診斷報告。請著重於分析當月買賣進場準確度、離場效率 (Upside vs Drawdown 期望值) 以及 AI 分析師當時的打分品質。"
+        description="繁體中文 150-250 字個股獨立復盤診斷報告。請著重於分析當月買賣進場準確度與時機（包含是否存在追高買在波段高點、或太晚入場等現象）、離場效率 (Upside vs Drawdown 期望值) 以及 AI 分析師當時的打分品質。"
     )
 
 # =====================================================================
@@ -33,17 +33,17 @@ class EvolvedSkillsJSON(BaseModel):
     )
     tactical_rules: List[str] = Field(
         ...,
-        description="2-4 條簡短英文或繁體中文精簡戰術規則指令"
+        description="2-4 條簡短英文或繁體中文精簡戰術規則指令（需包含進場時機與防追高規範）"
     )
 
 class OverallReviewOutput(BaseModel):
     overall_summary: str = Field(
         ...,
-        description="繁體中文 300-500 字投資組合整體月度復盤報告。需涵蓋：1.熊市/盤整市是否過於保守 2.牛市是否過於積極導致虧損 3.打分偏差與偏斜校正結論 4.離場效率與氣候配合度。"
+        description="繁體中文 300-500 字投資組合整體月度復盤報告。需涵蓋：1.熊市/盤整市是否過於保守 2.牛市/反彈市是否過於積極或追高/太晚入場 3.打分偏差與偏斜校正結論 4.離場效率與氣候配合度 5.進場時機 Timing 優化建議與防追高機制。"
     )
     key_learnings: List[str] = Field(
         ...,
-        description="3-5 條月度關鍵反思與策略學習點 (繁體中文)"
+        description="3-5 條月度關鍵反思與策略學習點 (繁體中文，需含進場 timing 與防追高啟示)"
     )
     evolved_skills: EvolvedSkillsJSON = Field(
         ...,
@@ -56,9 +56,9 @@ class OverallReviewOutput(BaseModel):
 def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemini_fn: Optional[Any] = None) -> Dict[str, Any]:
     """
     執行實盤 (`is_paper = False`) 月度 AI 自我檢討與 Skills 演化：
-    1. Python monthly_aggregator 計算硬指標與 5 大 Context 柱石
+    1. Python monthly_aggregator 計算硬指標與 5 大 Context 柱石 (含 Timing 追高與太晚入場)
     2. Phase 1 (Map): 迴圈呼叫 Gemini 產出個股獨立診斷報告
-    3. Phase 2 (Reduce): 彙整發送整體 Prompt，診斷 6 大核心維度，產出 JSON Skills
+    3. Phase 2 (Reduce): 彙整發送整體 Prompt，診斷 9 大核心維度，產出 JSON Skills
     4. 寫入 Supabase monthly_skills 資料表
     """
     if call_gemini_fn is None:
@@ -89,6 +89,7 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
 
     # Step 2: Phase 1 (Map 階段) - 個股獨立檢討 Prompt
     for stock_code, stock_info in per_stock_data.items():
+        timing_sum = stock_info.get("entry_timing_summary", {})
         map_prompt = (
             f"你是一位頂級量化基金的個股復盤分析師。請對股票代號 {stock_code} 在 {review_month_str} 月份的表現進行個股獨立診斷。\n\n"
             f"【個股交易與評分數據】\n"
@@ -96,10 +97,13 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
             f"- 成交單筆數: {len(stock_info.get('filled_orders', []))}\n"
             f"- 未成交/被取消單筆數: {len(stock_info.get('cancelled_orders', []))}\n"
             f"- 當月該股總振幅 (Price Range Ratio): {stock_info.get('price_range_ratio', 0.0) * 100:.2f}%\n"
+            f"- 買單平均入場價位分位數 (Avg Entry Percentile): {timing_sum.get('avg_entry_percentile', 50.0)}% (0%=最低價, 100%=最高價)\n"
+            f"- 疑似追高買單筆數 (買在頂部 20% 區間): {timing_sum.get('chasing_high_count', 0)} 筆\n"
+            f"- 疑似太晚入場/買在波段頂點筆數: {timing_sum.get('late_entry_count', 0)} 筆\n"
             f"- 打分詳細紀錄: {json.dumps(stock_info.get('scores', []), ensure_ascii=False)}\n"
             f"- 成功成交單紀錄: {json.dumps(stock_info.get('filled_orders', []), ensure_ascii=False)}\n"
             f"- 被取消/未成交單紀錄: {json.dumps(stock_info.get('cancelled_orders', []), ensure_ascii=False)}\n\n"
-            f"請評估該股：買入 timing 準確度、進場後 Upside/Drawdown 表現、未成交/取消單原因 (如滑價過大或掛價不及)，以及分析師給分品質。"
+            f"請評估該股：買入 timing 準確度（特別是是否存在追高或太晚入場現象？原因為何）、進場後 Upside/Drawdown 表現、未成交/取消單原因 (如滑價過大或掛價不及)，以及分析師給分品質。"
         )
         generation_config_map = {
             "response_mime_type": "application/json",
@@ -131,18 +135,24 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
         f"- 期望潛在回撤 (Mean Drawdown): {metrics['mean_drawdown_ratio']*100:.2f}% (Std: {metrics['std_drawdown_ratio']})\n"
         f"- 成交平均滑價 (Mean Slippage): {metrics.get('mean_slippage_ratio', 0)*100:.2f}% (Std: {metrics.get('std_slippage_ratio', 0)})\n"
         f"- 未成交/被取消委託單筆數: {metrics.get('total_cancelled_orders', 0)} 筆 (取消率: {metrics.get('cancellation_rate_pct', 0)}%)\n"
+        f"- 全月買單平均入場分位數 (Avg Entry Percentile): {metrics.get('avg_portfolio_entry_percentile', 50.0)}% (0%=最底, 100%=最高)\n"
+        f"- 全月疑似追高買單筆數: {metrics.get('total_chasing_high_trades', 0)} 筆\n"
+        f"- 全月疑似太晚入場/波段頂點買單筆數: {metrics.get('total_late_entry_trades', 0)} 筆\n"
+        f"- 保守/低迷氣候天數 (Defensive Days): {metrics.get('defensive_days_count', 0)} 天 | 防禦期間個股潛在反彈漲幅: +{metrics.get('defensive_period_mean_upside_pct', 0.0)}% | 防禦期間實際買單: {metrics.get('defensive_period_buy_count', 0)} 筆\n"
+        f"- 看多/順風氣候天數 (Bullish Days): {metrics.get('bullish_days_count', 0)} 天 | 順風天數買單: {metrics.get('bullish_period_buy_count', 0)} 筆 | 順風買入卻虧損筆數 (Bull Trap Losses): {metrics.get('bullish_period_losing_trades', 0)} 筆 (虧損率: {metrics.get('bullish_loss_rate_pct', 0.0)}%)\n"
         f"- 打分分佈: 高分(>=80) {aggregated_data['score_calibration']['high_score_count']} 筆, 中分(60-79) {aggregated_data['score_calibration']['mid_score_count']} 筆, 低分(<60) {aggregated_data['score_calibration']['low_score_count']} 筆\n\n"
         f"【各標的 Map 階段個股診斷報告彙整】\n"
         f"{json.dumps(stock_reports, ensure_ascii=False, indent=2)}\n\n"
-        f"【核心診斷 8 大維度引導】\n"
-        f"1. 熊市/盤整市是否過於保守 (錯失反彈與閒置資金)？\n"
-        f"2. 牛市/反彈市是否過於積極 (追高或過度開倉導致虧損)？\n"
+        f"【核心診斷 9 大維度引導】\n"
+        f"1. 熊市/低迷市是否因大盤指數過低而過於保守 (過度採取防禦姿態降低倉位/提高門檻，導致錯失反彈行情與個股賺錢機會)？\n"
+        f"2. 牛市/強勢大盤過度自信與『大盤好買入卻虧損』診斷 (當大盤氣候看多/良好時，是否因環境優良放鬆選股標準、過度追高或買入弱勢標的，導致大盤好買入後反而虧損？原因為何？JSON Skills 應如何加入強勢盤的選股品質過濾與防踩雷條款)？\n"
         f"3. 分析師打分預測品質與選股表現？\n"
         f"4. 打分偏差與偏斜校正 (是否有給分通膨/偏高，需調高買入門檻 min_buy_score)？\n"
         f"5. 離場效率與停損停利機制合適度？\n"
         f"6. 大盤氣候 (Regime) 與風險乘數配合度？\n"
         f"7. 成交滑價與摩擦成本診斷 (滑價是否過高，是否需於戰術規則中優化開盤/開倉時段)？\n"
-        f"8. 未成交與委託單取消率診斷 (委託單是否常因價格滑落/過度激進或逾時而被取消)？\n\n"
+        f"8. 未成交與委託單取消率診斷 (委託單是否常因價格滑落/過度激進或逾時而被取消)？\n"
+        f"9. 進場時機 (Timing) 與防追高機制診斷 (全月是否有追高或太晚入場現象？下個月的極簡 JSON Skills tactical_rules 應如何設定防追高與 Timing 風控條款，如限制高檔乖離、RSI過熱警示或分批進場)？\n\n"
         f"請產出整體復盤報告以及演化出的極簡 JSON 格式化戰術 Skills。"
     )
 

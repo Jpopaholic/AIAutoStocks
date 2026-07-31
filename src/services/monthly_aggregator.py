@@ -352,8 +352,57 @@ def aggregate_monthly_data(year: int, month: int, is_paper: bool = False) -> Dic
     mid_scores = [s for s in scores_list if 60 <= (s.get("trend_score", 0) + s.get("momentum_score", 0) + s.get("volume_score", 0) + s.get("safety_score", 0) + s.get("regime_score", 0)) < 80]
     low_scores = [s for s in scores_list if (s.get("trend_score", 0) + s.get("momentum_score", 0) + s.get("volume_score", 0) + s.get("safety_score", 0) + s.get("regime_score", 0)) < 60]
 
-    # 9. 個案細節與 Map 階段個股數據切分
+    # 8b. 大盤氣候與保守防禦錯失機會診斷 (Defensive Regime & Missed Opportunity Metrics)
+    defensive_scores = [s for s in scores_list if s.get("regime_score", 15) < 12]
+    defensive_days_count = len(set(str(s.get("analysis_date")) for s in defensive_scores))
+    
+    # 防禦天數內的潛在漲幅 (Upside) 與買單統計
+    defensive_upsides: List[float] = []
+    defensive_buy_count = 0
+    for s in defensive_scores:
+        sc = s.get("stock_code")
+        an_date = str(s.get("analysis_date"))
+        stock_klines = klines_map.get(sc, [])
+        if stock_klines:
+            after_klines = [k for k in stock_klines if str(k.get("date")) >= an_date]
+            if after_klines:
+                base_k = after_klines[0]
+                base_p = float(base_k.get("close") or base_k.get("open") or 0.0)
+                if base_p > 0:
+                    max_p = max([float(k.get("high") or base_p) for k in after_klines])
+                    defensive_upsides.append((max_p - base_p) / base_p)
+
+    for o in all_orders:
+        if str(o.get("action") or "").upper() == "BUY" and o.get("status") == "FILLED":
+            exec_dt = str(o.get("executed_at") or "")
+            exec_date = exec_dt.split("T")[0] if "T" in exec_dt else exec_dt.split(" ")[0]
+    defensive_mean_upside, _ = calculate_mean_and_std(defensive_upsides)
+
+    # 8c. 大盤多頭氣候與大盤好卻買入虧損診斷 (Bullish Regime Trap Metrics)
+    bullish_scores = [s for s in scores_list if s.get("regime_score", 15) >= 15]
+    bullish_days_count = len(set(str(s.get("analysis_date")) for s in bullish_scores))
+    bullish_buy_count = 0
+    bullish_losing_trade_count = 0
+
+    for o in all_orders:
+        if str(o.get("action") or "").upper() == "BUY" and o.get("status") == "FILLED":
+            exec_dt = str(o.get("executed_at") or "")
+            exec_date = exec_dt.split("T")[0] if "T" in exec_dt else exec_dt.split(" ")[0]
+            if any(str(bs.get("analysis_date")) == exec_date for bs in bullish_scores):
+                bullish_buy_count += 1
+                # 檢查該筆交易最終是否虧損 (realized_pnl < 0)
+                pnl = float(o.get("realized_pnl") or 0.0)
+                if pnl < 0:
+                    bullish_losing_trade_count += 1
+
+    bullish_loss_rate = (bullish_losing_trade_count / bullish_buy_count * 100.0) if bullish_buy_count > 0 else 0.0
+
+    # 9. 個案細節與 Map 階段個股數據切分 (含進場 Timing / 追高 / 太晚入場診斷指標)
     per_stock_data: Dict[str, Dict[str, Any]] = {}
+    all_portfolio_chasing_high_count = 0
+    all_portfolio_late_entry_count = 0
+    all_portfolio_entry_percentiles: List[float] = []
+
     for sc in all_stocks:
         sc_scores = [s for s in scores_list if s.get("stock_code") == sc]
         sc_orders = [o for o in all_orders if o.get("stock_code") == sc]
@@ -362,6 +411,53 @@ def aggregate_monthly_data(year: int, month: int, is_paper: bool = False) -> Dic
         sc_klines = klines_map.get(sc, [])
         sc_range = stock_price_ranges.get(sc, 0.0)
 
+        # 計算進場時機指標 (Timing & Anti-Chasing metrics)
+        sc_filled_buys = [o for o in sc_filled_orders if str(o.get("action") or "").upper() == "BUY"]
+        sc_chasing_high_count = 0
+        sc_late_entry_count = 0
+        sc_entry_percentiles: List[float] = []
+
+        m_high = max([float(k.get("high") or 0.0) for k in sc_klines]) if sc_klines else 0.0
+        m_low = min([float(k.get("low") or 999999.0) for k in sc_klines]) if sc_klines else 0.0
+
+        for buy_o in sc_filled_buys:
+            entry_p = float(buy_o.get("execution_price") or buy_o.get("price") or 0.0)
+            exec_dt = str(buy_o.get("executed_at") or buy_o.get("created_at") or "")
+            exec_date_str = exec_dt.split("T")[0] if "T" in exec_dt else exec_dt.split(" ")[0]
+
+            if entry_p > 0 and m_high > m_low:
+                percentile = (entry_p - m_low) / (m_high - m_low)
+                percentile = max(0.0, min(1.0, percentile))
+            else:
+                percentile = 0.5
+            
+            sc_entry_percentiles.append(percentile)
+            all_portfolio_entry_percentiles.append(percentile)
+
+            # 後續 K 線評估 post-entry drawdown vs upside
+            after_klines = [k for k in sc_klines if str(k.get("date")) >= exec_date_str]
+            if after_klines and entry_p > 0:
+                max_p_after = max([float(k.get("high") or entry_p) for k in after_klines])
+                min_p_after = min([float(k.get("low") or entry_p) for k in after_klines])
+                post_upside = (max_p_after - entry_p) / entry_p
+                post_drawdown = (min_p_after - entry_p) / entry_p
+            else:
+                post_upside = 0.0
+                post_drawdown = 0.0
+
+            # 判定追高與太晚入場
+            # 追高：買在該月高低點區間 top 20% (Percentile >= 0.80)
+            if percentile >= 0.80:
+                sc_chasing_high_count += 1
+                all_portfolio_chasing_high_count += 1
+
+            # 太晚入場：買進後拉回 > 5% 且短期極致上揚 < 3% (波段頂點買入)
+            if post_drawdown < -0.05 and post_upside < 0.03:
+                sc_late_entry_count += 1
+                all_portfolio_late_entry_count += 1
+
+        avg_sc_percentile = (sum(sc_entry_percentiles) / len(sc_entry_percentiles)) if sc_entry_percentiles else 0.5
+
         per_stock_data[sc] = {
             "stock_code": sc,
             "scores": sc_scores,
@@ -369,8 +465,16 @@ def aggregate_monthly_data(year: int, month: int, is_paper: bool = False) -> Dic
             "filled_orders": sc_filled_orders,
             "cancelled_orders": sc_cancelled_orders,
             "klines": sc_klines,
-            "price_range_ratio": round(sc_range, 4)
+            "price_range_ratio": round(sc_range, 4),
+            "entry_timing_summary": {
+                "filled_buy_count": len(sc_filled_buys),
+                "avg_entry_percentile": round(avg_sc_percentile * 100.0, 1),
+                "chasing_high_count": sc_chasing_high_count,
+                "late_entry_count": sc_late_entry_count
+            }
         }
+
+    avg_portfolio_percentile = (sum(all_portfolio_entry_percentiles) / len(all_portfolio_entry_percentiles)) if all_portfolio_entry_percentiles else 0.5
 
     return {
         "review_month": review_month_str,
@@ -398,6 +502,16 @@ def aggregate_monthly_data(year: int, month: int, is_paper: bool = False) -> Dic
             "std_slippage_ratio": round(std_slippage_ratio, 4),
             "total_cancelled_orders": total_cancelled_orders,
             "cancellation_rate_pct": round(cancellation_rate, 2),
+            "total_chasing_high_trades": all_portfolio_chasing_high_count,
+            "total_late_entry_trades": all_portfolio_late_entry_count,
+            "avg_portfolio_entry_percentile": round(avg_portfolio_percentile * 100.0, 1),
+            "defensive_days_count": defensive_days_count,
+            "defensive_period_mean_upside_pct": round(defensive_mean_upside * 100.0, 2),
+            "defensive_period_buy_count": defensive_buy_count,
+            "bullish_days_count": bullish_days_count,
+            "bullish_period_buy_count": bullish_buy_count,
+            "bullish_period_losing_trades": bullish_losing_trade_count,
+            "bullish_loss_rate_pct": round(bullish_loss_rate, 2),
         },
         "score_calibration": {
             "high_score_count": len(high_scores),

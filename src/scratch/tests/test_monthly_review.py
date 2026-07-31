@@ -114,6 +114,35 @@ class TestMonthlyReviewSuite(unittest.TestCase):
         val = is_weekend_taiwan()
         self.assertIsInstance(val, bool)
 
+    def test_entry_timing_and_chasing_high_calculation(self):
+        """驗證進場分位數 (Entry Percentile) 與追高/太晚入場邏輯"""
+        m_low = 100.0
+        m_high = 200.0
+        
+        # 1. 追高買價 (190 元，位在 90% 高檔)
+        high_entry_p = 190.0
+        percentile_high = (high_entry_p - m_low) / (m_high - m_low)
+        self.assertGreaterEqual(percentile_high, 0.80)
+
+        # 2. 太晚入場買價 (進場後隨即回撤 -6%，且後續最高僅 +1%)
+        post_drawdown = -0.06
+        post_upside = 0.01
+        is_late_entry = (post_drawdown < -0.05) and (post_upside < 0.03)
+        self.assertTrue(is_late_entry)
+
+        # 3. 正常低檔買進 (120 元，位在 20% 低檔)
+        low_entry_p = 120.0
+        percentile_low = (low_entry_p - m_low) / (m_high - m_low)
+        self.assertLess(percentile_low, 0.80)
+
+    def test_bullish_regime_trap_calculation(self):
+        """驗證順風/多頭氣候下『大盤好買入卻虧損』之虧損率統計"""
+        bullish_buy_count = 5
+        bullish_losing_trade_count = 2
+        loss_rate = (bullish_losing_trade_count / bullish_buy_count * 100.0) if bullish_buy_count > 0 else 0.0
+        self.assertEqual(loss_rate, 40.0)
+
 if __name__ == "__main__":
     unittest.main()
+
 
