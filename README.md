@@ -83,6 +83,11 @@ graph TD
    - 執行時透過環境變數傳入主密鑰 `MASTER_KEY` 於記憶體中解密，確保敏感憑證不外洩。
 9. **精美 Discord Webhook 報告 (`discord_notifier.py`)**：
    - 使用富文本 Embed 格式將每日報告發送至 Discord，包含當日交易盈虧、持股狀態與 AI 預測。
+10. **月度與長週期 AI 復盤演化系統 (`monthly_review_agent.py` & `monthly_aggregator.py`)**：
+    - 每月底或週末會自動/手動執行雙層 AI 復盤（Layer 1: 技術指標與打分診斷、Layer 2: 投資組合與倉位控制診斷）。
+    - 匯整當月 K 線、指標偏斜、評分與平倉實績，提煉出結構化 JSON Skills（如 V 轉反彈型態、頂點轉折預警、打分校正規則、動態姿態選股側重），並寫入 Supabase `monthly_skills` 資料表。
+    - 次月交易時系統會自動載入最新演化出的 Skills 規範，實現 AI 交易策略的自主進化與經驗傳承。
+    - **前瞻規劃**：已預留月度 (`webhookMonthlyReview`)、季度 (`webhookQuarterlyReview`) 與年度 (`webhookYearlyReview`) 通知管道，未來將進一步導入**季度戰略檢討 Agent** 與 **年度宏觀檢討 Agent**。
 
 ---
 
@@ -94,6 +99,7 @@ AIAutoStocks/
 │   ├── agents/
 │   │   ├── analyst_agent.py        # 技術分析師代理 (K線多維度評分與技術指標分析)
 │   │   ├── decision_agent.py       # 投資組合配置經理代理 (水箱預算分配與風控護欄)
+│   │   ├── monthly_review_agent.py # 月度 AI 復盤與 Skills 自我演化代理 (雙層復盤診斷)
 │   │   ├── regime_agent.py        # 大盤氣候診斷代理 (分析大盤走勢與風險限額乘數)
 │   │   └── trading_agent.py       # 雙層 Agent 管線門面 (Facade) 與故障防守機制
 │   ├── services/
@@ -102,6 +108,7 @@ AIAutoStocks/
 │   │   ├── discord_notifier.py    # Discord 每日報告與警報發送器
 │   │   ├── gemini_rotator.py      # Gemini API 金鑰輪替與冷卻重試
 │   │   ├── health_check.py        # 運行前診斷與下單安全審查器
+│   │   ├── monthly_aggregator.py  # 月度交易數據與績效指標聚合計算器
 │   │   ├── nav_calculator.py      # 資產淨值 (NAV) 計算與動態限額快取
 │   │   ├── sandbox_simulator.py   # 沙盒回測演練與歷史行情重播器
 │   │   ├── stock_fetcher.py       # 台股與大盤 K 線與即時報價擷取器
@@ -255,11 +262,17 @@ python src/web_server.py
 python import_history.py --stocks top5 --start-date 2026-05-01 --end-date 2026-06-08
 ```
 
+### 7. 手動觸發月度 AI 復盤與 Skills 演化 (Monthly Skills Review)
+系統預設於每月中/月底週末分析日自動備妥月度復盤。若欲在 Web 控制台手動觸發月度 AI 檢討與 Skills 演化：
+- 可透過 Web 控制台介面點擊「執行月度檢討」或呼叫 API `POST /api/monthly-skills/run`。
+- 為保護平日交易穩定，系統預設**僅允許於週末假日 (週六與週日)** 執行手動檢討（可透過 payload 傳入 `override_weekend_check: true` 強制進行）。
+- 檢討產出的最新戰術 Skills 可透過 `GET /api/monthly-skills/active` 即時檢視與載入。
+
 ---
 
 ## 🗄️ Supabase 資料庫建置 (SQL Schema)
 
-請在您的 Supabase 專案中，前往 **SQL Editor** 執行專案根目錄下 [supabase_schema.sql](file:///Users/jpopaholic/Documents/AIAutoStocks/supabase_schema.sql) 的全部內容，以建立以下 10 張資料表、加速查詢索引與初始設定值：
+請在您的 Supabase 專案中，前往 **SQL Editor** 執行專案根目錄下 [supabase_schema.sql](file:///Users/jpopaholic/Documents/AIAutoStocks/supabase_schema.sql) 的全部內容，以建立以下 11 張資料表、加速查詢索引與初始設定值：
 
 1. `watchlist` — 自選監控股票清單（支援 Upsert）
 2. `holdings` — 目前持股明細（支援 Paper Trading / 實盤劃分）
@@ -271,6 +284,7 @@ python import_history.py --stocks top5 --start-date 2026-05-01 --end-date 2026-0
 8. `daily_analysis` — 每日 AI 分析執行紀錄（記錄大盤氣候、交易姿態與風險乘數）
 9. `unfilled_orders` — 未成交/滑價取消訂單記錄
 10. `stock_analysis_scores` — 股票 AI 分析評分與決策紀錄（記錄多維度量化評分與最終決策）
+11. `monthly_skills` — 月度 AI 復盤檢討與動態 JSON Skills 戰術庫
 
 <details>
 <summary>點擊展開完整的 SQL 建表與初始化語法</summary>
@@ -498,6 +512,24 @@ CREATE INDEX IF NOT EXISTS idx_stock_analysis_scores_analysis_id ON stock_analys
 
 -- 啟用 Row Level Security
 ALTER TABLE stock_analysis_scores ENABLE ROW LEVEL SECURITY;
+
+
+-- -----------------------------------------------------------------------------
+-- 11. monthly_skills — 月度 AI 決策檢討與動態 JSON Skills 戰術庫
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS monthly_skills (
+    id                 BIGSERIAL PRIMARY KEY,
+    review_month       TEXT NOT NULL,                  -- 分析月份，格式如 '2026-07'
+    daily_analysis_ids JSONB NOT NULL DEFAULT '[]',   -- 本月引用的 is_paper=FALSE daily_analysis.id 列表
+    skills             JSONB NOT NULL,                 -- AI 檢討產出的精簡 JSON 格式化戰術 Skills
+    is_paper           BOOLEAN NOT NULL DEFAULT FALSE, -- 預設 FALSE (僅記錄真實操盤檢討)
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_monthly_skills_month ON monthly_skills (review_month DESC);
+CREATE INDEX IF NOT EXISTS idx_monthly_skills_paper ON monthly_skills (is_paper);
+
+ALTER TABLE monthly_skills ENABLE ROW LEVEL SECURITY;
 ```
 </details>
 
@@ -508,6 +540,27 @@ ALTER TABLE stock_analysis_scores ENABLE ROW LEVEL SECURITY;
 ```bash
 pytest
 ```
+
+---
+
+## 🗺️ 未來開發藍圖 (Roadmap & Future Review Ecosystem)
+
+本專案規劃將 AI 決策檢討與策略演化體系從「月度戰術層級」逐步推升至「季度中線」與「年度宏觀」戰略層級：
+
+- [x] **月度 AI 決策檢討與戰術 Skills 演化 (Phase 1 - 現已上線)**
+  - 聚焦微觀戰術與技術指標診斷（如 V 轉反彈型態、A 頂誘多預警、分析師評分偏斜校正）。
+  - 產出月度動態 `monthly_skills` 規範並傳承至次月交易。
+  - 設定專屬 Discord 月度檢討通知管道 (`webhookMonthlyReview`)。
+
+- [ ] **季度戰略檢討 Agent (Quarterly Review Agent - 規劃中)**
+  - 聚焦中長線產業趨勢、大盤氣候轉換（如牛熊轉折、季線支撐反彈率）與個股資金輪動。
+  - 對過往 3 個月的月度 Skills 進行歸納與升級，調整中線風險偏好與資金水箱上限。
+  - 配套專屬 Discord 季度復盤通知 (`webhookQuarterlyReview`)。
+
+- [ ] **年度宏觀檢討與策略基因自我演化 Agent (Yearly Review Agent - 規劃中)**
+  - 進行全年度整體投資組合夏普比率 (Sharpe Ratio)、最大回撤 (MDD) 與實質勝率之總體檢討。
+  - 全面解耦後端硬編碼分數覆寫邏輯，實現完全由 AI 根據全年度演化 Skills 文本自主控制部位與買賣時機。
+  - 配套專屬 Discord 年度復盤通知 (`webhookYearlyReview`)。
 
 ---
 
