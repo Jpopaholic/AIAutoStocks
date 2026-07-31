@@ -22,10 +22,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 複製系統實體程式碼
 COPY src/ ./src/
 
-# 複製配置檔與加密憑證檔（若存在的話，採 Docker 條件複製語法避免建置失敗）
+# 複製配置檔與加密憑證檔（若存在的話，採 Docker 條件複製語法避免建置失敗；支援動態檔名 *.pfx）
 COPY config.jso[n] ./
 COPY credentials.en[c] ./
-COPY Sinopac.pf[x] ./
+COPY *.pf[x] ./
 
 
 

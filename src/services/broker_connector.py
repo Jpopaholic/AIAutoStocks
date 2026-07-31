@@ -189,13 +189,25 @@ def _get_shioaji_api():
                 
                 # 啟用 CA 憑證
                 if cert_path and password and person_id:
-                    if os.path.exists(cert_path):
+                    # 動態解析憑證路徑 (支援直接路徑、相對工作目錄、或容器內檔名 Fallback)
+                    target_cert_path = cert_path
+                    if not os.path.exists(target_cert_path):
+                        candidates = [
+                            os.path.join(os.getcwd(), cert_path),
+                            os.path.join(os.getcwd(), os.path.basename(cert_path))
+                        ]
+                        for cand in candidates:
+                            if os.path.exists(cand):
+                                target_cert_path = cand
+                                break
+
+                    if os.path.exists(target_cert_path):
                         api.activate_ca(
-                            ca_path=cert_path,
+                            ca_path=target_cert_path,
                             ca_passwd=password,
                             person_id=person_id
                         )
-                        log_system_event("INFO", "CA 下單安全憑證啟用成功，實盤交易功能已解鎖。")
+                        log_system_event("INFO", f"CA 下單安全憑證啟用成功 ({target_cert_path})，實盤交易功能已解鎖。")
                     else:
                         log_system_event("WARN", f"CA 憑證檔案不存在 ({cert_path})，可能只能進行查詢而無法下單")
                 else:
