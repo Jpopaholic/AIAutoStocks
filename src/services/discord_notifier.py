@@ -287,7 +287,7 @@ def send_daily_report(
             reg_score_val = safe_int(s.get('regime_score'), default=10, min_val=0, max_val=20)
             score_lines.append(
                 f"{idx+1}. {s['stock_code']}{name_display} | 總分: **{s['total_score']}** "
-                f"(趨勢:{s['trend_score']} 動能:{s['momentum_score']} 成交量:{s['volume_score']} 安全:{s['safety_score']} 大盤:{reg_score_val})"
+                f"(趨勢:{s['trend_score']} 動能:{s['momentum_score']} 成交量:{s['volume_score']} 安全:{s['safety_score']} 大盤:{reg_score_val})  "
             )
         scores_text = "\n".join(score_lines)
     section2_value = scores_text
@@ -311,7 +311,7 @@ def send_daily_report(
 # ── 6. 欄位 4: 第三層買賣決策與原因 ──────────────────────────────────
     decisions_text = "今日無 AI 配置決策。"
     if portfolio_decision:
-        ranking_analysis = portfolio_decision.get("ranking_analysis", "橫向對比分析中。")
+        ranking_analysis = str(portfolio_decision.get("ranking_analysis", "橫向對比分析中。")).replace("\\n", "\n").replace("\r\n", "\n").strip()
         decision_lines = [f"**經理人橫向配置說明**:\n{ranking_analysis}\n"]
         
         raw_decs = portfolio_decision.get("decisions", [])
@@ -319,7 +319,8 @@ def send_daily_report(
             code = d.get("stock_code")
             action = d.get("action", "HOLD")
             qty = float(d.get("quantity") or 0.0)
-            reason = d.get("reason", "維持觀望。")
+            raw_reason = d.get("reason", "維持觀望。")
+            reason = str(raw_reason).replace("\\n", "\n").replace("\r\n", "\n").strip()
             
             action_emoji = "🟢 BUY" if action == "BUY" else ("🔴 SELL" if action == "SELL" else "⚪ HOLD")
             stock_name = get_stock_name(code)
@@ -327,13 +328,13 @@ def send_daily_report(
             
             qty_str = f" | 數量: {qty:,.0f} 股" if action != "HOLD" else ""
             decision_lines.append(
-                f"**{action_emoji}** {code}{name_display}{qty_str}\n"
-                f"└ *原因*: {reason}" # 💡 移除 [:120] 截斷，保留完整原因，交由後續 _split_into_fields 動態切分欄位
+                f"**{action_emoji}** {code}{name_display}{qty_str}  \n"
+                f"└ *原因*: {reason}\n"
             )
         decisions_text = "\n".join(decision_lines)
     elif ai_outlook:
         # 相容舊模式 (未傳入結構化變數時)
-        decisions_text = ai_outlook # 💡 移除 [:1000] 截斷，避免舊模式內容受限
+        decisions_text = str(ai_outlook).replace("\\n", "\n").replace("\r\n", "\n").strip()
         
     section4_value = decisions_text
 
