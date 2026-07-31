@@ -15,14 +15,35 @@ from src.time_manager import (
     get_effective_date_str,
 )
 
-def _send_discord_webhook(webhook_url: str, payload: dict, retries: int = 3, delay: float = 2.0) -> bool:
+def _send_discord_webhook(
+    webhook_url: str,
+    payload: dict,
+    retries: int = 3,
+    delay: float = 2.0,
+    file_tuple: Optional[Any] = None
+) -> bool:
     """
-    透過 Discord Webhook 發送 JSON 內容 (具備重試機制)
+    透過 Discord Webhook 發送 JSON 內容與可選附件 (具備重試機制)
+    :param file_tuple: 可選之 (filename, file_content_str, content_type) 元組
     """
     import requests
+    import json
     for attempt in range(1, retries + 1):
         try:
-            response = requests.post(webhook_url, json=payload, timeout=10)
+            if file_tuple:
+                filename, content, content_type = file_tuple
+                files = {
+                    "file": (filename, content.encode("utf-8"), content_type)
+                }
+                response = requests.post(
+                    webhook_url,
+                    data={"payload_json": json.dumps(payload, ensure_ascii=False)},
+                    files=files,
+                    timeout=15
+                )
+            else:
+                response = requests.post(webhook_url, json=payload, timeout=10)
+
             if response.status_code in (200, 204):
                 return True
             else:
@@ -382,6 +403,33 @@ def send_daily_report(
 
         ts = datetime.now(timezone.utc).isoformat()
         all_success = True
+
+        # ── 建立完整 Plaintext Markdown 報告檔案 (供方案 A 附件一鍵下載複製) ──
+        full_report_md = (
+            f"# {subject}\n"
+            f"**環境/模式**: `{mode_label}` | **日期**: `{current_date_label}`\n\n"
+            f"---\n\n"
+            f"### 🌦️ 大盤氣候與帳戶狀態\n"
+            f"{climate_header}\n"
+            f"**氣候判定理由**:\n{climate_reason}\n\n"
+            f"{account_header}\n\n"
+            f"---\n\n"
+            f"### 💸 本日交易與成交明細\n"
+            f"```diff\n{trades_text}\n```\n\n"
+            f"### ⚠️ 本日未成交/滑價取消明細\n"
+            f"```diff\n{unfilled_text}\n```\n\n"
+            f"---\n\n"
+            f"### 📈 分析師評分與相對排名 (第二層)\n"
+            f"{section2_value}\n\n"
+            f"---\n\n"
+            f"### 🚨 今日停損警告清單\n"
+            f"{section3_value}\n\n"
+            f"---\n\n"
+            f"### 🧠 經理人交易配置與理由 (第三層)\n"
+            f"{section4_value}\n"
+        )
+        report_filename = f"{current_date_label}_Daily_Report.md"
+
         for embed_idx, embed_fields in enumerate(embeds):
             is_first = (embed_idx == 0)
             is_last = (embed_idx == len(embeds) - 1)
@@ -393,7 +441,7 @@ def send_daily_report(
             }
             if is_first:
                 embed_obj["title"] = subject
-                embed_obj["description"] = f"**環境/模式**: `{mode_label}`"
+                embed_obj["description"] = f"**環境/模式**: `{mode_label}`\n📎 *完整報告 Markdown 檔案已作為附件發送 (可點擊下載一次複製全文)*"
             else:
                 embed_obj["title"] = f"{subject} (第 {embed_idx + 1}/{len(embeds)} 部分)"
                 embed_obj["description"] = "*(續前文)*"
@@ -407,7 +455,8 @@ def send_daily_report(
                 "embeds": [embed_obj]
             }
 
-            success = _send_discord_webhook(webhook_url, payload)
+            file_to_attach = (report_filename, full_report_md, "text/markdown") if is_first else None
+            success = _send_discord_webhook(webhook_url, payload, file_tuple=file_to_attach)
             if not success:
                 all_success = False
                 err_msg = f"發送每日整合報告 (第 {embed_idx+1}/{len(embeds)} 部分) 至 Discord Webhook 失敗 (網址: {webhook_url})。"
@@ -477,17 +526,28 @@ def send_emergency_alert(subject: str, message: str) -> None:
         log_system_event("ERROR", f"發送緊急警報至 Discord Webhook 發生異常: {str(e)}")
         raise
 
-def send_monthly_review_notification(review_result: Dict[str, Any]) -> None:
+def send_periodic_review_notification(review_result: Dict[str, Any], review_type: Optional[str] = None) -> None:
     """
-    發送多層月度 AI 復盤與 Skills 演化報告至專屬的 DISCORD_WEBHOOK_REVIEW 頻道。
-    依據 Layer 1 (指標診斷) -> Layer 2 (交易執行診斷) -> Layer 3 (整體策略總結) 有序推播。
+    發送多層週期性 (月 / 季 / 年) AI 復盤與 Skills 演化報告至專屬的 DISCORD_WEBHOOK_REVIEW 頻道。
+    依據 Layer 1 (指標診斷) -> Layer 2 (交易執行診斷) -> Layer 3 (整體策略總結) 有序推播並附帶全文 .md 檔案。
     """
     webhook_url = config.discord.webhook_monthly_review or config.discord.webhook_live
     if not webhook_url:
         print(" [Discord通知器] 警告: 未配置 DISCORD_WEBHOOK_MONTHLY_REVIEW 網址，跳過推播。")
         return
 
-    review_month = review_result.get("review_month", "未知月份")
+    review_month = str(review_result.get("review_month") or review_result.get("period", "未知期間"))
+    
+    # 自動推算復盤週期標籤 (月度 / 季度 / 年度)
+    if review_type:
+        period_label = review_type
+    elif "Q" in review_month.upper():
+        period_label = "季度"
+    elif len(review_month) == 4 and review_month.isdigit():
+        period_label = "年度"
+    else:
+        period_label = "月度"
+
     metrics = review_result.get("metrics", {})
     stock_ind_reports = review_result.get("stock_indicator_reports", [])
     stock_exe_reports = review_result.get("stock_execution_reports", [])
@@ -507,7 +567,6 @@ def send_monthly_review_notification(review_result: Dict[str, Any]) -> None:
     # =====================================================================
     # 1. 發送 Layer 1：技術指標與打分診斷卡片
     # =====================================================================
-    # 1a. 個股指標診斷卡片
     target_ind_reports = stock_ind_reports if stock_ind_reports else stock_reports
     for s_rep in target_ind_reports:
         sc = s_rep.get("stock_code", "")
@@ -516,10 +575,10 @@ def send_monthly_review_notification(review_result: Dict[str, Any]) -> None:
         anomaly_text = f"\n\n**【個股特殊特徵與走勢慣性】**\n{anomaly}" if anomaly else ""
 
         stock_payload = {
-            "username": "AI 檢討 AI - Layer 1 個股指標診斷",
+            "username": f"AI 檢討 AI - Layer 1 個股指標診斷 ({period_label})",
             "embeds": [
                 {
-                    "title": f"📈 個股指標復盤: {sc} (月份: {review_month})",
+                    "title": f"📈 個股指標復盤: {sc} (期間: {review_month})",
                     "description": f"{retro}{anomaly_text}",
                     "color": 3447003, # 藍色
                     "footer": {"text": f"AIAutoStocks Layer 1 指標診斷 · {sc}"},
@@ -530,24 +589,23 @@ def send_monthly_review_notification(review_result: Dict[str, Any]) -> None:
         _send_discord_webhook(webhook_url, stock_payload)
         time.sleep(0.5)
 
-    # 1b. Layer 1 指標綜合診斷卡片
     v_rules = ind_skills.get("v_shape_reversal_patterns", [])
     a_rules = ind_skills.get("a_shape_top_warnings", [])
     v_text = "\n".join([f"• {item.get('pattern_rule')} (預期機率: {item.get('expected_probability_pct', 0)}%)" for item in v_rules if isinstance(item, dict)]) if v_rules else "無"
     a_text = "\n".join([f"• {item.get('pattern_rule')} (預期機率: {item.get('expected_probability_pct', 0)}%)" for item in a_rules if isinstance(item, dict)]) if a_rules else "無"
 
     l1_summary_payload = {
-        "username": "AI 檢討 AI - Layer 1 指標總診斷",
+        "username": f"AI 檢討 AI - Layer 1 指標總診斷 ({period_label})",
         "embeds": [
             {
-                "title": f"📊 Layer 1 技術指標與打分品質總診斷 (月份: {review_month})",
+                "title": f"📊 Layer 1 技術指標與打分品質總診斷 (期間: {review_month})",
                 "description": (
                     f"**【指標與打分品質總評】**\n{indicator_summary}\n\n"
                     f"**【V 型強勢反彈特徵 Key Learnings】**\n{v_text}\n\n"
                     f"**【A 型頂點/誘多警戒 Key Warnings】**\n{a_text}"
                 ),
                 "color": 3447003, # 藍色
-                "footer": {"text": "AIAutoStocks Layer 1 綜合診斷卡片"},
+                "footer": {"text": f"AIAutoStocks Layer 1 綜合診斷卡片 ({period_label})"},
                 "timestamp": ts
             }
         ]
@@ -558,17 +616,16 @@ def send_monthly_review_notification(review_result: Dict[str, Any]) -> None:
     # =====================================================================
     # 2. 發送 Layer 2：交易與部位執行診斷卡片
     # =====================================================================
-    # 2a. 個股交易執行診斷卡片
     target_exe_reports = stock_exe_reports if stock_exe_reports else stock_reports
     for s_rep in target_exe_reports:
         sc = s_rep.get("stock_code", "")
         retro = s_rep.get("execution_retrospective") or s_rep.get("stock_retrospective", "")
 
         stock_payload = {
-            "username": "AI 檢討 AI - Layer 2 個股執行診斷",
+            "username": f"AI 檢討 AI - Layer 2 個股執行診斷 ({period_label})",
             "embeds": [
                 {
-                    "title": f"⚔️ 個股交易執行復盤: {sc} (月份: {review_month})",
+                    "title": f"⚔️ 個股交易執行復盤: {sc} (期間: {review_month})",
                     "description": retro,
                     "color": 15844367, # 金黃色
                     "footer": {"text": f"AIAutoStocks Layer 2 執行診斷 · {sc}"},
@@ -579,20 +636,19 @@ def send_monthly_review_notification(review_result: Dict[str, Any]) -> None:
         _send_discord_webhook(webhook_url, stock_payload)
         time.sleep(0.5)
 
-    # 2b. Layer 2 CIO 組合執行總評卡片
     learnings_text = "\n".join([f"• {item}" for item in key_learnings]) if key_learnings else "無"
 
     l2_summary_payload = {
-        "username": "AI 檢討 AI - Layer 2 CIO 執行總評",
+        "username": f"AI 檢討 AI - Layer 2 CIO 執行總評 ({period_label})",
         "embeds": [
             {
-                "title": f"🛡️ Layer 2 交易執行與部位風控 CIO 總評 (月份: {review_month})",
+                "title": f"🛡️ Layer 2 交易執行與部位風控 CIO 總評 (期間: {review_month})",
                 "description": (
                     f"**【CIO 組合執行與 Timing 總評】**\n{cio_summary}\n\n"
                     f"**【交易執行核心學習點】**\n{learnings_text}"
                 ),
                 "color": 15844367, # 金黃色
-                "footer": {"text": "AIAutoStocks Layer 2 CIO 執行卡片"},
+                "footer": {"text": f"AIAutoStocks Layer 2 CIO 執行卡片 ({period_label})"},
                 "timestamp": ts
             }
         ]
@@ -601,22 +657,40 @@ def send_monthly_review_notification(review_result: Dict[str, Any]) -> None:
     time.sleep(0.5)
 
     # =====================================================================
-    # 3. 發送 Layer 3：月度整體復盤與下月戰術策略總結卡片 (自然繁體中文)
+    # 3. 發送 Layer 3：整體復盤與下期戰術策略總結卡片 (附帶 .md 全文附件)
     # =====================================================================
-    min_score = exe_skills.get("min_buy_score", 65)
-    max_weight = exe_skills.get("max_single_stock_weight", 4)
-    stop_loss = exe_skills.get("stop_loss_pct", -0.05)
-    take_profit = exe_skills.get("take_profit_pct", 0.12)
     tactical_rules = exe_skills.get("tactical_rules", [])
     tactical_text = "\n".join([f"• {r}" for r in tactical_rules]) if tactical_rules else "• 維持穩健分批進場紀律"
 
+    periodic_report_md = (
+        f"# 🏆 {period_label} AI 復盤與戰術演化報告 (期間: {review_month})\n\n"
+        f"## 📊 當期實盤硬指標統計\n"
+        f"• 平倉總筆數: **{metrics.get('total_trades', 0)}** 筆 | 勝率: **{metrics.get('win_rate', 0)}%**\n"
+        f"• 實現總損益: **{metrics.get('total_realized_pnl', 0):,}** 元 | 盈虧比: **{metrics.get('payoff_ratio', 0)}** | 獲利因子: **{metrics.get('profit_factor', 0)}**\n"
+        f"• 期望潛在漲幅 Mean: **+{metrics.get('mean_upside_ratio', 0)*100:.2f}%** (Std: {metrics.get('std_upside_ratio', 0)})\n"
+        f"• 期望潛在回撤 Mean: **{metrics.get('mean_drawdown_ratio', 0)*100:.2f}%** (Std: {metrics.get('std_drawdown_ratio', 0)})\n"
+        f"• 成交平均滑價 Mean: **{metrics.get('mean_slippage_ratio', 0)*100:.2f}%** (Std: {metrics.get('std_slippage_ratio', 0)})\n"
+        f"• 未成交取消單: **{metrics.get('total_cancelled_orders', 0)}** 筆 (取消率: **{metrics.get('cancellation_rate_pct', 0)}%**)\n\n"
+        f"---\n\n"
+        f"## 📈 Layer 1 技術指標與打分品質總診斷\n{indicator_summary}\n\n"
+        f"---\n\n"
+        f"## 🛡️ Layer 2 CIO 交易執行與部位風控總評\n{cio_summary}\n\n"
+        f"**【交易執行核心學習點】**\n{learnings_text}\n\n"
+        f"---\n\n"
+        f"## 🏆 Layer 3 {period_label}整體策略總結\n{overall_summary}\n\n"
+        f"**【下期關鍵戰術執行守則】**\n{tactical_text}\n\n"
+        f"---\n\n"
+        f"## ⚙️ 演化下期動態戰術 Skills (JSON)\n```json\n{json.dumps(review_result.get('skills', {}), ensure_ascii=False, indent=2)}\n```\n"
+    )
+    report_filename = f"{review_month}_{period_label}_Review_Report.md"
+
     overall_payload = {
-        "username": "AI 檢討 AI - Layer 3 策略總結",
+        "username": f"AI 檢討 AI - Layer 3 策略總結 ({period_label})",
         "embeds": [
             {
-                "title": f"🏆 月度整體復盤與下月戰術策略總結 (月份: {review_month})",
+                "title": f"🏆 {period_label}整體復盤與下期戰術策略總結 (期間: {review_month})",
                 "description": (
-                    f"**【當月實盤硬指標統計】**\n"
+                    f"**【當期實盤硬指標統計】**\n"
                     f"• 平倉總筆數: **{metrics.get('total_trades', 0)}** 筆 | 勝率: **{metrics.get('win_rate', 0)}%**\n"
                     f"• 實現總損益: **{metrics.get('total_realized_pnl', 0):,}** 元 | 盈虧比: **{metrics.get('payoff_ratio', 0)}** | 獲利因子: **{metrics.get('profit_factor', 0)}**\n"
                     f"• 期望潛在漲幅 Mean: **+{metrics.get('mean_upside_ratio', 0)*100:.2f}%** (Std: {metrics.get('std_upside_ratio', 0)})\n"
@@ -624,14 +698,18 @@ def send_monthly_review_notification(review_result: Dict[str, Any]) -> None:
                     f"• 成交平均滑價 Mean: **{metrics.get('mean_slippage_ratio', 0)*100:.2f}%** (Std: {metrics.get('std_slippage_ratio', 0)})\n"
                     f"• 未成交取消單: **{metrics.get('total_cancelled_orders', 0)}** 筆 (取消率: **{metrics.get('cancellation_rate_pct', 0)}%**)\n\n"
                     f"{overall_summary}\n\n"
-                    f"**【下月關鍵戰術執行守則】**\n{tactical_text}"
+                    f"**【下期關鍵戰術執行守則】**\n{tactical_text}\n\n"
+                    f"📎 *完整{period_label}復盤與演化 Skills Markdown 檔案已作為附件發送*"
                 ),
                 "color": 10181046, # 紫色
-                "footer": {"text": "此報告由 Monthly Review Agent 檢討引擎自動產出與發送。"},
+                "footer": {"text": f"此報告由 {period_label} Review Agent 檢討引擎自動產出與發送。"},
                 "timestamp": ts
             }
         ]
     }
-    _send_discord_webhook(webhook_url, overall_payload)
-    log_system_event("INFO", f"已成功發送 {review_month} 月度復盤與演化 Skills 至 Discord Webhook。")
+    _send_discord_webhook(webhook_url, overall_payload, file_tuple=(report_filename, periodic_report_md, "text/markdown"))
+    log_system_event("INFO", f"已成功發送 {review_month} {period_label}復盤與演化 Skills 至 Discord Webhook。")
+
+# 別名相容：月度復盤直接對應至通用週期復盤
+send_monthly_review_notification = send_periodic_review_notification
 
