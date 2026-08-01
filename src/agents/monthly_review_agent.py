@@ -3,7 +3,7 @@ import json
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 
-from src.config import config
+from src.config import config, get_stock_name
 from src.services.gemini_rotator import call_gemini_with_rotation
 from src.services.supabase_client import supabase
 from src.services.monthly_aggregator import aggregate_monthly_data
@@ -18,7 +18,7 @@ class StockIndicatorReviewOutput(BaseModel):
         description="繁體中文 150-250 字個股技術指標與打分品質診斷。請結合個股指標數據與當月大盤對照參照，分析指標對 V 型強勢反彈或 A 型頂點反轉的捕捉品質，評估分析師給分偏斜與精準度（完全不看成交單與損益）。"
     )
     anomaly_trait: Optional[str] = Field(
-        None,
+        ...,
         description="若該股偏離大盤常規具有特殊型態或異常走勢慣性（如拉回年線為典型 V 轉特徵，或高股息 ETF 波動極低），請簡述（20-50字）；若無特別異常則填 None。"
     )
 
@@ -168,9 +168,11 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
 
     # Layer 1 Map: 個股指標 + 大盤參照
     for stock_code, stock_info in per_stock_data.items():
+        stock_name = get_stock_name(stock_code)
+        stock_label = f"{stock_code} ({stock_name})" if stock_name else stock_code
         l1_map_prompt = (
-            f"你是一位頂級量化基金的技術指標與型態復盤專家。請對股票代號 {stock_code} 在 {review_month_str} 月份的技術指標與打分品質進行診斷。\n"
-            f"【注意：本階段請專注於技術指標、K線走勢與評分品質，完全不要評估交易買賣與損益！】\n\n"
+            f"你是一位頂級量化基金的技術指標與型態復盤專家。請對標的 {stock_label} 在 {review_month_str} 月份的技術指標與打分品質進行診斷。\n"
+            f"【注意：1. 本階段請專注於技術指標、K線走勢與評分品質，完全不要評估交易買賣與損益！ 2. 回傳 JSON 中的 stock_code 欄位必須嚴格保持為 '{stock_code}'，不得填寫複雜文字或免責聲明。】\n\n"
             f"{macro_context_str}\n\n"
             f"【個股指標與打分歷史數據】\n"
             f"- 分析師打分紀錄筆數: {len(stock_info.get('scores', []))}\n"
@@ -184,8 +186,11 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
             "temperature": 0.0
         }
         try:
-            l1_res = call_gemini_fn(prompt=l1_map_prompt, generation_config=generation_config_l1_map)
-            stock_indicator_reports.append(json.loads(l1_res))
+            l1_res = call_gemini_fn(prompt=l1_map_prompt, model_name=config.gemini_model, generation_config=generation_config_l1_map)
+            parsed_l1 = json.loads(l1_res)
+            if isinstance(parsed_l1, dict):
+                parsed_l1["stock_code"] = stock_code
+            stock_indicator_reports.append(parsed_l1)
         except Exception as e:
             print(f" [Monthly Review Agent] 警告: 個股 {stock_code} Layer 1 Map 檢討失敗: {e}")
             stock_indicator_reports.append({
@@ -208,7 +213,7 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
         "temperature": 0.0
     }
     try:
-        l1_reduce_res = call_gemini_fn(prompt=l1_reduce_prompt, generation_config=generation_config_l1_reduce)
+        l1_reduce_res = call_gemini_fn(prompt=l1_reduce_prompt, model_name=config.gemini_model, generation_config=generation_config_l1_reduce)
         l1_overall_data = json.loads(l1_reduce_res)
     except Exception as e:
         print(f" [Monthly Review Agent] 錯誤: Layer 1 Reduce 總體檢討失敗: {e}")
@@ -243,10 +248,12 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
 
     # Layer 2 Map: 個股交易/觀望單 + 大盤參照
     for stock_code, stock_info in per_stock_data.items():
+        stock_name = get_stock_name(stock_code)
+        stock_label = f"{stock_code} ({stock_name})" if stock_name else stock_code
         timing_sum = stock_info.get("entry_timing_summary", {})
         l2_map_prompt = (
-            f"你是一位頂級量化基金的交易執行與部位風控分析師。請對股票代號 {stock_code} 在 {review_month_str} 月份的交易與觀望執行進行診斷。\n"
-            f"【注意：本階段請專注於入場 Timing、追高/遲入場、觀望錯失機會、成交滑價與離場風控！】\n\n"
+            f"你是一位頂級量化基金的交易執行與部位風控分析師。請對標的 {stock_label} 在 {review_month_str} 月份的交易與觀望執行進行診斷。\n"
+            f"【注意：1. 本階段請專注於入場 Timing、追高/遲入場、觀望錯失機會、成交滑價與離場風控！ 2. 回傳 JSON 中的 stock_code 欄位必須嚴格保持為 '{stock_code}'，不得填寫複雜文字或免責聲明。】\n\n"
             f"{macro_context_str}\n\n"
             f"【個股交易與觀望數據】\n"
             f"- 成交單筆數: {len(stock_info.get('filled_orders', []))}\n"
@@ -264,8 +271,11 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
             "temperature": 0.0
         }
         try:
-            l2_res = call_gemini_fn(prompt=l2_map_prompt, generation_config=generation_config_l2_map)
-            stock_execution_reports.append(json.loads(l2_res))
+            l2_res = call_gemini_fn(prompt=l2_map_prompt, model_name=config.gemini_model, generation_config=generation_config_l2_map)
+            parsed_l2 = json.loads(l2_res)
+            if isinstance(parsed_l2, dict):
+                parsed_l2["stock_code"] = stock_code
+            stock_execution_reports.append(parsed_l2)
         except Exception as e:
             print(f" [Monthly Review Agent] 警告: 個股 {stock_code} Layer 2 Map 檢討失敗: {e}")
             stock_execution_reports.append({
@@ -293,7 +303,7 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
         "temperature": 0.0
     }
     try:
-        l2_reduce_res = call_gemini_fn(prompt=l2_reduce_prompt, generation_config=generation_config_l2_reduce)
+        l2_reduce_res = call_gemini_fn(prompt=l2_reduce_prompt, model_name=config.gemini_model, generation_config=generation_config_l2_reduce)
         l2_overall_data = json.loads(l2_reduce_res)
     except Exception as e:
         print(f" [Monthly Review Agent] 錯誤: Layer 2 Reduce 總體檢討失敗: {e}")
@@ -366,7 +376,7 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
         f"• **下月風控門檻**：建議最低買入門檻 **{min_score} 分** | 單檔最重權重 **{max_weight} 級** | 個股停損 **{stop_loss*100:.1f}%** | 動態鎖利 **{take_profit*100:.1f}%**\n"
         f"• **戰術執行重點**：{tactical_rules_str if tactical_rules_str else '維持穩健分批進場紀律'}\n"
         f"• **個股特殊特徵與關注**：{stock_rules_str}\n"
-        f"• **指標與執行綜合評估**：{cio_summary[:150]}..."
+        f"• **指標與執行綜合評估**：{cio_summary}"
     )
 
     # 為了向下相容性，組合 stock_reports 包含 execution 與 indicator reports

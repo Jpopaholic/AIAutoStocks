@@ -1,6 +1,6 @@
-# Path: src/services/discord_notifier.py
+import json
 import time
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Dict, List, Any, Optional
 
 from src.config import config, get_stock_name, safe_int
@@ -15,6 +15,57 @@ from src.time_manager import (
     get_effective_date_str,
 )
 
+def _sanitize_payload_embeds(payload: dict) -> dict:
+    """
+    防禦性淨化 Discord Webhook Payload 中的 embeds 陣列，
+    防止空字串、型態錯誤 (如非 dict 物件)、超長欄位導致 Discord 回傳 HTTP 400 ({"embeds": ["0"]})。
+    """
+    if not isinstance(payload, dict):
+        return {}
+    
+    embeds = payload.get("embeds")
+    if not embeds or not isinstance(embeds, list):
+        return payload
+
+    sanitized_embeds = []
+    for idx, raw_embed in enumerate(embeds):
+        if not isinstance(raw_embed, dict):
+            raw_embed = {"description": str(raw_embed)}
+
+        embed_copy = dict(raw_embed)
+        
+        title = str(embed_copy.get("title") or "").strip()
+        if title:
+            embed_copy["title"] = title[:250]
+        else:
+            embed_copy.pop("title", None)
+
+        description = embed_copy.get("description")
+        if description is not None:
+            embed_copy["description"] = _safe_embed_description(str(description), max_len=3900)
+        else:
+            embed_copy["description"] = "(無內容)"
+
+        footer = embed_copy.get("footer")
+        if isinstance(footer, dict) and "text" in footer:
+            footer["text"] = str(footer["text"])[:2000]
+
+        fields = embed_copy.get("fields")
+        if isinstance(fields, list):
+            sanitized_fields = []
+            for f in fields[:25]:
+                if isinstance(f, dict):
+                    f_name = str(f.get("name") or "(項目)").strip()[:250]
+                    f_val = str(f.get("value") or "(無內容)").strip()[:1000]
+                    sanitized_fields.append({"name": f_name, "value": f_val, "inline": bool(f.get("inline", False))})
+            embed_copy["fields"] = sanitized_fields
+
+        sanitized_embeds.append(embed_copy)
+
+    payload["embeds"] = sanitized_embeds
+    return payload
+
+
 def _send_discord_webhook(
     webhook_url: str,
     payload: dict,
@@ -27,7 +78,7 @@ def _send_discord_webhook(
     :param file_tuple: 可選之 (filename, file_content_str, content_type) 元組
     """
     import requests
-    import json
+    payload = _sanitize_payload_embeds(payload)
     for attempt in range(1, retries + 1):
         try:
             if file_tuple:
@@ -46,8 +97,25 @@ def _send_discord_webhook(
 
             if response.status_code in (200, 204):
                 return True
+            elif response.status_code == 429:
+                try:
+                    res_data = response.json()
+                    retry_after = float(res_data.get("retry_after", 1.0))
+                except Exception:
+                    retry_after = 2.0
+                print(f" [Discord通知器] 提示: 觸發 Rate Limit (HTTP 429)，自動暫停 {retry_after:.2f} 秒後重試...")
+                time.sleep(retry_after + 0.2)
+                continue
+            elif response.status_code == 400:
+                print(f" [Discord通知器] ❌ 錯誤 (HTTP 400 內容格式遭 Discord 拒絕): {response.text}")
+                try:
+                    preview = json.dumps(payload, ensure_ascii=False)[:500]
+                    print(f"   └─ Payload 內容預覽: {preview}")
+                except Exception:
+                    pass
+                # HTTP 400 代表內容格式無效，重試相同 Payload 無法成功，直接回傳失敗並暴露出詳細原因
+                return False
             else:
-                # 💡 重點優化：把 response.text 印出來，看 Discord 到底卡什麼錯誤
                 print(f" [Discord通知器] 警告: 發送失敗 (HTTP {response.status_code}): {response.text}，將在 {delay}s 後重試...")
         except Exception as e:
             print(f" [Discord通知器] 警告: 連線失敗 (第 {attempt} 次嘗試): {str(e)}，將在 {delay}s 後重試...")
@@ -55,6 +123,17 @@ def _send_discord_webhook(
         delay *= 2
     return False
 
+
+def _safe_embed_description(text: str, max_len: int = 3900) -> str:
+    """
+    將 Discord Embed Description 文字限制在安全字數內 (Discord 限制 4096 字元)，
+    防範超長文字引發 HTTP 400 Bad Request ({"embeds": ["0"]}) 錯誤。
+    """
+    if not text:
+        return ""
+    if len(text) <= max_len:
+        return text
+    return text[:max_len - 60] + "\n\n...(字數超出限制已自動截斷，完整細節請參閱附件 .md 檔案)..."
 
 
 def _split_text_by_length(text: str, max_len: int = 1000) -> List[str]:
@@ -499,7 +578,7 @@ def send_emergency_alert(subject: str, message: str) -> None:
             "embeds": [
                 {
                     "title": f"🚨 {subject}",
-                    "description": (
+                    "description": _safe_embed_description(
                         f"**發送時間**: {get_local_taiwan_datetime_str()}\n\n"
                         f"**異常事件摘要**:\n```\n{message}\n```\n\n"
                         f"📌 **後續建議處置**:\n"
@@ -580,7 +659,7 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
             "embeds": [
                 {
                     "title": f"📈 個股指標復盤: {sc} (期間: {review_month})",
-                    "description": f"{retro}{anomaly_text}",
+                    "description": _safe_embed_description(f"{retro}{anomaly_text}"),
                     "color": 3447003, # 藍色
                     "footer": {"text": f"AIAutoStocks Layer 1 指標診斷 · {sc}"},
                     "timestamp": ts
@@ -588,7 +667,7 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
             ]
         }
         _send_discord_webhook(webhook_url, stock_payload)
-        time.sleep(0.5)
+        time.sleep(1.0)
 
     v_rules = ind_skills.get("v_shape_reversal_patterns", [])
     a_rules = ind_skills.get("a_shape_top_warnings", [])
@@ -600,7 +679,7 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
         "embeds": [
             {
                 "title": f"📊 Layer 1 技術指標與打分品質總診斷 (期間: {review_month})",
-                "description": (
+                "description": _safe_embed_description(
                     f"**【指標與打分品質總評】**\n{indicator_summary}\n\n"
                     f"**【V 型強勢反彈特徵 Key Learnings】**\n{v_text}\n\n"
                     f"**【A 型頂點/誘多警戒 Key Warnings】**\n{a_text}"
@@ -612,7 +691,7 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
         ]
     }
     _send_discord_webhook(webhook_url, l1_summary_payload)
-    time.sleep(0.5)
+    time.sleep(1.0)
 
     # =====================================================================
     # 2. 發送 Layer 2：交易與部位執行診斷卡片
@@ -627,7 +706,7 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
             "embeds": [
                 {
                     "title": f"⚔️ 個股交易執行復盤: {sc} (期間: {review_month})",
-                    "description": retro,
+                    "description": _safe_embed_description(retro),
                     "color": 15844367, # 金黃色
                     "footer": {"text": f"AIAutoStocks Layer 2 執行診斷 · {sc}"},
                     "timestamp": ts
@@ -635,7 +714,7 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
             ]
         }
         _send_discord_webhook(webhook_url, stock_payload)
-        time.sleep(0.5)
+        time.sleep(1.0)
 
     learnings_text = "\n".join([f"• {item}" for item in key_learnings]) if key_learnings else "無"
 
@@ -644,7 +723,7 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
         "embeds": [
             {
                 "title": f"🛡️ Layer 2 交易執行與部位風控 CIO 總評 (期間: {review_month})",
-                "description": (
+                "description": _safe_embed_description(
                     f"**【CIO 組合執行與 Timing 總評】**\n{cio_summary}\n\n"
                     f"**【交易執行核心學習點】**\n{learnings_text}"
                 ),
@@ -655,7 +734,28 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
         ]
     }
     _send_discord_webhook(webhook_url, l2_summary_payload)
-    time.sleep(0.5)
+    time.sleep(1.0)
+
+    # 組合各標的個股 Layer 1 與 Layer 2 診斷區塊 (包含標的名稱與獨立詳細診斷)
+    ind_md_blocks = []
+    for s_rep in target_ind_reports:
+        sc = s_rep.get("stock_code", "")
+        sn = get_stock_name(sc)
+        name_str = f" ({sn})" if sn else ""
+        retro = s_rep.get("indicator_retrospective") or s_rep.get("stock_retrospective", "無")
+        anomaly = s_rep.get("anomaly_trait")
+        anomaly_str = f"\n> 💡 **個股走勢慣性 (Anomaly Trait)**: {anomaly}" if anomaly else ""
+        ind_md_blocks.append(f"### 📈 標的 `{sc}`{name_str}\n{retro}{anomaly_str}")
+    ind_reports_md = "\n\n".join(ind_md_blocks) if ind_md_blocks else "無個股指標診斷數據。"
+
+    exe_md_blocks = []
+    for s_rep in target_exe_reports:
+        sc = s_rep.get("stock_code", "")
+        sn = get_stock_name(sc)
+        name_str = f" ({sn})" if sn else ""
+        retro = s_rep.get("execution_retrospective") or s_rep.get("stock_retrospective", "無")
+        exe_md_blocks.append(f"### 🛡️ 標的 `{sc}`{name_str}\n{retro}")
+    exe_reports_md = "\n\n".join(exe_md_blocks) if exe_md_blocks else "無個股執行診斷數據。"
 
     # =====================================================================
     # 3. 發送 Layer 3：整體復盤與下期戰術策略總結卡片 (附帶 .md 全文附件)
@@ -674,9 +774,11 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
         f"• 未成交取消單: **{metrics.get('total_cancelled_orders', 0)}** 筆 (取消率: **{metrics.get('cancellation_rate_pct', 0)}%**)\n\n"
         f"---\n\n"
         f"## 📈 Layer 1 技術指標與打分品質總診斷\n{indicator_summary}\n\n"
+        f"### 🔍 各標的 Layer 1 個股指標與打分診斷報告\n{ind_reports_md}\n\n"
         f"---\n\n"
         f"## 🛡️ Layer 2 CIO 交易執行與部位風控總評\n{cio_summary}\n\n"
         f"**【交易執行核心學習點】**\n{learnings_text}\n\n"
+        f"### ⚔️ 各標的 Layer 2 個股交易與執行風控診斷報告\n{exe_reports_md}\n\n"
         f"---\n\n"
         f"## 🏆 Layer 3 {period_label}整體策略總結\n{overall_summary}\n\n"
         f"**【下期關鍵戰術執行守則】**\n{tactical_text}\n\n"
@@ -690,7 +792,7 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
         "embeds": [
             {
                 "title": f"🏆 {period_label}整體復盤與下期戰術策略總結 (期間: {review_month})",
-                "description": (
+                "description": _safe_embed_description(
                     f"**【當期實盤硬指標統計】**\n"
                     f"• 平倉總筆數: **{metrics.get('total_trades', 0)}** 筆 | 勝率: **{metrics.get('win_rate', 0)}%**\n"
                     f"• 實現總損益: **{metrics.get('total_realized_pnl', 0):,}** 元 | 盈虧比: **{metrics.get('payoff_ratio', 0)}** | 獲利因子: **{metrics.get('profit_factor', 0)}**\n"
@@ -713,4 +815,125 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
 
 # 別名相容：月度復盤直接對應至通用週期復盤
 send_monthly_review_notification = send_periodic_review_notification
+
+
+def send_test_notification(webhook_type: str = "monthly_review", test_mode: str = "simple") -> Dict[str, Any]:
+    """
+    發送測試訊息至指定的 Discord Webhook 頻道（用於測試與驗證通知通道是否正常運作）。
+    :param test_mode: 'simple' (發送簡單測試卡片) 或 'full_review' (發送完整模擬復盤的多 Embed 與 .md 報告)
+    """
+    webhook_type = str(webhook_type).lower().strip()
+    test_mode = str(test_mode).lower().strip()
+
+    if webhook_type in ("sandbox", "paper"):
+        webhook_url = config.discord.webhook_sandbox
+        channel_name = "沙盒/模擬交易頻道 (DISCORD_WEBHOOK_SANDBOX)"
+    elif webhook_type in ("live", "real"):
+        webhook_url = config.discord.webhook_live
+        channel_name = "實盤交易頻道 (DISCORD_WEBHOOK_LIVE)"
+    elif webhook_type in ("monthly", "monthly_review"):
+        webhook_url = config.discord.webhook_monthly_review or config.discord.webhook_live
+        channel_name = "月度 AI 復盤頻道 (DISCORD_WEBHOOK_MONTHLY_REVIEW)"
+    elif webhook_type in ("quarterly", "quarterly_review"):
+        webhook_url = config.discord.webhook_quarterly_review or config.discord.webhook_monthly_review or config.discord.webhook_live
+        channel_name = "季度 AI 復盤頻道 (DISCORD_WEBHOOK_QUARTERLY_REVIEW)"
+    elif webhook_type in ("yearly", "yearly_review"):
+        webhook_url = config.discord.webhook_yearly_review or config.discord.webhook_monthly_review or config.discord.webhook_live
+        channel_name = "年度 AI 復盤頻道 (DISCORD_WEBHOOK_YEARLY_REVIEW)"
+    else:
+        webhook_url = config.discord.webhook_monthly_review or config.discord.webhook_live
+        channel_name = f"自訂頻道 ({webhook_type})"
+
+    if not webhook_url:
+        return {"success": False, "message": f"未配置 {channel_name} 的 Discord Webhook 網址。"}
+
+    if test_mode in ("full_review", "review", "full"):
+        # 測試完整月度復盤推播 (模擬 Layer 1 -> Layer 2 -> Layer 3 多卡片與 .md 全文附件)
+        mock_review_result = {
+            "review_month": "2026-07 (測試演練)",
+            "metrics": {
+                "total_trades": 8,
+                "win_rate": 62.5,
+                "total_realized_pnl": 35600,
+                "payoff_ratio": 2.1,
+                "profit_factor": 1.85,
+                "mean_upside_ratio": 0.052,
+                "std_upside_ratio": 0.018,
+                "mean_drawdown_ratio": -0.021,
+                "std_drawdown_ratio": 0.009,
+                "mean_slippage_ratio": 0.0012,
+                "std_slippage_ratio": 0.0004,
+                "total_cancelled_orders": 1,
+                "cancellation_rate_pct": 11.1
+            },
+            "stock_indicator_reports": [
+                {
+                    "stock_code": "2330",
+                    "indicator_retrospective": "台積電 (2330) 在 7 月突破關鍵抗力位，均線向上多頭排列。分析師評分無通膨傾斜。",
+                    "anomaly_trait": "大盤拉回時常展現強勢抗跌慣性"
+                },
+                {
+                    "stock_code": "0051",
+                    "indicator_retrospective": "元大中型100 (0051) 振幅溫和，指標與評分準確捕捉底波段反彈。",
+                    "anomaly_trait": "流動性良好，指標貼合成分股大盤特徵"
+                }
+            ],
+            "stock_execution_reports": [
+                {
+                    "stock_code": "2330",
+                    "execution_retrospective": "買單分位數 22%，成功佈局於波段相對低點，無追高現象。"
+                },
+                {
+                    "stock_code": "0051",
+                    "execution_retrospective": "委託單滑價控制極佳 (< 0.1%)，移動停損機制運作良好。"
+                }
+            ],
+            "indicator_summary": "【測試】Layer 1 技術指標與評分總診斷運作良好，V 型反彈與 A 頂預警機制正常。",
+            "cio_summary": "【測試】Layer 2 CIO 風控與執行層表現優異，入場 Timing 與部位控管符合作戰紀律。",
+            "overall_summary": "【測試】Layer 3 整體策略運作健全，此為完整的 Discord 推播卡片與 Markdown 附件格式測試。",
+            "key_learnings": ["均線金叉配合量能突破進場勝率最高", "嚴格防範高檔背離與追高風險"],
+            "skills": {
+                "version": "2026-07-test",
+                "indicator_skills": {
+                    "v_shape_reversal_patterns": [{"pattern_rule": "量能突破且 RSI > 50", "expected_probability_pct": 80}]
+                },
+                "execution_skills": {
+                    "tactical_rules": ["分批建倉降低滑價", "移動停損鎖住獲利"]
+                }
+            }
+        }
+        try:
+            send_periodic_review_notification(mock_review_result, review_type="月度 (測試演練)")
+            log_system_event("INFO", f"已成功測試發送完整復盤多 Embed 報告與 .md 附件至 {channel_name}。")
+            return {"success": True, "message": f"已成功測試發送『完整復盤多卡片與 Markdown 附件』至 {channel_name}！"}
+        except Exception as e:
+            return {"success": False, "message": f"發送完整復盤測試失敗: {str(e)}"}
+    else:
+        # 簡單連線測試卡片
+        ts = datetime.now(timezone.utc).isoformat()
+        test_payload = {
+            "username": "AIAutoStocks 系統測試員",
+            "embeds": [
+                {
+                    "title": "🧪 Discord Webhook 通道連線測試成功",
+                    "description": _safe_embed_description(
+                        f"**測試時間**: `{get_local_taiwan_datetime_str()}`\n"
+                        f"**測試頻道類型**: `{channel_name}`\n"
+                        f"**系統狀態**: `OK` (連線與 Embed 格式防護驗證通過)\n\n"
+                        f"如果您能在 Discord 看見此卡片，代表 AIAutoStocks 通知通道運作正常！"
+                    ),
+                    "color": 3066993, # 翠綠色
+                    "footer": {"text": "AIAutoStocks 通訊測試助手"},
+                    "timestamp": ts
+                }
+            ]
+        }
+        success = _send_discord_webhook(webhook_url, test_payload)
+        if success:
+            log_system_event("INFO", f"已成功連線發送 Discord Webhook 測試訊息至 {channel_name}。")
+            return {"success": True, "message": f"已成功發送測試訊息至 {channel_name}！"}
+        else:
+            return {"success": False, "message": f"發送測試訊息至 {channel_name} 失敗，請檢查 Webhook 網址或伺服器連線。"}
+
+
 

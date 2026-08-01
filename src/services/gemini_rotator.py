@@ -246,7 +246,7 @@ def _record_key_request(key_hash: str, tokens: int) -> None:
 def call_gemini_with_rotation(
     prompt: str,
     system_instruction: Optional[str] = None,
-    model_name: str = "gemini-1.5-flash",
+    model_name: Optional[str] = None,
     generation_config: Optional[Dict[str, Any]] = None,
     max_api_retries: int = 5,
     timeout: int = 90
@@ -255,6 +255,9 @@ def call_gemini_with_rotation(
     包裝 google-generativeai 接口，自動執行金鑰輪替、主動速率限制 Pacing 及冷卻與重試機制。
     預設設定 think_level 為 medium (thinking_budget: 2048)，搭配 90s 超時防範 504 錯誤。
     """
+    if not model_name:
+        model_name = config.gemini_model
+
     last_error = None
 
     # 複製或建立 generation_config，預設注入 medium 層級 thinking_config (thinking_budget: 2048)

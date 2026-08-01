@@ -128,6 +128,12 @@ def run_test(mock_post, mock_quote, mock_nav_calc, mock_holdings_query, mock_ord
         print(json.dumps(payload, indent=2, ensure_ascii=False))
     else:
         print("未發送 Discord Webhook！")
+        
+    # 3. Test Test Notification
+    print("\n--- 測試 3: 測試 Webhook 通知 ---")
+    from src.services.discord_notifier import send_test_notification
+    res = send_test_notification("monthly_review")
+    print(f"測試結果: {res}")
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1].startswith("http"):

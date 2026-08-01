@@ -979,6 +979,29 @@ def api_get_skills_history():
         raise HTTPException(status_code=500, detail=f"獲取歷史 Skills 紀錄失敗: {str(e)}")
 
 
+# =====================================================================
+# Discord Webhook 連線測試 API
+# =====================================================================
+class DiscordTestRequest(BaseModel):
+    webhook_type: Optional[str] = "monthly_review"  # sandbox, live, monthly_review, quarterly_review, yearly_review
+    test_mode: Optional[str] = "simple"            # simple (簡單連線卡片) or full_review (完整模擬復盤多卡片與.md附件)
+
+@app.post("/api/discord/test")
+def api_test_discord_webhook(payload: DiscordTestRequest):
+    """手動發送測試訊息至指定的 Discord Webhook 通道"""
+    try:
+        from src.services.discord_notifier import send_test_notification
+        result = send_test_notification(payload.webhook_type, test_mode=payload.test_mode or "simple")
+        if result.get("success"):
+            return {"status": "ok", "message": result.get("message")}
+        else:
+            raise HTTPException(status_code=400, detail=result.get("message"))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"發送 Discord 測試訊息失敗: {str(e)}")
+
+
 # Serve static files directory
 os.makedirs(os.path.join(os.path.dirname(__file__), "static"), exist_ok=True)
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
