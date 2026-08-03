@@ -43,6 +43,14 @@ class AnalystStockScore(BaseModel):
         ..., 
         description="該檔股票的簡短技術分析理由與評分依據（使用繁體中文，限定 80 ~ 150 字，禁止超出）。請精簡指出關鍵指標信號，不要贅述每日歷史細節與冗長計算過程。"
     )
+    pattern_tag: str = Field(
+        ...,
+        description="第 2.5 層型態與指標診斷標籤。限選: 'V_SHAPE_REVERSAL' (識別出 V 型強勢反彈/底部位特徵), 'A_SHAPE_TOP_WARNING' (識別出 A 型頂點/誘多/高檔背離警示), 'NEUTRAL' (常規走勢/無顯著轉折特徵)。"
+    )
+    pattern_summary: str = Field(
+        ...,
+        description="第 2.5 層型態與指標診斷精簡理由（使用繁體中文，限 20 ~ 40 字）。請明確指出是否符合月度 indicator_skills 中的 V 轉或 A 頂特徵。"
+    )
 
 class AnalystAssessment(BaseModel):
     scores: List[AnalystStockScore] = Field(
@@ -105,6 +113,7 @@ def generate_analyst_assessments(
         ind_skills_text = get_indicator_skills_context(is_paper=config.limits.is_paper_trading)
         if ind_skills_text:
             skills.append(ind_skills_text)
+            print(f" [分析師代理] 已成功前置載入當前月度演化之技術指標與評分 Skills 規範。")
     except Exception as e:
         print(f" [分析師代理] 獲取月度指標 Skills 失敗: {e}")
 
@@ -177,6 +186,12 @@ def generate_analyst_assessments(
 4. 安全與防守得分 (safety_score, 0 ~ 20 分)：評估下方支撐力道與防守空間。股價回檔至強支撐、乖離率小、防守空間大得高分（代表安全）；股價突破上檔阻力但乖離率過大、高檔超買或支撐跌破得低分。
 5. 大盤一致性得分 (regime_score, 0 ~ 20 分)：結合當前大盤加權指數狀態與交易姿態。若大盤多頭且個股強於大盤得高分，大盤空頭/防禦或大盤氣候不佳時，根據交易姿態適度調降此得分。
 
+【第 2.5 層型態與指標診斷指引】：
+請對照載入之月度 `indicator_skills`（特別是 V 型反彈特徵與 A 型頂點警示）：
+1. 若個股符合 V 型強勢反彈或低檔急凍後放量跳升特徵，請在 `pattern_tag` 填寫 `'V_SHAPE_REVERSAL'`，並在 `pattern_summary` 簡述（20-40字）。
+2. 若個股符合高檔乖離過大、評分短時間驟降或量價背離之 A 型頂點/誘多特徵，請在 `pattern_tag` 填寫 `'A_SHAPE_TOP_WARNING'`，並在 `pattern_summary` 簡述（20-40字）。
+3. 若走勢為常規盤整或無顯著 V/A 型態轉折，`pattern_tag` 填寫 `'NEUTRAL'`，`pattern_summary` 可填 `'常規技術走勢'`。
+
 你的金融量化分析技能包含：
 {skills_text}
 
@@ -221,6 +236,8 @@ def generate_analyst_assessments(
                 "safety_score": 13,
                 "regime_score": 13,
                 "confidence": 0.3,
+                "pattern_tag": "NEUTRAL",
+                "pattern_summary": "模型呼叫異常，補上預設中性型態。",
                 "reason": f"（本股 Gemini 呼叫失敗，已補上預設中性評分 65 分，系統強制觀望。原因: {str(e)[:80]}）"
             })
 
@@ -251,6 +268,11 @@ def generate_analyst_assessments(
         total_score = trend + momentum + volume + safety + regime
         confidence = safe_float(s_item.get("confidence"), default=0.8, min_val=0.0, max_val=1.0)
         
+        pattern_tag = str(s_item.get("pattern_tag", "NEUTRAL")).strip().upper()
+        if pattern_tag not in ("V_SHAPE_REVERSAL", "A_SHAPE_TOP_WARNING", "NEUTRAL"):
+            pattern_tag = "NEUTRAL"
+        pattern_summary = str(s_item.get("pattern_summary", "")).strip()
+
         analyst_scores.append({
             "stock_code": code,
             "trend_score": trend,
@@ -258,10 +280,12 @@ def generate_analyst_assessments(
             "volume_score": volume,
             "safety_score": safety,
             "regime_score": regime,
-            "confidence": confidence,
             "total_score": total_score,
+            "confidence": confidence,
             "price": price,
-            "reason": s_item.get("reason", "技術量化指標尚可。")
+            "pattern_tag": pattern_tag,
+            "pattern_summary": pattern_summary,
+            "reason": s_item.get("reason", "").strip() or "技術量化指標尚可。"
         })
 
     analyst_scores.sort(key=lambda x: x["total_score"], reverse=True)

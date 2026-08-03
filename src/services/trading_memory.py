@@ -95,10 +95,9 @@ def get_experience_context(limit: int = 3) -> str:
 
     return "\n".join(lines)
 
-def get_active_skills_context(is_paper: bool = False) -> str:
+def get_active_skills_data(is_paper: bool = False) -> Dict[str, Any]:
     """
-    從 Supabase monthly_skills 表中，精準撈取最新單一筆 (ORDER BY created_at DESC LIMIT 1) 之 JSON 戰術 Skills，
-    組裝為 System Prompt 文字傳給 decision_agent。
+    從 Supabase monthly_skills 表中，精準撈取最新單一筆 (ORDER BY created_at DESC LIMIT 1) 之 JSON 戰術 Skills 字典與月份。
     """
     from src.services.supabase_client import supabase
     import json
@@ -162,6 +161,20 @@ def get_active_skills_context(is_paper: bool = False) -> str:
         skills_json = default_skills
         rev_month = "預設基準"
 
+    return {
+        "review_month": rev_month,
+        "skills": skills_json
+    }
+
+def get_active_skills_context(is_paper: bool = False) -> str:
+    """
+    從 Supabase monthly_skills 表中，精準撈取最新單一筆 JSON 戰術 Skills，
+    組裝為 System Prompt 文字傳給 decision_agent。
+    """
+    import json
+    data_info = get_active_skills_data(is_paper=is_paper)
+    rev_month = data_info["review_month"]
+    skills_json = data_info["skills"]
     skills_pretty = json.dumps(skills_json, ensure_ascii=False, indent=2)
 
     return (

@@ -29,6 +29,10 @@ class PMStockDecision(BaseModel):
         ..., 
         description="主動投資組合經理對該檔股票的配置或交易決策理由（使用繁體中文，限 100 字內）。請著重於續抱、賣出或調倉理由，且絕對不要在理由中重述或提到股票的技術評分或總分（例如「評分71分」），因為分數會由系統自動標註與合併。"
     )
+    applied_skills: List[str] = Field(
+        ...,
+        description="本決策明確參考或引用的當前月度 Skills 戰術條款摘要列表（如 ['BEARISH_TREND 氣候姿態轉為 DEFENSIVE', '防範高檔乖離 A 頂誘多']。若無特別引用可傳空陣列 []）。"
+    )
     allocation_weight: int = Field(
         ..., 
         description="買入配置權重 (1-5)。1 代表最低配置優先度，5 代表最高配置優先度。若 action 不為 BUY，此值應設定為 0。"
@@ -133,9 +137,12 @@ def generate_portfolio_decisions(
     sorted_analyst_scores = sorted(analyst_scores, key=lambda x: x.get("total_score", 0), reverse=True)
     for idx, s in enumerate(sorted_analyst_scores):
         analyst_map[s["stock_code"]] = s
+        pat_tag = s.get("pattern_tag", "NEUTRAL")
+        pat_sum = s.get("pattern_summary", "")
+        pat_info = f" | [第2.5層型態: {pat_tag}] ({pat_sum})" if pat_tag != "NEUTRAL" else ""
         analyst_report_lines.append(
             f"排名 {idx+1}. 股票 {s['stock_code']} | 技術總分: {s['total_score']} "
-            f"(趨勢:{s['trend_score']}, 動能:{s['momentum_score']}, 成交量:{s['volume_score']}, 安全:{s['safety_score']}, 大盤:{s['regime_score']}) "
+            f"(趨勢:{s['trend_score']}, 動能:{s['momentum_score']}, 成交量:{s['volume_score']}, 安全:{s['safety_score']}, 大盤:{s['regime_score']}){pat_info} "
             f"| 最新收盤價: {s['price']} 元\n  分析理由: {s['reason']}"
         )
     analyst_report_text = "\n".join(analyst_report_lines)
@@ -156,7 +163,8 @@ def generate_portfolio_decisions(
         pnl = mkt_val - cost
         pnl_pct = (pnl / cost * 100.0) if cost > 0 else 0.0
         holdings_lines.append(
-            f"  股票: {code} | 庫存數量: {qty:,.0f} 股 | 平均成本: {avg_price:.2f} 元 | 目前現價: {current_price:.2f} 元 | 帳面損益: {pnl:+,.0f} 元 ({pnl_pct:+.2f}%)"
+            f"  - 股票: {code} | 持有股數: {qty:,.0f} 股 | 平均成本: {avg_price:,.2f} 元 | "
+            f"當前價格: {current_price:,.2f} 元 | 帳面損益: {pnl:+,.0f} 元 ({pnl_pct:+.2f}%)"
         )
     holdings_text = "\n".join(holdings_lines) if holdings_lines else "目前無任何股票持股。"
 
@@ -171,14 +179,28 @@ def generate_portfolio_decisions(
         )
 
     # 10. 構建經理人系統指令
-    from src.services.trading_memory import get_active_skills_context
+    from src.services.trading_memory import get_active_skills_data, get_active_skills_context
+    active_skills_info = get_active_skills_data(is_paper=False)
+    rev_month = active_skills_info.get("review_month", "最新")
+    exec_skills = active_skills_info.get("skills", {}).get("execution_skills", {})
+    min_score = exec_skills.get("min_buy_score", 60)
+    max_weight = exec_skills.get("max_single_stock_weight", 4)
+    stop_loss = exec_skills.get("stop_loss_pct", -0.05)
+
+    print(f" [決策代理] 成功載入第 3 層動態戰術 Skills (月度版本: {rev_month} | 最低買入門檻: {min_score}分 | 最重權重: {max_weight}級 | 停損: {stop_loss*100:.1f}%) 並前置注入至 System Instruction。")
     active_skills_text = get_active_skills_context(is_paper=False)
 
     pm_system_instruction = f"""
 你是一個極其資深且穩健的台股投資組合配置經理 (Portfolio Manager)。
-你的任務是審查分析師提供的個股技術評分報告，並根據當前大盤氣候環境、可用資金及目前持股，產出最終的交易決策與部位資金分配比例。
+你的任務是審查分析師提供的個股技術評分報告與第 2.5 層型態與指標診斷，並根據當前大盤氣候環境、可用資金及目前持股，產出最終的交易決策與部位資金分配比例。
 
 {active_skills_text}
+
+【第 2.5 層型態與指標診斷連動指示】：
+你必須高度重視研究員提供的第 2.5 層 `pattern_tag` 與 `pattern_summary`（以月度 `indicator_skills` 為依據）：
+1. 若 `pattern_tag == "A_SHAPE_TOP_WARNING"` (A型頂點/誘多/背離警示)：即使該股總分偏高，原則上禁止發出 BUY 買入決策，應優先考量 SELL 或 HOLD 避險，並在 `applied_skills` 註明引用 `[2.5層型態戰術: 觸發 A型頂點警示限制買入/建議避險]`。
+2. 若 `pattern_tag == "V_SHAPE_REVERSAL"` (V型強勢反彈)：若該股評分達標且大盤允許，可作為優先進場或反彈觀察標的，並在 `applied_skills` 註明引用 `[2.5層型態戰術: 識別 V型強勢反彈特徵]`。
+3. 若 `pattern_tag == "NEUTRAL"` (常規走勢/無特別轉折)：代表第 2.5 層未觸發任何 V 轉或 A 頂型態，你絕對禁止在 `applied_skills` 中引用任何 2.5 層型態戰術！
 
 【中長期穩健投資哲學】：
 1. 你的投資風格是「中長期穩健投資」，必須極力避免頻繁交易、微調調倉及短線投機。交易印花稅與手續費滑價是利潤的殺手。
@@ -186,6 +208,11 @@ def generate_portfolio_decisions(
 3. 除非某檔持股技術面極度崩壞跌破防線，否則不應輕易發出 SELL 決策。
 4. 在一般評分或無極端行情下，你應該極度傾向給予 `HOLD` (觀望續抱/不做買賣)，以控制週轉率。
 5. 買入決策時，技術面總分必須是群體中最優秀的前列；賣出決策時，總分必須顯著低於其他標的。
+6. 【戰術 Skills 引用與可解釋性】：
+   - 僅在此決策【有真正參考或引用】當前月度生效之戰術 Skills（取自上述 【當前生效之第 3 層月度動態戰術 Skills 規範】）或第 2.5 層 V轉/A頂型態時，才在 `applied_skills` 陣列中填入真實條文。
+   - 【未持股嚴禁引用減碼/平倉】：若該股無持股庫存（持股數 = 0），絕不可引用「減碼、平倉、獲利落袋、避免回吐、離場限價」等庫存處置條文。
+   - 【總分達標嚴禁引用未達門檻】：若該股總分高於等於買入門檻（如 85分 >= 75分），絕不可引用「未達買入門檻」條文。
+   - 若該個股決策無特別引用上述月度戰術 Skills，請務必回傳空陣列 `[]`（無引用時將不顯示戰術行，嚴防產生幻覺）。
 
 【嚴格禁止當日同股對沖翻轉 (Anti-Churning & Same-day Reversal Safeguard)】：
 1. 若今日已經買入/成交某檔股票，今日絕對禁止再發出 SELL (賣出) 決策。
@@ -295,12 +322,15 @@ def generate_portfolio_decisions(
             
         action = d.get("action", "HOLD").upper()
         pm_reason = d.get("pm_reason", d.get("reason", "")).strip()
+        applied_skills = d.get("applied_skills", [])
+        if not isinstance(applied_skills, list):
+            applied_skills = []
 
         # 獲取分析師評分與價格
         ana = analyst_map.get(code, {})
         if not ana:
             continue
-            
+
         trend = safe_int(ana.get("trend_score"), default=10, min_val=0, max_val=20)
         momentum = safe_int(ana.get("momentum_score"), default=10, min_val=0, max_val=20)
         volume = safe_int(ana.get("volume_score"), default=10, min_val=0, max_val=20)
@@ -308,9 +338,29 @@ def generate_portfolio_decisions(
         regime_s = safe_int(ana.get("regime_score"), default=10, min_val=0, max_val=20)
         total_score = trend + momentum + volume + safety + regime_s
         price = safe_float(ana.get("price"), default=10.0, min_val=0.01)
+
+        matching_holding = next((h for h in current_holdings if h["stock_code"] == code), None)
+        holding_qty = float(matching_holding.get("quantity", 0)) if matching_holding else 0.0
+
+        # 上下文脈絡校正 (Context Guard)：精準防範 LLM 脈絡不符的戰術引用
+        clean_applied_skills = []
+        for sk in applied_skills:
+            sk_str = str(sk).strip()
+            # 1. 若未持股 (holding_qty <= 0)，過濾包含「減碼、獲利、回吐、平倉、離場限價」等庫存處置條款
+            if holding_qty <= 0 and any(k in sk_str for k in ("減碼", "獲利", "回吐", "平倉", "離場限價")):
+                continue
+            # 2. 若總分高於等於買入門檻 (total_score >= min_score)，過濾包含「未達買入門檻」條款
+            if total_score >= min_score and "未達" in sk_str and "門檻" in sk_str:
+                continue
+            clean_applied_skills.append(sk_str)
+        
+        applied_skills = clean_applied_skills
+
+        skills_str = "；".join([str(s).strip() for s in applied_skills if str(s).strip()])
+        skills_note = f"\n【📜 引用戰術 Skills】{skills_str}" if skills_str else ""
         analyst_reason = ana.get("reason", "").strip()
 
-        merged_reason = f"【量化評分: {total_score}分 (趨勢:{trend} | 動能:{momentum} | 量能:{volume} | 安全:{safety} | 大盤:{regime_s})】{analyst_reason}\n【經理人決策理由】{pm_reason}"
+        merged_reason = f"【量化評分: {total_score}分 (趨勢:{trend} | 動能:{momentum} | 量能:{volume} | 安全:{safety} | 大盤:{regime_s})】{analyst_reason}{skills_note}\n【經理人決策理由】{pm_reason}"
 
         matching_holding = next((h for h in current_holdings if h["stock_code"] == code), None)
         holding_qty = float(matching_holding.get("quantity", 0)) if matching_holding else 0.0
@@ -336,6 +386,7 @@ def generate_portfolio_decisions(
                 "quantity": safe_float(qty, default=0.0, min_val=0.0),
                 "confidence": safe_float(total_score / 100.0, default=0.5, min_val=0.0, max_val=1.0),
                 "reason": decision_reason,
+                "applied_skills": applied_skills,
                 "trend_score": trend,
                 "momentum_score": momentum,
                 "volume_score": volume,
@@ -355,6 +406,7 @@ def generate_portfolio_decisions(
                 "quantity": 0.0,
                 "confidence": total_score / 100.0,
                 "reason": f"【大盤防禦控險】大盤氣候處於空頭或防守，限制新倉買入。{merged_reason}",
+                "applied_skills": applied_skills,
                 "trend_score": trend,
                 "momentum_score": momentum,
                 "volume_score": volume,
@@ -386,6 +438,7 @@ def generate_portfolio_decisions(
                 "quantity": safe_float(qty, default=0.0, min_val=0.0),
                 "confidence": safe_float(total_score / 100.0, default=0.5, min_val=0.0, max_val=1.0),
                 "reason": decision_reason,
+                "applied_skills": applied_skills,
                 "trend_score": trend,
                 "momentum_score": momentum,
                 "volume_score": volume,
@@ -404,6 +457,7 @@ def generate_portfolio_decisions(
                     "quantity": 0.0,
                     "confidence": total_score / 100.0,
                     "reason": f"【同日對沖防護護欄】今日已有賣出/平倉紀錄，禁止同日反向重新買回，避免滑價與摩擦成本損耗。{merged_reason}",
+                    "applied_skills": applied_skills,
                     "trend_score": trend,
                     "momentum_score": momentum,
                     "volume_score": volume,
@@ -423,16 +477,17 @@ def generate_portfolio_decisions(
                     
                 buy_candidates.append({
                     "stock_code": code,
-                        "total_score": total_score,
-                        "allocation_weight": alloc_weight,
-                        "trend": trend,
-                        "momentum": momentum,
-                        "volume": volume,
-                        "safety": safety,
-                        "regime": regime_s,
-                        "price": price,
-                        "reason": merged_reason
-                    })
+                    "total_score": total_score,
+                    "allocation_weight": alloc_weight,
+                    "trend": trend,
+                    "momentum": momentum,
+                    "volume": volume,
+                    "safety": safety,
+                    "regime": regime_s,
+                    "price": price,
+                    "reason": merged_reason,
+                    "applied_skills": applied_skills
+                })
             else:
                 final_decisions.append({
                     "stock_code": code,
@@ -441,6 +496,7 @@ def generate_portfolio_decisions(
                     "quantity": 0.0,
                     "confidence": total_score / 100.0,
                     "reason": f"【量化評分觀望】經理人決定觀望。{merged_reason}",
+                    "applied_skills": applied_skills,
                     "trend_score": trend,
                     "momentum_score": momentum,
                     "volume_score": volume,

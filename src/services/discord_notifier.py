@@ -356,20 +356,57 @@ def send_daily_report(
     if not target_scores and portfolio_decision and "decisions" in portfolio_decision:
         target_scores = portfolio_decision["decisions"]
         
+    pattern_lines = []
     if target_scores:
+        try:
+            from src.services.trading_memory import get_active_skills_data
+            ind_info = get_active_skills_data(is_paper=is_sandbox_mode)
+            ind_rev_m = ind_info.get("review_month", "最新")
+            ind_sk = ind_info.get("skills", {}).get("indicator_skills", {})
+            v_patterns = ind_sk.get("v_shape_reversal_patterns", [])
+            a_warnings = ind_sk.get("a_shape_top_warnings", [])
+            v_rule_str = v_patterns[0].get("pattern_rule") if v_patterns and isinstance(v_patterns[0], dict) else ""
+            a_rule_str = a_warnings[0].get("pattern_rule") if a_warnings and isinstance(a_warnings[0], dict) else ""
+            
+            pattern_lines.append(f"📌 **當前生效之第 2.5 層指標與型態 Skills (版本: {ind_rev_m})**:")
+            if v_rule_str:
+                pattern_lines.append(f"• **V轉勝率特徵**: {v_rule_str}")
+            if a_rule_str:
+                pattern_lines.append(f"• **A頂警示特徵**: {a_rule_str}")
+            pattern_lines.append("")
+        except Exception:
+            pass
+
         # 按總分降序排列
         sorted_scores = sorted(target_scores, key=lambda x: x.get("total_score", 0), reverse=True)
         score_lines = []
         for idx, s in enumerate(sorted_scores):
-            stock_name = get_stock_name(s["stock_code"])
+            stock_code = s["stock_code"]
+            stock_name = get_stock_name(stock_code)
             name_display = f" {stock_name}" if stock_name else ""
             reg_score_val = safe_int(s.get('regime_score'), default=10, min_val=0, max_val=20)
             score_lines.append(
-                f"{idx+1}. {s['stock_code']}{name_display} | 總分: **{s['total_score']}** "
+                f"{idx+1}. {stock_code}{name_display} | 總分: **{s['total_score']}** "
                 f"(趨勢:{s['trend_score']} 動能:{s['momentum_score']} 成交量:{s['volume_score']} 安全:{s['safety_score']} 大盤:{reg_score_val})  "
             )
+            
+            # 累積第 2.5 層型態與指標診斷
+            pat_tag = str(s.get("pattern_tag", "NEUTRAL")).upper()
+            pat_sum = str(s.get("pattern_summary", "")).strip()
+            if pat_tag == "V_SHAPE_REVERSAL":
+                emoji = "🔥 [V型強勢反彈]"
+            elif pat_tag == "A_SHAPE_TOP_WARNING":
+                emoji = "⚠️ [A型頂點警示]"
+            else:
+                emoji = "⚪ [常規技術走勢]"
+            
+            summary_disp = f" - {pat_sum}" if pat_sum else ""
+            pattern_lines.append(f"• **{stock_code}**{name_display}: {emoji}{summary_disp}")
+
         scores_text = "\n".join(score_lines)
+    
     section2_value = scores_text
+    section2_5_value = "\n".join(pattern_lines) if pattern_lines else "第 2.5 層尚無型態診斷資料。"
 
     # ── 5. 欄位 3: 今日停損警告清單 ──────────────────────────────────────
     stop_loss_text = "🟢 今日無任何股票觸發停損。"
@@ -390,8 +427,31 @@ def send_daily_report(
 # ── 6. 欄位 4: 第三層買賣決策與原因 ──────────────────────────────────
     decisions_text = "今日無 AI 配置決策。"
     if portfolio_decision:
+        try:
+            from src.services.trading_memory import get_active_skills_data
+            skills_info = get_active_skills_data(is_paper=is_sandbox_mode)
+            rev_m = skills_info.get("review_month", "最新")
+            exec_sk = skills_info.get("skills", {}).get("execution_skills", {})
+            m_score = exec_sk.get("min_buy_score", 60)
+            m_weight = exec_sk.get("max_single_stock_weight", 4)
+            s_loss = exec_sk.get("stop_loss_pct", -0.05)
+            t_profit = exec_sk.get("take_profit_pct", 0.12)
+            t_rules = exec_sk.get("tactical_rules", [])
+            t_rules_str = "；".join(t_rules) if t_rules else "維持標準紀律"
+            
+            active_skills_summary_header = (
+                f"📌 **當前生效之第三層月度戰術 Skills (版本: {rev_m})**:\n"
+                f"• **下月風控門檻**: 最低買入門檻 **{m_score} 分** | 單檔最重權重 **{m_weight} 級** | 個股停損 **{s_loss*100:.1f}%** | 動態鎖利 **{t_profit*100:.1f}%**\n"
+                f"• **戰術執行重點**: {t_rules_str}\n\n"
+            )
+        except Exception as e:
+            active_skills_summary_header = ""
+
         ranking_analysis = str(portfolio_decision.get("ranking_analysis", "橫向對比分析中。")).replace("\\n", "\n").replace("\r\n", "\n").strip()
-        decision_lines = [f"**經理人橫向配置說明**:\n{ranking_analysis}\n"]
+        decision_lines = [
+            f"{active_skills_summary_header}"
+            f"**經理人橫向配置說明**:\n{ranking_analysis}\n"
+        ]
         
         raw_decs = portfolio_decision.get("decisions", [])
         for d in raw_decs:
@@ -401,6 +461,13 @@ def send_daily_report(
             raw_reason = d.get("reason", "維持觀望。")
             reason = str(raw_reason).replace("\\n", "\n").replace("\r\n", "\n").strip()
             
+            applied_skills = d.get("applied_skills", [])
+            skills_line = ""
+            if isinstance(applied_skills, list) and applied_skills:
+                skills_str = "；".join([str(s).strip() for s in applied_skills if str(s).strip()])
+                if skills_str:
+                    skills_line = f"└ *📜 引用戰術 Skills*: {skills_str}\n"
+            
             action_emoji = "🟢 BUY" if action == "BUY" else ("🔴 SELL" if action == "SELL" else "⚪ HOLD")
             stock_name = get_stock_name(code)
             name_display = f" ({stock_name})" if stock_name else ""
@@ -408,6 +475,7 @@ def send_daily_report(
             qty_str = f" | 數量: {qty:,.0f} 股" if action != "HOLD" else ""
             decision_lines.append(
                 f"**{action_emoji}** {code}{name_display}{qty_str}  \n"
+                f"{skills_line}"
                 f"└ *原因*: {reason}\n"
             )
         decisions_text = "\n".join(decision_lines)
@@ -446,6 +514,7 @@ def send_daily_report(
         fields.extend(_split_into_fields("💸 1d. 本日交易明細", trades_text, syntax="diff", max_len=950))
         fields.extend(_split_into_fields("⚠️ 1e. 本日未成交/滑價取消明細", unfilled_text, syntax="diff", max_len=950))
         fields.extend(_split_into_fields("📈 2. 評分與相對排名 (第二層)", section2_value, max_len=950))
+        fields.extend(_split_into_fields("🔍 2.5. 型態與指標診斷 (第 2.5 層)", section2_5_value, max_len=950))
         fields.extend(_split_into_fields("🚨 3. 今日停損警告清單", section3_value, max_len=950))
         fields.extend(_split_into_fields("🧠 4. 經理人交易配置與理由 (第三層)", section4_value, max_len=950))
 
@@ -501,6 +570,9 @@ def send_daily_report(
             f"---\n\n"
             f"### 📈 分析師評分與相對排名 (第二層)\n"
             f"{section2_value}\n\n"
+            f"---\n\n"
+            f"### 🔍 型態與指標診斷 (第 2.5 層)\n"
+            f"{section2_5_value}\n\n"
             f"---\n\n"
             f"### 🚨 今日停損警告清單\n"
             f"{section3_value}\n\n"
