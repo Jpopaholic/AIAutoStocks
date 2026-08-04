@@ -205,7 +205,8 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
         f"{macro_context_str}\n\n"
         f"【各標的 Layer 1 個股指標診斷報告】\n"
         f"{json.dumps(stock_indicator_reports, ensure_ascii=False, indent=2)}\n\n"
-        f"請綜合診斷：1.哪些指標特徵容易/不容易形成 V 型反彈與 A 型頂點？ 2.分析師給分偏斜與門檻調整 3.特定股票異常特徵 4.氣候對指標的側重，並產出 Key-Value 結構化 indicator_skills (規則請附帶 expected_probability_pct 表示預期機率 0-100)。"
+        f"請綜合診斷：1.哪些指標與量價特徵容易形成 V 型反彈與 A 型頂點（請核心著重於『真實 K 線型態、均線排列、價格走勢與成交量放大/萎縮結構』，嚴禁依賴抽象的分數變化，務必產出具體可落地的『指標與量價戰術 Skills』，如：創低後長下影爆量長紅強彈、高檔量價背離長黑跌破均線等） 2.分析師給分偏斜與門檻調整 3.特定股票異常特徵 4.氣候對指標的側重，並產出 Key-Value 結構化 indicator_skills (規則請附帶 expected_probability_pct 表示預期機率 0-100)。"
+
     )
     generation_config_l1_reduce = {
         "response_mime_type": "application/json",

@@ -43,16 +43,9 @@ class AnalystStockScore(BaseModel):
         ..., 
         description="該檔股票的簡短技術分析理由與評分依據（使用繁體中文，限定 80 ~ 150 字，禁止超出）。請精簡指出關鍵指標信號，不要贅述每日歷史細節與冗長計算過程。"
     )
-    pattern_tag: str = Field(
-        ...,
-        description="第 2.5 層型態與指標診斷標籤。限選: 'V_SHAPE_REVERSAL' (識別出 V 型強勢反彈/底部位特徵), 'A_SHAPE_TOP_WARNING' (識別出 A 型頂點/誘多/高檔背離警示), 'NEUTRAL' (常規走勢/無顯著轉折特徵)。"
-    )
-    pattern_summary: str = Field(
-        ...,
-        description="第 2.5 層型態與指標診斷精簡理由（使用繁體中文，限 20 ~ 40 字）。請明確指出是否符合月度 indicator_skills 中的 V 轉或 A 頂特徵。"
-    )
 
 class AnalystAssessment(BaseModel):
+
     scores: List[AnalystStockScore] = Field(
         ...,
         description="所有股票的分析評分列表。必須包含所有輸入分析的股票，每檔股票各一筆。"
@@ -158,13 +151,18 @@ def generate_analyst_assessments(
             ma20_str = f"{k['ma20']:.2f}" if k.get('ma20') is not None else "N/A"
             ma60_str = f"{k['ma60']:.2f}" if k.get('ma60') is not None else "N/A"
             rsi_str = f"{k['rsi14']:.2f}" if k.get('rsi14') is not None else "N/A"
-            vol_ma5_str = f"{k['vol_ma5']:,.0f}" if k.get('vol_ma5') is not None else "N/A"
-            vol_ma20_str = f"{k['vol_ma20']:,.0f}" if k.get('vol_ma20') is not None else "N/A"
+            vol = k.get('volume', 0)
+            vol_ma5 = k.get('vol_ma5')
+            vol_ma20 = k.get('vol_ma20')
+            vol_ma5_str = f"{vol_ma5:,.0f}" if vol_ma5 is not None else "N/A"
+            vol_ma20_str = f"{vol_ma20:,.0f}" if vol_ma20 is not None else "N/A"
+            vol_ratio_str = f" (為5日均量之 {vol / vol_ma5:.1f}倍)" if (vol_ma5 and vol_ma5 > 0) else ""
+
             macd_str = f"(快線:{k['macd']:.2f}, 慢線:{k['macd_signal']:.2f}, 柱狀圖:{k['macd_hist']:.2f})" if (k.get('macd') is not None and k.get('macd_signal') is not None and k.get('macd_hist') is not None) else "N/A"
             dmi_str = f"(+DI:{k['plus_di']:.1f}, -DI:{k['minus_di']:.1f}, ADX:{k['adx']:.1f})" if (k.get('adx') is not None and k.get('plus_di') is not None and k.get('minus_di') is not None) else "N/A"
             klines_lines.append(
                 f"  日期: {k['date']} | 開盤: {k['open']} | 最高: {k['high']} | 最低: {k['low']} | 收盤: {k['close']} | MA5: {ma5_str} | MA20: {ma20_str} | MA60 (季線): {ma60_str} | RSI: {rsi_str} | "
-                f"成交量: {k['volume']:,.0f} (VOL_MA5: {vol_ma5_str}, VOL_MA20: {vol_ma20_str}) | MACD: {macd_str} | DMI: {dmi_str}"
+                f"成交量: {vol:,.0f}{vol_ratio_str} (5日均量: {vol_ma5_str}, 20日均量: {vol_ma20_str}) | MACD: {macd_str} | DMI: {dmi_str}"
             )
         klines_text = "\n".join(klines_lines)
 
@@ -186,12 +184,6 @@ def generate_analyst_assessments(
 4. 安全與防守得分 (safety_score, 0 ~ 20 分)：評估下方支撐力道與防守空間。股價回檔至強支撐、乖離率小、防守空間大得高分（代表安全）；股價突破上檔阻力但乖離率過大、高檔超買或支撐跌破得低分。
 5. 大盤一致性得分 (regime_score, 0 ~ 20 分)：結合當前大盤加權指數狀態與交易姿態。若大盤多頭且個股強於大盤得高分，大盤空頭/防禦或大盤氣候不佳時，根據交易姿態適度調降此得分。
 
-【第 2.5 層型態與指標診斷指引】：
-請對照載入之月度 `indicator_skills`（特別是 V 型反彈特徵與 A 型頂點警示）：
-1. 若個股符合 V 型強勢反彈或低檔急凍後放量跳升特徵，請在 `pattern_tag` 填寫 `'V_SHAPE_REVERSAL'`，並在 `pattern_summary` 簡述（20-40字）。
-2. 若個股符合高檔乖離過大、評分短時間驟降或量價背離之 A 型頂點/誘多特徵，請在 `pattern_tag` 填寫 `'A_SHAPE_TOP_WARNING'`，並在 `pattern_summary` 簡述（20-40字）。
-3. 若走勢為常規盤整或無顯著 V/A 型態轉折，`pattern_tag` 填寫 `'NEUTRAL'`，`pattern_summary` 可填 `'常規技術走勢'`。
-
 你的金融量化分析技能包含：
 {skills_text}
 
@@ -200,16 +192,32 @@ def generate_analyst_assessments(
 2. 你的分析理由請一律使用「繁體中文」，限制在 80 到 150 字以內，精簡指出關鍵指標，請勿贅述每日歷史細節。
 """
 
+
+
+        score_history_text = ""
+        try:
+            from src.services.supabase_client import get_recent_stock_scores
+            recent_scores = get_recent_stock_scores(code, limit=3)
+            if recent_scores:
+                hist_lines = []
+                for sc in recent_scores:
+                    tot = sc.get("trend_score", 0) + sc.get("momentum_score", 0) + sc.get("volume_score", 0) + sc.get("safety_score", 0) + sc.get("regime_score", 0)
+                    hist_lines.append(f"  日期: {sc.get('analysis_date', '')} | 技術總分: {tot} 分 (趨勢:{sc.get('trend_score')}, 動能:{sc.get('momentum_score')}, 量能:{sc.get('volume_score')}, 安全:{sc.get('safety_score')}, 大盤:{sc.get('regime_score')}) | 決策: {sc.get('decision')}")
+                score_history_text = "● 該股票最近 3 次歷史 AI 技術評分紀錄 (用於比較評分跳升/驟降軌跡)：\n" + "\n".join(hist_lines) + "\n\n"
+        except Exception as e_hist:
+            print(f" [分析師代理] 讀取 {code} 歷史評分失敗: {e_hist}")
+
         analyst_user_prompt = f"""
 請針對股票代號 {code} 進行個股日 K 線的技術分析與評分。
 
 {taiex_info}
 
-● 股票代號 {code} 最近 15 天 K 線數據 (最下方為最新一日行情)：
+{score_history_text}● 股票代號 {code} 最近 15 天 K 線數據 (最下方為最新一日行情)：
 {klines_text}
 
-請基於上述數據，產出該股票的量化評分與詳細原因。
+請基於上述數據與歷史評分軌跡，產出該股票的量化評分與詳細原因。
 """
+
 
         try:
             raw_analyst_response = call_gemini_fn(
@@ -236,13 +244,16 @@ def generate_analyst_assessments(
                 "safety_score": 13,
                 "regime_score": 13,
                 "confidence": 0.3,
+                "v_reversal_prob": 20,
+                "a_top_prob": 20,
                 "pattern_tag": "NEUTRAL",
                 "pattern_summary": "模型呼叫異常，補上預設中性型態。",
-                "reason": f"（本股 Gemini 呼叫失敗，已補上預設中性評分 65 分，系統強制觀望。原因: {str(e)[:80]}）"
+                "reason": f"（本股 AI 模型呼叫失敗，已補上預設中性評分 65 分，系統強制觀望。原因: {str(e)[:80]}）"
             })
 
-        # 主動平滑停頓 10.0 秒，避免平滑發送時觸發 Gemini API 伺服器端排隊或 Rate Limit
-        time.sleep(10.0)
+        # 主動平滑停頓：OpenAI 使用 0.5 秒，Gemini 使用 10.0 秒
+        sleep_dur = 0.5 if config.ai_provider in ("openai", "auto") and config.openai_api_key else 10.0
+        time.sleep(sleep_dur)
 
     # Python 計算價格與總分
     analyst_scores = []
@@ -268,9 +279,17 @@ def generate_analyst_assessments(
         total_score = trend + momentum + volume + safety + regime
         confidence = safe_float(s_item.get("confidence"), default=0.8, min_val=0.0, max_val=1.0)
         
+        v_prob = safe_int(s_item.get("v_reversal_prob"), default=20, min_val=0, max_val=100)
+        a_prob = safe_int(s_item.get("a_top_prob"), default=20, min_val=0, max_val=100)
+        
         pattern_tag = str(s_item.get("pattern_tag", "NEUTRAL")).strip().upper()
-        if pattern_tag not in ("V_SHAPE_REVERSAL", "A_SHAPE_TOP_WARNING", "NEUTRAL"):
+        if v_prob >= 50 and v_prob > a_prob:
+            pattern_tag = "V_SHAPE_REVERSAL"
+        elif a_prob >= 50 and a_prob > v_prob:
+            pattern_tag = "A_SHAPE_TOP_WARNING"
+        elif pattern_tag not in ("V_SHAPE_REVERSAL", "A_SHAPE_TOP_WARNING", "NEUTRAL"):
             pattern_tag = "NEUTRAL"
+
         pattern_summary = str(s_item.get("pattern_summary", "")).strip()
 
         analyst_scores.append({
@@ -283,10 +302,13 @@ def generate_analyst_assessments(
             "total_score": total_score,
             "confidence": confidence,
             "price": price,
+            "v_reversal_prob": v_prob,
+            "a_top_prob": a_prob,
             "pattern_tag": pattern_tag,
             "pattern_summary": pattern_summary,
             "reason": s_item.get("reason", "").strip() or "技術量化指標尚可。"
         })
+
 
     analyst_scores.sort(key=lambda x: x["total_score"], reverse=True)
     return analyst_scores

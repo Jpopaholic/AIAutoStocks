@@ -151,9 +151,12 @@ class TestNumericOverflowSafeguards(unittest.TestCase):
         """測試大盤氣候診斷代理面對 LLM 回傳巨大數值時的抗性"""
         huge_int = 10**350
         mock_response = f"""{{
-            "regime": "BULLISH_TREND",
-            "posture": "AGGRESSIVE",
+            "regime": "STRONG_BULL",
+            "posture": "STRONG_ATTACK",
             "risk_multiplier": {huge_int},
+            "target_cash_ratio": 0.10,
+            "allowed_buy_styles": ["BREAKOUT"],
+            "tactical_directive": "攻勢強勁",
             "reason": "多頭強勁"
         }}"""
 
@@ -162,9 +165,10 @@ class TestNumericOverflowSafeguards(unittest.TestCase):
         with patch("src.agents.regime_agent.call_gemini_with_rotation", mock_call_gemini):
             taiex_klines = [{"date": "2026-07-24", "open": 20000, "high": 20100, "low": 19900, "close": 20050, "volume": 100000}]
             res = generate_market_regime(taiex_klines)
-            self.assertEqual(res["regime"], "BULLISH_TREND")
+            self.assertEqual(res["regime"], "STRONG_BULL")
             self.assertLessEqual(res["risk_multiplier"], 1.0)
             self.assertGreaterEqual(res["risk_multiplier"], 0.15)
+
 
 if __name__ == "__main__":
     unittest.main()

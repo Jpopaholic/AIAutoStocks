@@ -103,6 +103,31 @@ def get_stock_klines(stock_code: str, limit: int = 100) -> List[Dict[str, Any]]:
         .execute()
     )
 
+def get_batch_stock_klines(stock_codes: List[str], limit_per_stock: int = 100) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    一次性（批次）查詢多檔股票的歷史 K 線數據，大幅減少對 Supabase 的 HTTP 請求次數。
+    """
+    if not stock_codes:
+        return {}
+
+    total_limit = len(stock_codes) * limit_per_stock
+    raw_data = execute_with_retry(
+        lambda: supabase.table("stock_klines")
+        .select("stock_code, date, open, high, low, close, volume")
+        .in_("stock_code", stock_codes)
+        .order("date", desc=True)
+        .limit(total_limit)
+        .execute()
+    )
+
+    res_map: Dict[str, List[Dict[str, Any]]] = {code: [] for code in stock_codes}
+    for row in (raw_data or []):
+        code = row.get("stock_code")
+        if code in res_map and len(res_map[code]) < limit_per_stock:
+            res_map[code].append(row)
+
+    return res_map
+
 def save_stock_klines(klines: List[Dict[str, Any]]) -> Any:
     """
     批次儲存或更新 K 線數據。
@@ -878,7 +903,29 @@ def save_stock_analysis_scores(
         print(f" [Supabase] 警告: 寫入個股分析評分與決策紀錄失敗: {str(e)}")
 
 
+def get_recent_stock_scores(stock_code: str, limit: int = 5) -> List[Dict[str, Any]]:
+    """
+    查詢特定股票最近 N 日的歷史技術總分與子項評分紀錄（按時間由新到舊）。
+    """
+    is_paper = config.limits.is_paper_trading
+    try:
+        res = execute_with_retry(
+            lambda: supabase.table("stock_analysis_scores")
+            .select("analysis_date, trend_score, momentum_score, volume_score, safety_score, regime_score, decision, created_at")
+            .eq("stock_code", stock_code)
+            .eq("is_paper", is_paper)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return res or []
+    except Exception as e:
+        print(f" [Supabase] 警告: 查詢 {stock_code} 歷史評分失敗: {str(e)}")
+        return []
+
+
 def get_daily_analysis_today() -> Optional[Dict[str, Any]]:
+
     """
     查詢今日是否已有 AI 分析執行紀錄（依台灣時間日期）。
     auto 和 manual 都計入去重判斷：

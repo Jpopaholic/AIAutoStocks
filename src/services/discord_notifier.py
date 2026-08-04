@@ -239,6 +239,13 @@ def send_daily_report(
         mode_label = "實際操盤"
         current_date_label = get_local_taiwan_date_str()
 
+    # 判斷 AI 決策引擎模型標籤
+    ai_provider = config.ai_provider
+    if ai_provider == "openai" or (ai_provider == "auto" and config.openai_api_key):
+        model_label = f"OpenAI ({config.openai_model or 'gpt-4o-mini'})"
+    else:
+        model_label = f"Gemini ({config.gemini_model or 'gemini-3.6-flash'})"
+
     # ── 2. 獲取今日交易委託與成交狀態 ──────────────────────────────────
     if override_orders is not None:
         today_orders = override_orders
@@ -283,6 +290,7 @@ def send_daily_report(
 
     # ── 3. 欄位 1: 大盤氣候與本日交易 ─────────────────────────────────
     regime_display = "UNKNOWN"
+    posture_display = "UNKNOWN"
     risk_mult = 1.0
     posture = "UNKNOWN"
     climate_reason = ""
@@ -292,18 +300,36 @@ def send_daily_report(
         risk_mult = regime_assessment.get("risk_multiplier", 1.0)
         climate_reason = regime_assessment.get("reason", "")
         
-        emoji_map = {
+        regime_emoji_map = {
+            "STRONG_BULL": "🐂 強勢多頭",
+            "REBOUND_BULL": "📈 驚驚漲/震盪偏多",
             "BULLISH_TREND": "🐂 多頭趨勢",
-            "BEARISH_TREND": "🐻 空頭趨勢",
-            "CALM_RANGE": "🦀 低波動盤整",
-            "VOLATILE_RANGE": "🌪️ 高波動震盪"
+            "CALM_RANGE": "🦀 低波動橫盤",
+            "VOLATILE_RANGE": "🌪️ 高波動震盪",
+            "CORRECTION_BEAR": "📉 震盪修正",
+            "PANIC_BEAR": "🐻 恐慌空頭",
+            "BEARISH_TREND": "🐻 空頭趨勢"
         }
-        regime_display = emoji_map.get(regime, regime)
+        posture_emoji_map = {
+            "STRONG_ATTACK": "⚔️ 強攻攻勢",
+            "MODERATE_ATTACK": "🛡️ 穩健進攻",
+            "CHOPPY_TACTICAL": "🔄 震盪靈活",
+            "DEFENSIVE_ACCUMULATION": "🧱 防禦承接",
+            "STRICT_DEFENSE": "🏰 現金為王",
+            "AGGRESSIVE": "⚔️ 積極進攻",
+            "NORMAL": "🛡️ 正常操作",
+            "DEFENSIVE": "🏰 防禦保守"
+        }
+        regime_display = regime_emoji_map.get(regime, regime)
+        posture_display = posture_emoji_map.get(posture, posture)
+        target_cash_ratio = regime_assessment.get("target_cash_ratio")
+        cash_ratio_str = f" | **目標現金比例**: `{float(target_cash_ratio)*100:.0f}%`" if target_cash_ratio is not None else ""
 
     climate_header = (
-        f"• **市場狀態**: `{regime_display}` | **交易姿態**: `{posture}`\n"
-        f"• **風險乘數**: `{float(risk_mult):.2f}`\n"
+        f"• **市場狀態**: `{regime_display}` | **交易姿態**: `{posture_display}`\n"
+        f"• **風險乘數**: `{float(risk_mult):.2f}`{cash_ratio_str}\n"
     )
+
 
     account_header = (
         f"• **帳戶淨值 (NAV)**: **`{net_asset_value:,.0f}`** 元 (`{net_asset_roi:+.2f}%`)\n"
@@ -390,23 +416,9 @@ def send_daily_report(
                 f"(趨勢:{s['trend_score']} 動能:{s['momentum_score']} 成交量:{s['volume_score']} 安全:{s['safety_score']} 大盤:{reg_score_val})  "
             )
             
-            # 累積第 2.5 層型態與指標診斷
-            pat_tag = str(s.get("pattern_tag", "NEUTRAL")).upper()
-            pat_sum = str(s.get("pattern_summary", "")).strip()
-            if pat_tag == "V_SHAPE_REVERSAL":
-                emoji = "🔥 [V型強勢反彈]"
-            elif pat_tag == "A_SHAPE_TOP_WARNING":
-                emoji = "⚠️ [A型頂點警示]"
-            else:
-                emoji = "⚪ [常規技術走勢]"
-            
-            summary_disp = f" - {pat_sum}" if pat_sum else ""
-            pattern_lines.append(f"• **{stock_code}**{name_display}: {emoji}{summary_disp}")
-
         scores_text = "\n".join(score_lines)
     
     section2_value = scores_text
-    section2_5_value = "\n".join(pattern_lines) if pattern_lines else "第 2.5 層尚無型態診斷資料。"
 
     # ── 5. 欄位 3: 今日停損警告清單 ──────────────────────────────────────
     stop_loss_text = "🟢 今日無任何股票觸發停損。"
@@ -514,7 +526,6 @@ def send_daily_report(
         fields.extend(_split_into_fields("💸 1d. 本日交易明細", trades_text, syntax="diff", max_len=950))
         fields.extend(_split_into_fields("⚠️ 1e. 本日未成交/滑價取消明細", unfilled_text, syntax="diff", max_len=950))
         fields.extend(_split_into_fields("📈 2. 評分與相對排名 (第二層)", section2_value, max_len=950))
-        fields.extend(_split_into_fields("🔍 2.5. 型態與指標診斷 (第 2.5 層)", section2_5_value, max_len=950))
         fields.extend(_split_into_fields("🚨 3. 今日停損警告清單", section3_value, max_len=950))
         fields.extend(_split_into_fields("🧠 4. 經理人交易配置與理由 (第三層)", section4_value, max_len=950))
 
@@ -556,7 +567,7 @@ def send_daily_report(
         # ── 建立完整 Plaintext Markdown 報告檔案 (供方案 A 附件一鍵下載複製) ──
         full_report_md = (
             f"# {subject}\n"
-            f"**環境/模式**: `{mode_label}` | **日期**: `{current_date_label}`\n\n"
+            f"**環境/模式**: `{mode_label}` | **AI模型引擎**: `{model_label}` | **日期**: `{current_date_label}`\n\n"
             f"---\n\n"
             f"### 🌦️ 大盤氣候與帳戶狀態\n"
             f"{climate_header}\n"
@@ -570,9 +581,6 @@ def send_daily_report(
             f"---\n\n"
             f"### 📈 分析師評分與相對排名 (第二層)\n"
             f"{section2_value}\n\n"
-            f"---\n\n"
-            f"### 🔍 型態與指標診斷 (第 2.5 層)\n"
-            f"{section2_5_value}\n\n"
             f"---\n\n"
             f"### 🚨 今日停損警告清單\n"
             f"{section3_value}\n\n"
@@ -593,7 +601,7 @@ def send_daily_report(
             }
             if is_first:
                 embed_obj["title"] = subject
-                embed_obj["description"] = f"**環境/模式**: `{mode_label}`\n📎 *完整報告 Markdown 檔案已作為附件發送 (可點擊下載一次複製全文)*"
+                embed_obj["description"] = f"**環境/模式**: `{mode_label}` | **AI引擎**: `{model_label}`\n📎 *完整報告 Markdown 檔案已作為附件發送 (可點擊下載一次複製全文)*"
             else:
                 embed_obj["title"] = f"{subject} (第 {embed_idx + 1}/{len(embeds)} 部分)"
                 embed_obj["description"] = "*(續前文)*"

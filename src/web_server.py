@@ -613,6 +613,9 @@ def api_get_config():
             "PAPER_TRADING_MODE": db_cfg.get("PAPER_TRADING_MODE", str(config.limits.is_paper_trading).lower()),
             "TAIWAN_STOCK_TIMEZONE": db_cfg.get("TAIWAN_STOCK_TIMEZONE", config.timezone),
             "GEMINI_MODEL": db_cfg.get("GEMINI_MODEL", config.gemini_model),
+            "AI_PROVIDER": db_cfg.get("AI_PROVIDER", config.ai_provider),
+            "OPENAI_MODEL": db_cfg.get("OPENAI_MODEL", config.openai_model),
+            "HAS_OPENAI_KEY": bool(config.openai_api_key),
             "SANDBOX_START_DATE": db_cfg.get("SANDBOX_START_DATE", config.sandbox_start_date),
             "SANDBOX_END_DATE": db_cfg.get("SANDBOX_END_DATE", config.sandbox_end_date)
         }

@@ -171,10 +171,17 @@ def generate_portfolio_decisions(
     # 9. 準備大盤氣候環境
     regime_text = "目前無可用大盤氣候判定。"
     if regime_assessment:
+        risk_mult = float(regime_assessment.get('risk_multiplier', 1.0))
+        target_cash = float(regime_assessment.get('target_cash_ratio', 0.35)) * 100.0
+        allowed_styles = ", ".join(regime_assessment.get('allowed_buy_styles', ['PULLBACK']))
+        tactical_dir = regime_assessment.get('tactical_directive', '')
         regime_text = (
             f"市場狀態: {regime_assessment.get('regime', 'UNKNOWN')} | "
             f"交易姿態: {regime_assessment.get('posture', 'UNKNOWN')} | "
-            f"風險限額乘數: {regime_assessment.get('risk_multiplier', 1.0)}\n"
+            f"風險限額乘數: {risk_mult:.2f}\n"
+            f"建議目標現金儲備比例: {target_cash:.0f}%\n"
+            f"允許買進動作型態: {allowed_styles}\n"
+            f"姿態特別指引: {tactical_dir}\n"
             f"氣候分析理由: {regime_assessment.get('reason', '')}"
         )
 
@@ -192,21 +199,15 @@ def generate_portfolio_decisions(
 
     pm_system_instruction = f"""
 你是一個極其資深且穩健的台股投資組合配置經理 (Portfolio Manager)。
-你的任務是審查分析師提供的個股技術評分報告與第 2.5 層型態與指標診斷，並根據當前大盤氣候環境、可用資金及目前持股，產出最終的交易決策與部位資金分配比例。
+你的任務是審查分析師提供的個股技術評分報告，並根據當前大盤氣候環境、可用資金及目前持股，產出最終的交易決策與部位資金分配比例。
 
 {active_skills_text}
 
-【第 2.5 層型態與指標診斷連動指示】：
-你必須高度重視研究員提供的第 2.5 層 `pattern_tag` 與 `pattern_summary`（以月度 `indicator_skills` 為依據）：
-1. 若 `pattern_tag == "A_SHAPE_TOP_WARNING"` (A型頂點/誘多/背離警示)：即使該股總分偏高，原則上禁止發出 BUY 買入決策，應優先考量 SELL 或 HOLD 避險，並在 `applied_skills` 註明引用 `[2.5層型態戰術: 觸發 A型頂點警示限制買入/建議避險]`。
-2. 若 `pattern_tag == "V_SHAPE_REVERSAL"` (V型強勢反彈)：若該股評分達標且大盤允許，可作為優先進場或反彈觀察標的，並在 `applied_skills` 註明引用 `[2.5層型態戰術: 識別 V型強勢反彈特徵]`。
-3. 若 `pattern_tag == "NEUTRAL"` (常規走勢/無特別轉折)：代表第 2.5 層未觸發任何 V 轉或 A 頂型態，你絕對禁止在 `applied_skills` 中引用任何 2.5 層型態戰術！
-
 【中長期穩健投資哲學】：
-1. 你的投資風格是「中長期穩健投資」，必須極力避免頻繁交易、微調調倉及短線投機。交易印花稅與手續費滑價是利潤的殺手。
-2. 你必須進行多檔個股的橫向相對比較。除非某檔股票的技術總分在所有分析個股中「顯著突出」（即在技術面上具有絕對強勢的突破優勢），否則不應發出 BUY 決策。
+1. 你的投資風格是「中長期穩健投資」，必須極力避免頻繁交易與短線投機。交易印花稅與手續費滑價是利潤的殺手。
+2. 你必須進行多檔個股的橫向相對比較。對於技術總分名列前茅（如排名前 1-3 名，且總分高於買入門檻如 >= 75 分）且符合當前大盤氣候姿態的優質標的，你應果斷給予 `BUY` 買入決策進行部位配置（單筆下單金額由風險限額乘數防護控管），切勿因盲目保守而錯失優質防禦建倉點。
 3. 除非某檔持股技術面極度崩壞跌破防線，否則不應輕易發出 SELL 決策。
-4. 在一般評分或無極端行情下，你應該極度傾向給予 `HOLD` (觀望續抱/不做買賣)，以控制週轉率。
+4. 避免對微小分差進行無效調倉；但在大盤姿態允許的資金範圍內，應積極為強勢高分標的建立組合配置。
 5. 買入決策時，技術面總分必須是群體中最優秀的前列；賣出決策時，總分必須顯著低於其他標的。
 6. 【戰術 Skills 引用與可解釋性】：
    - 僅在此決策【有真正參考或引用】當前月度生效之戰術 Skills（取自上述 【當前生效之第 3 層月度動態戰術 Skills 規範】）或第 2.5 層 V轉/A頂型態時，才在 `applied_skills` 陣列中填入真實條文。
@@ -220,7 +221,12 @@ def generate_portfolio_decisions(
 
 請嚴格遵守以下交易配置限制：
 1. 配置權重 `allocation_weight` 代表買入優先度 (1-5)。若 action 為 SELL 或 HOLD 且你打算出清此檔，權重應填寫 0。
-2. 【大盤防禦降額】：如果大盤氣候呈現 BEARISH_TREND 或交易姿態為 DEFENSIVE / STRONG_DEFENSIVE，請大幅降低持股權重或增加現金比例，在此氣候下原則上「禁止新買入任何個股」。
+2. 【大盤姿態與資金儲備連動】：
+   - `STRONG_ATTACK` / `MODERATE_ATTACK`：積極進攻或穩健布局，將現金儲備控制在 5%~30% 以內。
+   - `CHOPPY_TACTICAL`：震盪靈活，偏好區間與逢低打底，保持 30%~50% 現金儲備。
+   - `DEFENSIVE_ACCUMULATION` (防禦承接)：大盤修正，維繫 50%~75% 現金儲備。非一刀切禁止買入，允許對高安全評分/高總分優質標的進行小額/零股防禦建倉。
+   - `STRICT_DEFENSE` (極度保守)：現金為王，維繫 75%~90% 最高現金儲備，優先清減弱勢部位，限制大額新開倉。
+
 
 
 請嚴格遵守以下指示：
@@ -263,7 +269,7 @@ def generate_portfolio_decisions(
     }
 
     try:
-        print(" [決策代理] 呼叫投資組合經理決策層 (Gemini)...")
+        print(f" [決策代理] 呼叫投資組合經理決策層 (引擎: {config.ai_provider})...")
         raw_pm_response = call_gemini_fn(
             prompt=pm_user_prompt,
             system_instruction=pm_system_instruction,
@@ -343,6 +349,10 @@ def generate_portfolio_decisions(
         holding_qty = float(matching_holding.get("quantity", 0)) if matching_holding else 0.0
 
         # 上下文脈絡校正 (Context Guard)：精準防範 LLM 脈絡不符的戰術引用
+        v_prob = safe_int(ana.get("v_reversal_prob"), default=20)
+        a_prob = safe_int(ana.get("a_top_prob"), default=20)
+        pattern_tag = str(ana.get("pattern_tag", "NEUTRAL")).strip().upper()
+
         clean_applied_skills = []
         for sk in applied_skills:
             sk_str = str(sk).strip()
@@ -351,6 +361,12 @@ def generate_portfolio_decisions(
                 continue
             # 2. 若總分高於等於買入門檻 (total_score >= min_score)，過濾包含「未達買入門檻」條款
             if total_score >= min_score and "未達" in sk_str and "門檻" in sk_str:
+                continue
+            # 3. 嚴格強效過濾第 2.5 層型態戰術：未達 V轉 門檻 (v_prob < 50 且 pattern_tag != 'V_SHAPE_REVERSAL')，禁止出現 V型/V轉 戰術！
+            if ("V型" in sk_str or "V轉" in sk_str) and (v_prob < 50 and pattern_tag != "V_SHAPE_REVERSAL"):
+                continue
+            # 4. 嚴格強效過濾第 2.5 層型態戰術：未達 A頂 門檻 (a_prob < 50 且 pattern_tag != 'A_SHAPE_TOP_WARNING')，禁止出現 A型/A頂 戰術！
+            if ("A型" in sk_str or "A頂" in sk_str) and (a_prob < 50 and pattern_tag != "A_SHAPE_TOP_WARNING"):
                 continue
             clean_applied_skills.append(sk_str)
         

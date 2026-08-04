@@ -11,8 +11,10 @@ class TestRegimeAgent(unittest.TestCase):
         """
         res = generate_market_regime([])
         self.assertEqual(res["regime"], "CALM_RANGE")
-        self.assertEqual(res["posture"], "NORMAL")
-        self.assertEqual(res["risk_multiplier"], 1.0)
+        self.assertEqual(res["posture"], "CHOPPY_TACTICAL")
+        self.assertEqual(res["risk_multiplier"], 0.7)
+        self.assertEqual(res["target_cash_ratio"], 0.35)
+        self.assertIn("PULLBACK", res["allowed_buy_styles"])
         self.assertIn("無可用的大盤 K 線數據", res["reason"])
 
     @patch("src.agents.regime_agent.call_gemini_with_rotation")
@@ -21,8 +23,11 @@ class TestRegimeAgent(unittest.TestCase):
         測試模擬 Gemini 成功回傳結果的情境
         """
         mock_response = (
-            '{"regime": "BULLISH_TREND", "posture": "AGGRESSIVE", '
-            '"risk_multiplier": 1.0, "reason": "大盤收盤價站在 MA20 之上，多頭強勢。"}'
+            '{"regime": "STRONG_BULL", "posture": "STRONG_ATTACK", '
+            '"risk_multiplier": 0.95, "target_cash_ratio": 0.10, '
+            '"allowed_buy_styles": ["BREAKOUT", "PULLBACK"], '
+            '"tactical_directive": "積極強攻，放大倉位。", '
+            '"reason": "大盤收盤價站在 MA20 之上，多頭強勢。"}'
         )
         mock_call.return_value = mock_response
 
@@ -31,7 +36,11 @@ class TestRegimeAgent(unittest.TestCase):
         ]
         
         res = generate_market_regime(dummy_klines)
-        self.assertEqual(res["regime"], "BULLISH_TREND")
-        self.assertEqual(res["posture"], "AGGRESSIVE")
-        self.assertEqual(res["risk_multiplier"], 1.0)
+        self.assertEqual(res["regime"], "STRONG_BULL")
+        self.assertEqual(res["posture"], "STRONG_ATTACK")
+        self.assertEqual(res["risk_multiplier"], 0.95)
+        self.assertEqual(res["target_cash_ratio"], 0.10)
+        self.assertIn("BREAKOUT", res["allowed_buy_styles"])
+        self.assertEqual(res["tactical_directive"], "積極強攻，放大倉位。")
         self.assertEqual(res["reason"], "大盤收盤價站在 MA20 之上，多頭強勢。")
+

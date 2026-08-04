@@ -136,6 +136,10 @@ def _merge_decrypted_credentials(cfg: dict):
         if "geminiApiKeys" in decrypted_creds and decrypted_creds["geminiApiKeys"]:
             cfg["GEMINI_API_KEYS"] = ",".join(decrypted_creds["geminiApiKeys"])
 
+        # 3.5 整合 OpenAI 金鑰設定
+        if "openaiApiKey" in decrypted_creds and decrypted_creds["openaiApiKey"]:
+            cfg["OPENAI_API_KEY"] = decrypted_creds["openaiApiKey"]
+
         # 4. 整合 Discord 設定
         if "discord" in decrypted_creds:
             d_creds = decrypted_creds["discord"]
@@ -472,6 +476,30 @@ class AppConfig:
             return db_cfg["GEMINI_MODEL"]
         val = get_config_val("GEMINI_MODEL")
         return val if val is not None else self._gemini_model
+
+    @property
+    def openai_api_key(self) -> Optional[str]:
+        db_cfg = _get_db_config_cached()
+        if "OPENAI_API_KEY" in db_cfg and db_cfg["OPENAI_API_KEY"]:
+            return db_cfg["OPENAI_API_KEY"]
+        val = get_config_val("OPENAI_API_KEY")
+        return val if val else None
+
+    @property
+    def openai_model(self) -> str:
+        db_cfg = _get_db_config_cached()
+        if "OPENAI_MODEL" in db_cfg and db_cfg["OPENAI_MODEL"]:
+            return db_cfg["OPENAI_MODEL"]
+        val = get_config_val("OPENAI_MODEL")
+        return val if val is not None else "gpt-4o-mini"
+
+    @property
+    def ai_provider(self) -> str:
+        db_cfg = _get_db_config_cached()
+        if "AI_PROVIDER" in db_cfg and db_cfg["AI_PROVIDER"]:
+            return db_cfg["AI_PROVIDER"].lower()
+        val = get_config_val("AI_PROVIDER")
+        return val.lower() if val is not None else "auto"
 
     @property
     def sandbox_start_date(self) -> str:

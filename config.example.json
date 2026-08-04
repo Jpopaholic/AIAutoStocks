@@ -1,5 +1,7 @@
 {
-  "GEMINI_MODEL": "gemini-1.5-flash",
+  "GEMINI_MODEL": "gemini-3.6-flash",
+  "AI_PROVIDER": "auto",
+  "OPENAI_MODEL": "gpt-4o-mini",
   "MASTER_KEY": "your-secure-passphrase-to-decrypt-credentials-file",
   "TRADING_LIMIT_SINGLE_STOCK_PCT": 0.05,
   "TRADING_LIMIT_DAILY_TOTAL_PCT": 0.15,

@@ -1149,8 +1149,20 @@
                             <input type="date" class="form-control" id="cfg-sandbox-end">
                         </div>
                         <div class="form-row">
+                            <label for="cfg-ai-provider">AI 決策引擎 (AI_PROVIDER)</label>
+                            <select class="form-control" id="cfg-ai-provider">
+                                <option value="auto">自動偵測 (Auto - 優先使用 OpenAI 備援 Gemini)</option>
+                                <option value="openai">OpenAI 優先 (OpenAI API)</option>
+                                <option value="gemini">Gemini 優先 (Gemini API)</option>
+                            </select>
+                        </div>
+                        <div class="form-row">
+                            <label for="cfg-openai-model">OpenAI 決策模型 (OPENAI_MODEL)</label>
+                            <input type="text" class="form-control" id="cfg-openai-model" placeholder="例如: gpt-4o-mini 或 gpt-4o">
+                        </div>
+                        <div class="form-row">
                             <label for="cfg-model">Gemini 決策模型 (GEMINI_MODEL)</label>
-                            <input type="text" class="form-control" id="cfg-model" placeholder="例如: gemini-1.5-flash">
+                            <input type="text" class="form-control" id="cfg-model" placeholder="例如: gemini-3.6-flash">
                         </div>
                         <div class="form-row">
                             <label for="cfg-timezone">系統時區 (TIMEZONE)</label>
@@ -2122,6 +2134,8 @@
                 document.getElementById("cfg-hard-stop-loss").value = data.HARD_STOP_LOSS_PCT;
                 document.getElementById("cfg-paper").value = data.PAPER_TRADING_MODE;
                 document.getElementById("cfg-model").value = data.GEMINI_MODEL;
+                document.getElementById("cfg-ai-provider").value = data.AI_PROVIDER || "auto";
+                document.getElementById("cfg-openai-model").value = data.OPENAI_MODEL || "gpt-4o-mini";
                 document.getElementById("cfg-timezone").value = data.TAIWAN_STOCK_TIMEZONE;
                 document.getElementById("cfg-sandbox-start").value = data.SANDBOX_START_DATE;
                 document.getElementById("cfg-sandbox-end").value = data.SANDBOX_END_DATE;
@@ -2138,6 +2152,8 @@
             const hardStopLoss = document.getElementById("cfg-hard-stop-loss").value;
             const paper = document.getElementById("cfg-paper").value;
             const model = document.getElementById("cfg-model").value;
+            const aiProvider = document.getElementById("cfg-ai-provider").value;
+            const openaiModel = document.getElementById("cfg-openai-model").value;
             const sandboxStart = document.getElementById("cfg-sandbox-start").value;
             const sandboxEnd = document.getElementById("cfg-sandbox-end").value;
 
@@ -2153,6 +2169,8 @@
                             HARD_STOP_LOSS_PCT: hardStopLoss,
                             PAPER_TRADING_MODE: paper,
                             GEMINI_MODEL: model,
+                            AI_PROVIDER: aiProvider,
+                            OPENAI_MODEL: openaiModel,
                             SANDBOX_START_DATE: sandboxStart,
                             SANDBOX_END_DATE: sandboxEnd
                         }
@@ -2242,7 +2260,7 @@
 
         // 觸發交易任務
         async function triggerTradingJob() {
-            if (!confirm("確定要現在立即觸發一輪全自動交易決策嗎？\n(將會透過 Gemini LLM 進行選股配比並嘗試進行下單模擬/真實交易)")) return;
+            if (!confirm("確定要現在立即觸發一輪全自動交易決策嗎？\n(將會透過 AI 決策引擎 (LLM) 進行選股配比並嘗試進行下單模擬/真實交易)")) return;
             
             try {
                 const response = await authFetch(`${API_BASE}/api/trigger`, {

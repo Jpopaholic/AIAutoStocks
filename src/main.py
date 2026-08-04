@@ -767,7 +767,7 @@ def _run_sandbox_simulation_internal(stock_codes: List[str], start_date: str, en
                 sandbox_step_delay = 2.0
             
             if sandbox_step_delay > 0:
-                print(f" [模擬器] 為了防範 Gemini RPM/TPM 上限，主動暫停 {sandbox_step_delay} 秒...")
+                print(f" [模擬器] 為了防範 AI API 頻率限制 (RPM/TPM)，主動暫停 {sandbox_step_delay} 秒...")
                 time.sleep(sandbox_step_delay)
 
             next_day = sandbox_simulator.advance_simulation_step()

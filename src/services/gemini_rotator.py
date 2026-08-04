@@ -10,7 +10,7 @@ warnings.filterwarnings("ignore", category=FutureWarning, message="(?s).*non-sup
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, List
 import google.generativeai as genai
-from google.api_core.exceptions import ResourceExhausted, GoogleAPICallError
+from google.api_core.exceptions import ResourceExhausted, GoogleAPICallError, DeadlineExceeded
 
 from src.config import config
 from src.services.supabase_client import get_gemini_keys_state, update_gemini_key_state, log_system_event
@@ -243,18 +243,20 @@ def _record_key_request(key_hash: str, tokens: int) -> None:
         "tokens": tokens
     })
 
-def call_gemini_with_rotation(
+def _call_gemini_direct(
     prompt: str,
     system_instruction: Optional[str] = None,
     model_name: Optional[str] = None,
     generation_config: Optional[Dict[str, Any]] = None,
     max_api_retries: int = 5,
-    timeout: int = 90
+    timeout: Optional[int] = None
 ) -> str:
     """
-    包裝 google-generativeai 接口，自動執行金鑰輪替、主動速率限制 Pacing 及冷卻與重試機制。
-    預設設定 think_level 為 medium (thinking_budget: 2048)，搭配 90s 超時防範 504 錯誤。
+    直接執行 Google Generative AI 端點調用與金鑰輪替機制。
     """
+    if timeout is None:
+        timeout = getattr(config, "gemini_timeout", 120)
+
     if not model_name:
         model_name = config.gemini_model
 
@@ -349,9 +351,17 @@ def call_gemini_with_rotation(
             )
             print(f" [金鑰輪替器] 金鑰 [{key_hash[:8]}] 觸發 429，開始進行金鑰輪替...")
             
+        except DeadlineExceeded as e:
+            last_error = e
+            print(f" [金鑰輪替器] 金鑰 [{key_hash[:8]}] 調用超時 (504 Deadline Expired): Google API 伺服器回應超過 {timeout} 秒限制，嘗試輪替重試...")
+            time.sleep(3)
         except GoogleAPICallError as e:
             last_error = e
-            print(f" [金鑰輪替器] 金鑰 [{key_hash[:8]}] 調用失敗: {str(e)}，嘗試其他金鑰。")
+            err_msg = str(e)
+            if "504" in err_msg or "deadline expired" in err_msg.lower():
+                print(f" [金鑰輪替器] 金鑰 [{key_hash[:8]}] 調用超時 (504 Deadline Expired): Google API 伺服器回應超過 {timeout} 秒限制，嘗試輪替重試...")
+            else:
+                print(f" [金鑰輪替器] 金鑰 [{key_hash[:8]}] 調用失敗: {err_msg}，嘗試其他金鑰。")
             time.sleep(2)
         except Exception as e:
             last_error = e
@@ -360,4 +370,26 @@ def call_gemini_with_rotation(
 
     log_system_event("ERROR", f"已嘗試多組金鑰輪替後仍調用失敗。最後錯誤: {str(last_error)}")
     raise RuntimeError(f"經過重試後，調用 Gemini API 仍失敗。最後錯誤: {str(last_error)}")
+
+def call_gemini_with_rotation(
+    prompt: str,
+    system_instruction: Optional[str] = None,
+    model_name: Optional[str] = None,
+    generation_config: Optional[Dict[str, Any]] = None,
+    max_api_retries: int = 5,
+    timeout: Optional[int] = None
+) -> str:
+    """
+    對外開放之 AI 調用入口：透過 llm_router 統一路由處理 (支援 OpenAI 與 Gemini 雙引擎)。
+    """
+    from src.services.llm_router import call_llm_with_rotation
+    return call_llm_with_rotation(
+        prompt=prompt,
+        system_instruction=system_instruction,
+        model_name=model_name,
+        generation_config=generation_config,
+        max_api_retries=max_api_retries,
+        timeout=timeout
+    )
+
 
