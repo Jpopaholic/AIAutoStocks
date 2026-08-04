@@ -252,6 +252,10 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
         stock_name = get_stock_name(stock_code)
         stock_label = f"{stock_code} ({stock_name})" if stock_name else stock_code
         timing_sum = stock_info.get("entry_timing_summary", {})
+        exp_up_str = stock_info.get("expected_upside_str", "--")
+        exp_down_str = stock_info.get("expected_drawdown_str", "--")
+        act_pnl_str = stock_info.get("actual_pnl_str", "無平倉交易")
+
         l2_map_prompt = (
             f"你是一位頂級量化基金的交易執行與部位風控分析師。請對標的 {stock_label} 在 {review_month_str} 月份的交易與觀望執行進行診斷。\n"
             f"【注意：1. 本階段請專注於入場 Timing、追高/遲入場、觀望錯失機會、成交滑價與離場風控！ 2. 回傳 JSON 中的 stock_code 欄位必須嚴格保持為 '{stock_code}'，不得填寫複雜文字或免責聲明。】\n\n"
@@ -259,6 +263,9 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
             f"【個股交易與觀望數據】\n"
             f"- 成交單筆數: {len(stock_info.get('filled_orders', []))}\n"
             f"- 未成交/被取消單筆數: {len(stock_info.get('cancelled_orders', []))}\n"
+            f"- 期望潛在獲利 (Mean ± Std): {exp_up_str}\n"
+            f"- 期望潛在回撤 (Mean ± Std): {exp_down_str}\n"
+            f"- 實際實現損益: {act_pnl_str}\n"
             f"- 買單平均入場價位分位數 (Avg Entry Percentile): {timing_sum.get('avg_entry_percentile', 50.0)}% (0%=最低價, 100%=最高價)\n"
             f"- 疑似追高買單筆數 (買在頂部 20% 區間): {timing_sum.get('chasing_high_count', 0)} 筆\n"
             f"- 疑似太晚入場/波段頂點買單筆數: {timing_sum.get('late_entry_count', 0)} 筆\n"
@@ -276,12 +283,18 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
             parsed_l2 = json.loads(l2_res)
             if isinstance(parsed_l2, dict):
                 parsed_l2["stock_code"] = stock_code
+                parsed_l2["expected_upside_str"] = exp_up_str
+                parsed_l2["expected_drawdown_str"] = exp_down_str
+                parsed_l2["actual_pnl_str"] = act_pnl_str
             stock_execution_reports.append(parsed_l2)
         except Exception as e:
             print(f" [Monthly Review Agent] 警告: 個股 {stock_code} Layer 2 Map 檢討失敗: {e}")
             stock_execution_reports.append({
                 "stock_code": stock_code,
-                "execution_retrospective": f"個股 {stock_code} 交易執行診斷跳過 (LLM 呼叫異常)。"
+                "execution_retrospective": f"個股 {stock_code} 交易執行診斷跳過 (LLM 呼叫異常)。",
+                "expected_upside_str": exp_up_str,
+                "expected_drawdown_str": exp_down_str,
+                "actual_pnl_str": act_pnl_str
             })
 
     # Layer 2 Reduce: CIO 組合執行診斷與 Execution Skills 產出
@@ -385,11 +398,15 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
     for i, sc in enumerate(per_stock_data.keys()):
         ind_rep = stock_indicator_reports[i] if i < len(stock_indicator_reports) else {}
         exe_rep = stock_execution_reports[i] if i < len(stock_execution_reports) else {}
+        stock_info = per_stock_data.get(sc, {})
         stock_reports.append({
             "stock_code": sc,
             "indicator_retrospective": ind_rep.get("indicator_retrospective", ""),
             "anomaly_trait": ind_rep.get("anomaly_trait"),
             "execution_retrospective": exe_rep.get("execution_retrospective", ""),
+            "expected_upside_str": exe_rep.get("expected_upside_str") or stock_info.get("expected_upside_str", "--"),
+            "expected_drawdown_str": exe_rep.get("expected_drawdown_str") or stock_info.get("expected_drawdown_str", "--"),
+            "actual_pnl_str": exe_rep.get("actual_pnl_str") or stock_info.get("actual_pnl_str", "無平倉交易"),
             "stock_retrospective": (
                 f"【指標診斷】{ind_rep.get('indicator_retrospective', '')}\n"
                 f"【交易執行診斷】{exe_rep.get('execution_retrospective', '')}"

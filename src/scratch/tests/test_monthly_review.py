@@ -236,6 +236,52 @@ class TestMonthlyReviewSuite(unittest.TestCase):
         res_false = has_monthly_review_run(2026, 8, is_paper=True)
         self.assertFalse(res_false)
 
+    def test_per_stock_expected_metrics_formatting(self):
+        """驗證 Layer 2 個股期望獲利與期望回撤 (Mean ± Std) 及實際實現損益之格式輸出"""
+        from src.services.discord_notifier import send_periodic_review_notification
+        
+        review_data = {
+            "review_month": "2026-07",
+            "metrics": {
+                "total_trades": 2, "win_rate": 50.0, "total_realized_pnl": 12000.0,
+                "payoff_ratio": 1.5, "profit_factor": 1.4, "mean_upside_ratio": 0.05,
+                "std_upside_ratio": 0.02, "mean_drawdown_ratio": -0.02, "std_drawdown_ratio": 0.01
+            },
+            "stock_execution_reports": [
+                {
+                    "stock_code": "2330",
+                    "execution_retrospective": "2330 交易執行良好",
+                    "expected_upside_str": "+8.50% (±2.10%)",
+                    "expected_drawdown_str": "-3.20% (±1.10%)",
+                    "actual_pnl_str": "+15,000 元 (+5.00%) [1筆平倉]"
+                }
+            ],
+            "stock_indicator_reports": [
+                {"stock_code": "2330", "indicator_retrospective": "指標穩定"}
+            ],
+            "indicator_summary": "指標診斷完成",
+            "cio_summary": "執行總評完成",
+            "overall_summary": "戰術總結完成",
+            "key_learnings": ["嚴格停損"],
+            "execution_skills": {"tactical_rules": ["分批建倉"]}
+        }
+
+        with patch("src.services.discord_notifier._send_discord_webhook") as mock_webhook:
+            send_periodic_review_notification(review_data, review_type="月度")
+            # 檢查傳送至 webhook 的呼叫次數與內容
+            self.assertGreaterEqual(mock_webhook.call_count, 3)
+            # 檢查包含附件的第三層呼叫
+            file_args = None
+            for call in mock_webhook.call_args_list:
+                if "file_tuple" in call.kwargs:
+                    file_args = call.kwargs["file_tuple"]
+            self.assertIsNotNone(file_args)
+            md_content = file_args[1]
+            self.assertIn("期望獲利 (Mean ± Std)", md_content)
+            self.assertIn("+8.50% (±2.10%)", md_content)
+            self.assertIn("實際實現損益", md_content)
+            self.assertIn("+15,000 元 (+5.00%)", md_content)
+
 if __name__ == "__main__":
     unittest.main()
 

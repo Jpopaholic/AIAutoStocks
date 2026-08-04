@@ -458,6 +458,52 @@ def aggregate_monthly_data(year: int, month: int, is_paper: bool = False) -> Dic
 
         avg_sc_percentile = (sum(sc_entry_percentiles) / len(sc_entry_percentiles)) if sc_entry_percentiles else 0.5
 
+        # 計算個股期望獲利與期望回撤 (Upside & Drawdown 之 Mean 與 Std Dev)
+        sc_upside_ratios: List[float] = []
+        sc_drawdown_ratios: List[float] = []
+        for s in sc_scores:
+            an_date = str(s.get("analysis_date"))
+            if sc_klines:
+                after_klines = [k for k in sc_klines if str(k.get("date")) >= an_date]
+                if after_klines:
+                    base_k = after_klines[0]
+                    base_p = float(base_k.get("close") or base_k.get("open") or 0.0)
+                    if base_p > 0:
+                        max_p = max([float(k.get("high") or base_p) for k in after_klines])
+                        min_p = min([float(k.get("low") or base_p) for k in after_klines])
+                        sc_upside_ratios.append((max_p - base_p) / base_p)
+                        sc_drawdown_ratios.append((min_p - base_p) / base_p)
+
+        sc_mean_up, sc_std_up = calculate_mean_and_std(sc_upside_ratios)
+        sc_mean_down, sc_std_down = calculate_mean_and_std(sc_drawdown_ratios)
+
+        # 計算個股實際平倉損益 (Realized PnL & ROI)
+        sc_filled_sells = [o for o in sc_filled_orders if str(o.get("action") or "").upper() == "SELL"]
+        sc_realized_pnl = sum(float(o.get("realized_pnl") or 0.0) for o in sc_filled_sells)
+        sc_sell_count = len(sc_filled_sells)
+        
+        sc_win_rois: List[float] = []
+        sc_loss_rois: List[float] = []
+        for s_order in sc_filled_sells:
+            pnl = float(s_order.get("realized_pnl") or 0.0)
+            amt = float(s_order.get("total_amount") or 0.0)
+            cost = amt - pnl if amt > pnl else amt
+            roi = pnl / cost if cost > 0 else 0.0
+            if pnl > 0:
+                sc_win_rois.append(roi)
+            elif pnl < 0:
+                sc_loss_rois.append(roi)
+
+        all_sc_rois = sc_win_rois + sc_loss_rois
+        sc_avg_roi_pct = (sum(all_sc_rois) / len(all_sc_rois) * 100.0) if all_sc_rois else 0.0
+
+        if sc_sell_count > 0:
+            actual_pnl_display = f"{sc_realized_pnl:+,.0f} 元 ({sc_avg_roi_pct:+.2f}%) [{sc_sell_count}筆平倉]"
+        elif sc_filled_orders:
+            actual_pnl_display = "僅建立買單 (尚無平倉)"
+        else:
+            actual_pnl_display = "無交易"
+
         per_stock_data[sc] = {
             "stock_code": sc,
             "scores": sc_scores,
@@ -466,6 +512,14 @@ def aggregate_monthly_data(year: int, month: int, is_paper: bool = False) -> Dic
             "cancelled_orders": sc_cancelled_orders,
             "klines": sc_klines,
             "price_range_ratio": round(sc_range, 4),
+            "expected_upside_mean": round(sc_mean_up, 4),
+            "expected_upside_std": round(sc_std_up, 4),
+            "expected_drawdown_mean": round(sc_mean_down, 4),
+            "expected_drawdown_std": round(sc_std_down, 4),
+            "expected_upside_str": f"+{sc_mean_up * 100.0:.2f}% (±{sc_std_up * 100.0:.2f}%)",
+            "expected_drawdown_str": f"{sc_mean_down * 100.0:.2f}% (±{sc_std_down * 100.0:.2f}%)",
+            "realized_pnl": round(sc_realized_pnl, 2),
+            "actual_pnl_str": actual_pnl_display,
             "entry_timing_summary": {
                 "filled_buy_count": len(sc_filled_buys),
                 "avg_entry_percentile": round(avg_sc_percentile * 100.0, 1),

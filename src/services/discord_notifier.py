@@ -779,14 +779,30 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
     target_exe_reports = stock_exe_reports if stock_exe_reports else stock_reports
     for s_rep in target_exe_reports:
         sc = s_rep.get("stock_code", "")
+        sn = get_stock_name(sc)
+        name_str = f" ({sn})" if sn else ""
         retro = s_rep.get("execution_retrospective") or s_rep.get("stock_retrospective", "")
+
+        exp_up = s_rep.get("expected_upside_str", "")
+        exp_down = s_rep.get("expected_drawdown_str", "")
+        actual_pnl = s_rep.get("actual_pnl_str", "")
+
+        metrics_text = ""
+        if exp_up or exp_down or actual_pnl:
+            metrics_text = f"\n\n**【個股期望值與實際損益】**\n"
+            if exp_up:
+                metrics_text += f"• **期望獲利 (Mean ± Std)**: `{exp_up}`\n"
+            if exp_down:
+                metrics_text += f"• **期望回撤 (Mean ± Std)**: `{exp_down}`\n"
+            if actual_pnl:
+                metrics_text += f"• **實際實現損益**: `{actual_pnl}`\n"
 
         stock_payload = {
             "username": f"AI 檢討 AI - Layer 2 個股執行診斷 ({period_label})",
             "embeds": [
                 {
-                    "title": f"⚔️ 個股交易執行復盤: {sc} (期間: {review_month})",
-                    "description": _safe_embed_description(retro),
+                    "title": f"⚔️ 個股交易執行復盤: {sc}{name_str} (期間: {review_month})",
+                    "description": _safe_embed_description(f"{retro}{metrics_text}"),
                     "color": 15844367, # 金黃色
                     "footer": {"text": f"AIAutoStocks Layer 2 執行診斷 · {sc}"},
                     "timestamp": ts
@@ -834,7 +850,22 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
         sn = get_stock_name(sc)
         name_str = f" ({sn})" if sn else ""
         retro = s_rep.get("execution_retrospective") or s_rep.get("stock_retrospective", "無")
-        exe_md_blocks.append(f"### 🛡️ 標的 `{sc}`{name_str}\n{retro}")
+
+        exp_up = s_rep.get("expected_upside_str", "")
+        exp_down = s_rep.get("expected_drawdown_str", "")
+        actual_pnl = s_rep.get("actual_pnl_str", "")
+
+        metrics_md = ""
+        if exp_up or exp_down or actual_pnl:
+            metrics_md = "\n> 📊 **個股期望值與損益統計**:\n"
+            if exp_up:
+                metrics_md += f"> • **期望獲利 (Mean ± Std)**: `{exp_up}`\n"
+            if exp_down:
+                metrics_md += f"> • **期望回撤 (Mean ± Std)**: `{exp_down}`\n"
+            if actual_pnl:
+                metrics_md += f"> • **實際實現損益**: `{actual_pnl}`\n"
+
+        exe_md_blocks.append(f"### 🛡️ 標的 `{sc}`{name_str}\n{retro}\n{metrics_md}")
     exe_reports_md = "\n\n".join(exe_md_blocks) if exe_md_blocks else "無個股執行診斷數據。"
 
     # =====================================================================
@@ -961,11 +992,17 @@ def send_test_notification(webhook_type: str = "monthly_review", test_mode: str 
             "stock_execution_reports": [
                 {
                     "stock_code": "2330",
-                    "execution_retrospective": "買單分位數 22%，成功佈局於波段相對低點，無追高現象。"
+                    "execution_retrospective": "買單分位數 22%，成功佈局於波段相對低點，無追高現象。",
+                    "expected_upside_str": "+5.20% (±1.80%)",
+                    "expected_drawdown_str": "-2.10% (±0.90%)",
+                    "actual_pnl_str": "+35,600 元 (+8.20%) [5筆平倉]"
                 },
                 {
                     "stock_code": "0051",
-                    "execution_retrospective": "委託單滑價控制極佳 (< 0.1%)，移動停損機制運作良好。"
+                    "execution_retrospective": "委託單滑價控制極佳 (< 0.1%)，移動停損機制運作良好。",
+                    "expected_upside_str": "+3.10% (±1.10%)",
+                    "expected_drawdown_str": "-1.50% (±0.60%)",
+                    "actual_pnl_str": "僅建立買單 (尚無平倉)"
                 }
             ],
             "indicator_summary": "【測試】Layer 1 技術指標與評分總診斷運作良好，V 型反彈與 A 頂預警機制正常。",
