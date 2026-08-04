@@ -56,8 +56,10 @@ def _call_openai_api(
 
         # 某些 OpenAI 推理模型 (如 o1, o3-mini) 不支援自訂 temperature (僅支援預設 1)
         is_reasoning_model = any(model_name.startswith(prefix) for prefix in ["o1", "o3", "o-"])
-        if "temperature" in generation_config and not is_reasoning_model:
-            kwargs["temperature"] = float(generation_config["temperature"])
+        if "temperature" in generation_config:
+            if not is_reasoning_model:
+                kwargs["temperature"] = float(generation_config["temperature"])
+        
         if "response_mime_type" in generation_config and generation_config["response_mime_type"] == "application/json":
             kwargs["response_format"] = {"type": "json_object"}
 
