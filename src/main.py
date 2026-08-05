@@ -838,19 +838,27 @@ def run_liquidate_job() -> None:
             if latest_price <= 0:
                 raise ValueError("無法獲取即時報價、歷史 K 線收盤價或持股平均成本，無參考成交價")
 
-            print(f" [下車引擎] 獲取最新參考價: {latest_price} 元")
+            from src.services.health_check import calculate_buffered_order_price
+            sell_order_price, buffer_pct, _ = calculate_buffered_order_price(
+                base_price=latest_price,
+                stock_code=stock_code,
+                action="SELL",
+                is_liquidate=True
+            )
+
+            print(f" [下車引擎] 最新參考價: {latest_price} 元 | 平倉讓價委託價: {sell_order_price} 元 ({buffer_pct*100:+.1f}%)")
             
             # 送出賣出委託
             order_res = broker_connector.place_order(
                 stock_code=stock_code,
                 action="SELL",
-                price=latest_price,
+                price=sell_order_price,
                 quantity=quantity
             )
             if order_res:
                 liquidated_orders.append(order_res)
             success_count += 1
-            print(f" 成功：已送出 {stock_code} 的賣出下單 (數量: {quantity:.0f} 股，價格: {latest_price} 元)")
+            print(f" 成功：已送出 {stock_code} 的平倉賣出下單 (數量: {quantity:.0f} 股，委託價: {sell_order_price} 元 / 參考價: {latest_price} 元)")
         except Exception as e:
             fail_count += 1
             err_msg = f"下車賣出 {stock_code} 失敗: {str(e)}"

@@ -1,5 +1,6 @@
 import os
 import sys
+import math
 import unittest
 from unittest.mock import patch, MagicMock
 
@@ -93,10 +94,10 @@ class TestRiskLimitAlignment(unittest.TestCase):
         self.assertEqual(tsmc_decision["stock_code"], "2330")
         self.assertEqual(tsmc_decision["action"], "BUY")
         
-        # The quantity should be limited to (single_limit * multiplier) / price
-        # (20,000 * 0.5) / 1000 = 10 shares
-        # If it didn't apply the multiplier, it would be 20 shares (20,000 / 1000)
-        self.assertEqual(tsmc_decision["quantity"], 10.0)
+        # The quantity should be limited to (single_limit * multiplier) / order_price
+        # (20,000 * 0.5) / 1010.0 (including +1.0% price buffer for score=80) = 9 shares
+        expected_qty = math.floor(10000.0 / tsmc_decision["price"])
+        self.assertEqual(tsmc_decision["quantity"], expected_qty)
 
 if __name__ == "__main__":
     unittest.main()

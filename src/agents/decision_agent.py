@@ -383,22 +383,29 @@ def generate_portfolio_decisions(
         
         # 護欄 1：智慧等候平倉排隊中股票處理 (尊重 AI 決策，移除硬編碼 score < 70 強退)
         if code in pending_stocks:
+            effective_price = price
             if holding_qty <= 0:
                 action = "HOLD"
                 qty = 0.0
                 decision_reason = f"【智慧平倉安全過濾】無持股庫存，強制觀望。{merged_reason}"
             elif action == "SELL":
                 qty = holding_qty
-                decision_reason = f"【智慧平倉排隊賣出】總評分 {total_score} 分，經理人建議賣出平倉。{merged_reason}"
+                from src.services.health_check import calculate_buffered_order_price
+                sell_p, sell_buf, _ = calculate_buffered_order_price(
+                    base_price=price, stock_code=code, action="SELL", total_score=total_score
+                )
+                effective_price = sell_p
+                decision_reason = f"【智慧平倉排隊賣出】總評分 {total_score} 分 (套用 {sell_buf*100:+.1f}% 讓價平倉緩衝，委託價 {sell_p} 元/參考價 {price} 元)，經理人建議賣出平倉。{merged_reason}"
             else:
-                action = "HOLD"
+                effective_price = price
                 qty = 0.0
                 decision_reason = f"【智慧平倉排隊暫緩】總評分 {total_score} 分，經理人評估暫緩賣出觀望。{merged_reason}"
             
             final_decisions.append({
                 "stock_code": code,
                 "action": action,
-                "price": price,
+                "price": effective_price,
+                "base_price": price,
                 "quantity": safe_float(qty, default=0.0, min_val=0.0),
                 "confidence": safe_float(total_score / 100.0, default=0.5, min_val=0.0, max_val=1.0),
                 "reason": decision_reason,
@@ -434,6 +441,7 @@ def generate_portfolio_decisions(
 
         # 已持有倉位 (解耦 score < 60 強制賣出，全權依據經理人動態 Skills 與 action 推理)
         if holding_qty > 0:
+            effective_price = price
             if action == "SELL":
                 if code in today_bought_stocks:
                     action = "HOLD"
@@ -441,7 +449,12 @@ def generate_portfolio_decisions(
                     decision_reason = f"【同日對沖防護護欄】今日已有買入成交紀錄，禁止同日反向賣出，維護交易紀律。{merged_reason}"
                 else:
                     qty = holding_qty
-                    decision_reason = f"【經理人決策賣出】總分 {total_score} 分，經理人依據動態戰術 Skills 建議賣出平倉。{merged_reason}"
+                    from src.services.health_check import calculate_buffered_order_price
+                    sell_p, sell_buf, _ = calculate_buffered_order_price(
+                        base_price=price, stock_code=code, action="SELL", total_score=total_score
+                    )
+                    effective_price = sell_p
+                    decision_reason = f"【經理人決策賣出】總分 {total_score} 分 (套用 {sell_buf*100:+.1f}% 讓價平倉緩衝，委託價 {sell_p} 元/參考價 {price} 元)，經理人依據動態戰術 Skills 建議賣出平倉。{merged_reason}"
             else:
                 action = "HOLD"
                 qty = 0.0
@@ -450,7 +463,8 @@ def generate_portfolio_decisions(
             final_decisions.append({
                 "stock_code": code,
                 "action": action,
-                "price": price,
+                "price": effective_price,
+                "base_price": price,
                 "quantity": safe_float(qty, default=0.0, min_val=0.0),
                 "confidence": safe_float(total_score / 100.0, default=0.5, min_val=0.0, max_val=1.0),
                 "reason": decision_reason,
@@ -541,11 +555,17 @@ def generate_portfolio_decisions(
             holding_qty = float(matching_holding.get("quantity", 0)) if matching_holding else 0.0
             
             # 若目前持有該股，需要檢查是否觸發風控賣出
+            effective_price = price
             if holding_qty > 0:
                 if total_score < 60:
                     action = "SELL"
                     qty = holding_qty
-                    decision_reason = f"【風控強制賣出】總分 {total_score} 分低於持有門檻 60 (趨勢: {trend}, 動能: {momentum}, 量能: {volume}, 安全: {safety}, 大盤: {regime_s})。{merged_reason}"
+                    from src.services.health_check import calculate_buffered_order_price
+                    sell_p, sell_buf, _ = calculate_buffered_order_price(
+                        base_price=price, stock_code=code, action="SELL", total_score=total_score
+                    )
+                    effective_price = sell_p
+                    decision_reason = f"【風控強制賣出】總分 {total_score} 分 (套用 {sell_buf*100:+.1f}% 讓價平倉緩衝，委託價 {sell_p} 元/參考價 {price} 元) 低於持有門檻 60 (趨勢: {trend}, 動能: {momentum}, 量能: {volume}, 安全: {safety}, 大盤: {regime_s})。{merged_reason}"
                 else:
                     action = "HOLD"
                     qty = 0.0
@@ -558,7 +578,8 @@ def generate_portfolio_decisions(
             final_decisions.append({
                 "stock_code": code,
                 "action": action,
-                "price": price,
+                "price": effective_price,
+                "base_price": price,
                 "quantity": qty,
                 "confidence": total_score / 100.0,
                 "reason": decision_reason,
@@ -608,17 +629,33 @@ def generate_portfolio_decisions(
         else:
             uncapped = [item[0] for item in new_uncapped]
 
-    # 計算初步股數與剩餘零星預算
+    # 14. 預先為每檔買進候選股計算包含溢價追價緩衝的最高委託限價 (Buffered Limit Price)
+    from src.services.health_check import calculate_buffered_order_price
+    buffered_info = {}
+    for cand in buy_candidates:
+        code = cand["stock_code"]
+        base_p = cand["price"]
+        t_score = cand["total_score"]
+        order_p, buf_pct, _ = calculate_buffered_order_price(
+            base_price=base_p, stock_code=code, action="BUY", total_score=t_score
+        )
+        buffered_info[code] = {
+            "order_price": order_p,
+            "buffer_pct": buf_pct,
+            "base_price": base_p
+        }
+
+    # 計算初步股數與剩餘零星預算（使用溢價後的上限價進行保守控管）
     quantities = {}
     costs = {}
     for cand in buy_candidates:
         code = cand["stock_code"]
-        price = cand["price"]
+        order_p = buffered_info[code]["order_price"]
         allocated = budgets[code]
         
-        qty = math.floor(allocated / price) if price > 0 else 0
+        qty = math.floor(allocated / order_p) if order_p > 0 else 0
         quantities[code] = qty
-        costs[code] = qty * price
+        costs[code] = qty * order_p
 
     # 處理因無條件捨去而留下來的零星預算
     leftover = total_budget - sum(costs.values())
@@ -627,21 +664,23 @@ def generate_portfolio_decisions(
     leftover_candidates = sorted(buy_candidates, key=lambda x: x["weight_factor"], reverse=True)
     for cand in leftover_candidates:
         code = cand["stock_code"]
-        price = cand["price"]
-        if price <= 0:
+        order_p = buffered_info[code]["order_price"]
+        if order_p <= 0:
             continue
             
-        while leftover >= price and (costs[code] + price) <= single_limit:
+        while leftover >= order_p and (costs[code] + order_p) <= single_limit:
             quantities[code] += 1
-            costs[code] += price
-            leftover -= price
+            costs[code] += order_p
+            leftover -= order_p
 
-    # 生成最終決策與原因描述
+    # 生成最終買進與觀望決策
     for cand in buy_candidates:
         code = cand["stock_code"]
         total_score = cand["total_score"]
         alloc_weight = cand["allocation_weight"]
-        price = cand["price"]
+        base_price = buffered_info[code]["base_price"]
+        order_price = buffered_info[code]["order_price"]
+        buf_pct = buffered_info[code]["buffer_pct"]
         reason = cand["reason"]
         qty = quantities[code]
         cost = costs[code]
@@ -650,10 +689,12 @@ def generate_portfolio_decisions(
             final_decisions.append({
                 "stock_code": code,
                 "action": "BUY",
-                "price": price,
+                "price": order_price,
+                "base_price": base_price,
+                "buffer_pct": buf_pct,
                 "quantity": safe_float(qty, default=0.0, min_val=0.0),
                 "confidence": safe_float(total_score / 100.0, default=0.5, min_val=0.0, max_val=1.0),
-                "reason": f"【投資組合加權分配買入】技術評定總分 {total_score} 分，經理人權重 {alloc_weight}，融合分配預算 {cost:,.0f} 元。{reason}",
+                "reason": f"【投資組合加權分配買入】評定總分 {total_score} 分 (套用 {buf_pct*100:+.1f}% 追價緩衝，委託價 {order_price} 元/參考價 {base_price} 元)，經理人權重 {alloc_weight}，預估預算 {cost:,.0f} 元。{reason}",
                 "trend_score": cand["trend"],
                 "momentum_score": cand["momentum"],
                 "volume_score": cand["volume"],
@@ -664,15 +705,16 @@ def generate_portfolio_decisions(
             remaining_cash -= cost
             remaining_daily_limit -= cost
         else:
-            if single_limit < price:
-                limit_desc = f"單股交易限額 {single_limit:,.0f} 元低於股票單價 {price:,.0f} 元"
+            if single_limit < order_price:
+                limit_desc = f"單股交易限額 {single_limit:,.0f} 元低於股票單價 {order_price:,.0f} 元"
             else:
-                limit_desc = f"融合分配比例過低且可用資金不足以買入 1 股 (分配額 {budgets[code]:,.0f} 元 < 單價 {price:,.0f} 元)"
+                limit_desc = f"融合分配比例過低且可用資金不足以買入 1 股 (分配額 {budgets[code]:,.0f} 元 < 單價 {order_price:,.0f} 元)"
                 
             final_decisions.append({
                 "stock_code": code,
                 "action": "HOLD",
-                "price": price,
+                "price": order_price,
+                "base_price": base_price,
                 "quantity": 0.0,
                 "confidence": total_score / 100.0,
                 "reason": f"【配置觀望】評分 {total_score} 達到配置標準，但因 {limit_desc} 無法配置。{reason}",

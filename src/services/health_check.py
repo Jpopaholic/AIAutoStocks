@@ -7,6 +7,58 @@ from src.config import config
 from src.services import supabase_client
 from src.services.broker_connector import align_to_tw_tick_size
 
+def calculate_buffered_order_price(
+    base_price: float,
+    stock_code: str,
+    action: str,
+    total_score: float = 75.0,
+    is_liquidate: bool = False
+) -> Tuple[float, float, float]:
+    """
+    依據 AI 評定分數/信心度與交易動作，計算包含溢價追價 (BUY) 或折價讓價 (SELL) 的最終限價委託價。
+    
+    :param base_price: 參考基準價 (如前一交易日收盤價或最新即時報價)
+    :param stock_code: 股票代號
+    :param action: "BUY" 或 "SELL"
+    :param total_score: AI 量化綜合評分 (0 ~ 100)
+    :param is_liquidate: 是否為一鍵下車/緊急平倉
+    :return: (order_price, buffer_pct, price_diff)
+             - order_price: 符合台股 Tick Size 的最終委託限價
+             - buffer_pct: 緩衝幅度比率 (例如 BUY +0.015, SELL -0.015)
+             - price_diff: 委託限價與基準價之差額 (order_price - base_price)
+    """
+    if base_price <= 0:
+        return 0.0, 0.0, 0.0
+
+    action_upper = str(action).upper()
+
+    if action_upper == "BUY":
+        # 買進溢價追價緩衝 (Premium Buffer)
+        if total_score >= 85:
+            buffer_pct = 0.015  # +1.5% 高信心度強勢追價
+        elif total_score >= 70:
+            buffer_pct = 0.010  # +1.0% 標準追價
+        else:
+            buffer_pct = 0.005  # +0.5% 溫和追價
+        
+        raw_price = base_price * (1.0 + buffer_pct)
+    elif action_upper == "SELL":
+        # 賣出/平倉折價讓價緩衝 (Discount Buffer)
+        if is_liquidate or total_score < 50:
+            buffer_pct = -0.015  # -1.5% 一鍵下車或高風險停損，讓價優先變現
+        else:
+            buffer_pct = -0.010  # -1.0% 標準風控賣出讓價
+        
+        raw_price = max(base_price * (1.0 + buffer_pct), 0.01)
+    else:
+        buffer_pct = 0.0
+        raw_price = base_price
+
+    order_price = align_to_tw_tick_size(raw_price, stock_code)
+    price_diff = order_price - base_price
+    return order_price, buffer_pct, price_diff
+
+
 def run_preflight_checks() -> Tuple[bool, Dict[str, Any]]:
     """
     執行系統運行前診斷 (Pre-flight System Diagnostics)
