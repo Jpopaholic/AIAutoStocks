@@ -984,18 +984,23 @@ def prune_old_daily_analysis(days: int = 30) -> None:
 
 def log_unfilled_order_db(order: Dict[str, Any], reason: str) -> Any:
     """
-    將因滑價或未成交而被刪除的訂單紀錄存入 unfilled_orders 資料表
+    將因滑價、未成交、下單前安全審查攔截或下單失敗而取消/未送出之訂單紀錄存入 unfilled_orders 資料表
     """
+    is_paper_default = config.limits.is_paper_trading
+    price_val = float(order.get("price") or 0.0)
+    qty_val = float(order.get("quantity") or 0.0)
+    total_amt_val = float(order.get("total_amount") or (price_val * qty_val))
+
     unfilled_record = {
         "stock_code": order["stock_code"],
         "action": order["action"],
-        "price": float(order["price"]),
-        "quantity": float(order["quantity"]),
+        "price": price_val,
+        "quantity": qty_val,
         "fee": float(order.get("fee") or 0.0),
-        "total_amount": float(order["total_amount"]),
-        "is_paper": order.get("is_paper", False),
-        "executed_at": order["executed_at"],
-        "order_id": order.get("order_id"),
+        "total_amount": total_amt_val,
+        "is_paper": order.get("is_paper", is_paper_default),
+        "executed_at": order.get("executed_at") or _get_current_time_iso(),
+        "order_id": order.get("order_id") or "",
         "reason": reason
     }
     return execute_with_retry(

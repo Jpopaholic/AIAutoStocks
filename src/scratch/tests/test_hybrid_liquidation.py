@@ -217,7 +217,7 @@ class TestHybridLiquidation(unittest.TestCase):
         dec_2454 = next(d for d in decisions if d["stock_code"] == "2454")
         
         self.assertEqual(dec_2330["action"], "BUY")
-        self.assertEqual(dec_2330["quantity"], 23.0)  # 21股 + leftover 追加 2股
+        self.assertEqual(dec_2330["quantity"], 22.0)  # 21股 + leftover 追加 1股 (含溢價緩衝不超過 20,000 現金)
         
         self.assertEqual(dec_2454["action"], "BUY")
         self.assertEqual(dec_2454["quantity"], 6.0)

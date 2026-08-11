@@ -32,22 +32,48 @@ def calculate_buffered_order_price(
 
     action_upper = str(action).upper()
 
+    # 嘗試載入當前月度演化之動態 Skills 追價/讓價階梯規範 (如無則回退預設)
+    chase_tiers = None
+    sell_discount = None
+    try:
+        from src.services.trading_memory import get_active_skills_data
+        skills_data = get_active_skills_data()
+        exec_skills = skills_data.get("skills", {}).get("execution_skills", {})
+        chase_tiers = exec_skills.get("chase_buffer_tiers")
+        sell_discount = exec_skills.get("sell_discount_tiers")
+    except Exception:
+        pass
+
     if action_upper == "BUY":
         # 買進溢價追價緩衝 (Premium Buffer)
-        if total_score >= 85:
-            buffer_pct = 0.015  # +1.5% 高信心度強勢追價
-        elif total_score >= 70:
-            buffer_pct = 0.010  # +1.0% 標準追價
+        if isinstance(chase_tiers, list) and chase_tiers:
+            sorted_tiers = sorted(chase_tiers, key=lambda x: float(x.get("min_score", 0)), reverse=True)
+            buffer_pct = 0.005
+            for tier in sorted_tiers:
+                if total_score >= float(tier.get("min_score", 0)):
+                    buffer_pct = float(tier.get("buy_buffer_pct", 0.010))
+                    break
         else:
-            buffer_pct = 0.005  # +0.5% 溫和追價
+            if total_score >= 85:
+                buffer_pct = 0.015  # +1.5% 高信心度強勢追價
+            elif total_score >= 70:
+                buffer_pct = 0.010  # +1.0% 標準追價
+            else:
+                buffer_pct = 0.005  # +0.5% 溫和追價
         
         raw_price = base_price * (1.0 + buffer_pct)
     elif action_upper == "SELL":
         # 賣出/平倉折價讓價緩衝 (Discount Buffer)
-        if is_liquidate or total_score < 50:
-            buffer_pct = -0.015  # -1.5% 一鍵下車或高風險停損，讓價優先變現
+        if isinstance(sell_discount, dict) and sell_discount:
+            if is_liquidate or total_score < 50:
+                buffer_pct = float(sell_discount.get("liquidate_or_low_score", -0.015))
+            else:
+                buffer_pct = float(sell_discount.get("normal_sell", -0.010))
         else:
-            buffer_pct = -0.010  # -1.0% 標準風控賣出讓價
+            if is_liquidate or total_score < 50:
+                buffer_pct = -0.015  # -1.5% 一鍵下車或高風險停損，讓價優先變現
+            else:
+                buffer_pct = -0.010  # -1.0% 標準風控賣出讓價
         
         raw_price = max(base_price * (1.0 + buffer_pct), 0.01)
     else:

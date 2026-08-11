@@ -646,6 +646,7 @@ def generate_portfolio_decisions(
         }
 
     # 計算初步股數與剩餘零星預算（使用溢價後的上限價進行保守控管）
+    fee_buffer_per_order = 20.0
     quantities = {}
     costs = {}
     for cand in buy_candidates:
@@ -657,10 +658,7 @@ def generate_portfolio_decisions(
         quantities[code] = qty
         costs[code] = qty * order_p
 
-    # 處理因無條件捨去而留下來的零星預算
-    leftover = total_budget - sum(costs.values())
-    
-    # 依加權因子降序排序，嘗試追加剩餘零星預算
+    # 處理因無條件捨去而留下來的零星預算，追加時嚴格限制全體總支出 (含手續費預留 20 元/筆) 絕不超過 total_budget
     leftover_candidates = sorted(buy_candidates, key=lambda x: x["weight_factor"], reverse=True)
     for cand in leftover_candidates:
         code = cand["stock_code"]
@@ -668,10 +666,21 @@ def generate_portfolio_decisions(
         if order_p <= 0:
             continue
             
-        while leftover >= order_p and (costs[code] + order_p) <= single_limit:
-            quantities[code] += 1
-            costs[code] += order_p
-            leftover -= order_p
+        while (costs[code] + order_p) <= single_limit:
+            potential_quantities = dict(quantities)
+            potential_quantities[code] += 1
+            potential_buy_count = sum(1 for q in potential_quantities.values() if q > 0)
+            potential_stock_cost = sum(potential_quantities[c] * buffered_info[c]["order_price"] for c in potential_quantities)
+            
+            # 若加入手續費緩衝仍低於等於總預算，或者股票成本本體不超過總預算，進行安全追加
+            if potential_stock_cost + (potential_buy_count * fee_buffer_per_order) <= total_budget or potential_stock_cost <= (total_budget - 5.0):
+                if potential_stock_cost <= total_budget:
+                    quantities[code] += 1
+                    costs[code] += order_p
+                else:
+                    break
+            else:
+                break
 
     # 生成最終買進與觀望決策
     for cand in buy_candidates:

@@ -125,6 +125,15 @@ def get_active_skills_data(is_paper: bool = False) -> Dict[str, Any]:
             "max_single_stock_weight": 4,
             "stop_loss_pct": -0.05,
             "take_profit_pct": 0.12,
+            "chase_buffer_tiers": [
+                {"min_score": 85, "buy_buffer_pct": 0.015, "description": "+1.5% 高信心度強勢追價"},
+                {"min_score": 70, "buy_buffer_pct": 0.010, "description": "+1.0% 標準追價"},
+                {"min_score": 0,  "buy_buffer_pct": 0.005, "description": "+0.5% 溫和追價"}
+            ],
+            "sell_discount_tiers": {
+                "liquidate_or_low_score": -0.015,
+                "normal_sell": -0.010
+            },
             "regime_posture": {
                 "BULLISH_TREND": "AGGRESSIVE",
                 "BEARISH_TREND": "DEFENSIVE",

@@ -80,6 +80,21 @@ class ExecutionSkillsJSON(BaseModel):
     max_single_stock_weight: int = Field(..., description="建議單一標的最重部位權重 (1-5)")
     stop_loss_pct: float = Field(..., description="建議個股硬停損百分比，如 -0.05 代表 -5%")
     take_profit_pct: float = Field(..., description="建議動態鎖利觸發百分比，如 0.12 代表 12%")
+    chase_buffer_tiers: Optional[List[Dict[str, Any]]] = Field(
+        default=[
+            {"min_score": 85, "buy_buffer_pct": 0.015, "description": "+1.5% 高信心度強勢追價"},
+            {"min_score": 70, "buy_buffer_pct": 0.010, "description": "+1.0% 標準追價"},
+            {"min_score": 0,  "buy_buffer_pct": 0.005, "description": "+0.5% 溫和追價"}
+        ],
+        description="買進動態溢價追價 Tier 規範列表"
+    )
+    sell_discount_tiers: Optional[Dict[str, float]] = Field(
+        default={
+            "liquidate_or_low_score": -0.015,
+            "normal_sell": -0.010
+        },
+        description="賣出讓價折價規範"
+    )
     entry_timing_rules: List[str] = Field(
         ..., description="2-3 條 Timing 進場規範（如防追高、避開價格前 20% 高檔等）"
     )

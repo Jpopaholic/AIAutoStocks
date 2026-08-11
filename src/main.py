@@ -400,6 +400,13 @@ def run_live_trading_job(stock_codes: List[str], is_manual: bool = False) -> Non
                 print(f" [排程引擎] ⚠️ {warn_msg}")
                 supabase_client.log_system_event("WARN", warn_msg)
                 try:
+                    supabase_client.log_unfilled_order_db(
+                        {"stock_code": stock_code, "action": action, "price": price, "quantity": quantity},
+                        reason=f"下單前安全審查攔截: {audit_msg}"
+                    )
+                except Exception as db_err:
+                    print(f" [排程引擎] 警告: 寫入攔截紀錄至未成交資料表失敗: {db_err}")
+                try:
                     discord_notifier.send_emergency_alert(
                         subject=f"⚠️ AIAutoStocks 下單防禦性攔截 ({stock_code})",
                         message=f"已成功攔截並阻止一筆異常交易委託：\n- 標的: {display_code}\n- 動作: {action}\n- 價格: {price} 元\n- 數量: {quantity:.0f} 股\n- 攔截原因: {audit_msg}\n\n系統已自動跳過此筆委託，繼續處理其他標的。"
@@ -419,6 +426,13 @@ def run_live_trading_job(stock_codes: List[str], is_manual: bool = False) -> Non
                 err_msg = f"執行 {stock_code} 的自動化交易下單時發生錯誤: {str(e)}"
                 print(f" [排程引擎] {err_msg}")
                 supabase_client.log_system_event("ERROR", err_msg)
+                try:
+                    supabase_client.log_unfilled_order_db(
+                        {"stock_code": stock_code, "action": action, "price": price, "quantity": quantity},
+                        reason=f"下單執行失敗: {str(e)}"
+                    )
+                except Exception as db_err:
+                    print(f" [排程引擎] 警告: 寫入失敗紀錄至未成交資料表失敗: {db_err}")
 
     # E. 彙整今日交易損益與持股，發送每日報告至 Discord Webhook
     ai_outlook_str = "\n\n".join(ai_outlook_details)

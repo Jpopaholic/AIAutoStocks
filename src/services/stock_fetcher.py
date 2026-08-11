@@ -1,5 +1,6 @@
 # Path: src/services/stock_fetcher.py
 import time
+import math
 import requests
 from datetime import datetime
 from typing import List, Dict, Any

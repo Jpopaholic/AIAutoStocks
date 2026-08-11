@@ -294,6 +294,7 @@ def send_daily_report(
     risk_mult = 1.0
     posture = "UNKNOWN"
     climate_reason = ""
+    cash_ratio_str = ""
     if regime_assessment:
         regime = regime_assessment.get("regime", "UNKNOWN")
         posture = regime_assessment.get("posture", "UNKNOWN")
@@ -359,7 +360,7 @@ def send_daily_report(
 
     trades_text = "\n".join(trades_lines) if trades_lines else "今日無任何交易委託成交。"
 
-    # 未成交/滑價取消列表
+    # 未成交/滑價取消/下單攔截列表
     unfilled_lines = []
     for o in today_unfilled:
         action_label = "買" if o["action"] == "BUY" else "賣"
@@ -367,8 +368,14 @@ def send_daily_report(
         name_display = f"({stock_name})" if stock_name else ""
         qty = float(o.get("quantity") or 0.0)
         limit_price = float(o.get("price") or 0.0)
-        reason_val = o.get("reason") or "CANCELLED"
-        reason_str = "券商取消(滑價)" if reason_val == "CANCELLED" else "未找到委託(過期)"
+        reason_val = str(o.get("reason") or "CANCELLED")
+        
+        if reason_val == "CANCELLED":
+            reason_str = "券商取消(滑價)"
+        elif reason_val == "NOT_FOUND":
+            reason_str = "未找到委託(過期)"
+        else:
+            reason_str = reason_val
         
         prefix = "!"
         line = f"{prefix} {action_label} {o['stock_code']}{name_display} | {qty:,.0f}股 | 委託價:{limit_price:,.2f} | 原因:{reason_str}"
