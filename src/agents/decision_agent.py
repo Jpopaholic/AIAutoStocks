@@ -265,7 +265,7 @@ def generate_portfolio_decisions(
     generation_config_pm = {
         "response_mime_type": "application/json",
         "response_schema": PortfolioDecision,
-        "temperature": 0.2  # 投資組合經理決策層保持 0.2 靈活性
+        "temperature": 0.0  # 投資組合經理決策層設定為 0.0 確保極致的一致性與確定性
     }
 
     try:
@@ -294,9 +294,9 @@ def generate_portfolio_decisions(
         ranking_analysis = "經理人層呼叫異常，啟動防禦性安全機制。"
         raw_decisions = []
 
-    # 11. 預算估計與賣出部位釋放
-    # 賣出動作若成立，可當場釋放現金，加入本次買入預算中
+    # 11. 預算估算（嚴格基於當前實體可用現金，避免預加未成交賣單資金）
     remaining_cash = cash_balance
+    projected_released_cash = 0.0
     for d in raw_decisions:
         code = d.get("stock_code")
         if not code or code == "TAIEX":
@@ -310,9 +310,9 @@ def generate_portfolio_decisions(
         price = float(ana.get("price") or 10.0)
         
         if action == "SELL" and holding_qty > 0:
-            released_cash = price * holding_qty * 0.995  # 扣除滑價
-            remaining_cash += released_cash
-            print(f" [決策代理] 調倉預算：賣出 {code} 預估可釋出可用資金 {released_cash:,.0f} 元")
+            released_cash = price * holding_qty * 0.995  # 扣除估算規費與滑價
+            projected_released_cash += released_cash
+            print(f" [決策代理] 調倉備註：賣出 {code} 預估次階段可釋出資金 {released_cash:,.0f} 元（未成交前不預先納入當前買入預算）")
 
     final_decisions = []
     buy_candidates = []
@@ -592,14 +592,16 @@ def generate_portfolio_decisions(
             })
 
     # 13. Python 程式端主導買入候選股預算分配 (水箱分配 Water-Filling)
-    total_budget = min(remaining_cash, remaining_daily_limit)
+    total_budget = max(0.0, min(remaining_cash, remaining_daily_limit))
     
-    # 計算每檔股票的加權因子
+    # 計算每檔股票的加權因子並按綜合優先度 (weight_factor = total_score * allocation_weight) 降序排序
     for cand in buy_candidates:
         cand["weight_factor"] = safe_float(cand["total_score"] * cand["allocation_weight"], default=0.0, min_val=0.0)
         
+    sorted_buy_candidates = sorted(buy_candidates, key=lambda x: x["weight_factor"], reverse=True)
+    
     # 用於分配預算的候選清單
-    alloc_candidates = list(buy_candidates)
+    alloc_candidates = list(sorted_buy_candidates)
     budgets = {cand["stock_code"]: 0.0 for cand in alloc_candidates}
     
     # 比例分配限制單股上限
@@ -632,7 +634,7 @@ def generate_portfolio_decisions(
     # 14. 預先為每檔買進候選股計算包含溢價追價緩衝的最高委託限價 (Buffered Limit Price)
     from src.services.health_check import calculate_buffered_order_price
     buffered_info = {}
-    for cand in buy_candidates:
+    for cand in sorted_buy_candidates:
         code = cand["stock_code"]
         base_p = cand["price"]
         t_score = cand["total_score"]
@@ -649,7 +651,7 @@ def generate_portfolio_decisions(
     fee_buffer_per_order = 20.0
     quantities = {}
     costs = {}
-    for cand in buy_candidates:
+    for cand in sorted_buy_candidates:
         code = cand["stock_code"]
         order_p = buffered_info[code]["order_price"]
         allocated = budgets[code]
@@ -658,9 +660,8 @@ def generate_portfolio_decisions(
         quantities[code] = qty
         costs[code] = qty * order_p
 
-    # 處理因無條件捨去而留下來的零星預算，追加時嚴格限制全體總支出 (含手續費預留 20 元/筆) 絕不超過 total_budget
-    leftover_candidates = sorted(buy_candidates, key=lambda x: x["weight_factor"], reverse=True)
-    for cand in leftover_candidates:
+    # 處理因無條件捨去而留下來的零星預算，按優先度降序進行安全追加，全體總支出 (含手續費預留 20 元/筆) 絕不超過 total_budget
+    for cand in sorted_buy_candidates:
         code = cand["stock_code"]
         order_p = buffered_info[code]["order_price"]
         if order_p <= 0:
@@ -672,18 +673,14 @@ def generate_portfolio_decisions(
             potential_buy_count = sum(1 for q in potential_quantities.values() if q > 0)
             potential_stock_cost = sum(potential_quantities[c] * buffered_info[c]["order_price"] for c in potential_quantities)
             
-            # 若加入手續費緩衝仍低於等於總預算，或者股票成本本體不超過總預算，進行安全追加
-            if potential_stock_cost + (potential_buy_count * fee_buffer_per_order) <= total_budget or potential_stock_cost <= (total_budget - 5.0):
-                if potential_stock_cost <= total_budget:
-                    quantities[code] += 1
-                    costs[code] += order_p
-                else:
-                    break
+            if potential_stock_cost + (potential_buy_count * fee_buffer_per_order) <= total_budget:
+                quantities[code] += 1
+                costs[code] += order_p
             else:
                 break
 
-    # 生成最終買進與觀望決策
-    for cand in buy_candidates:
+    # 生成最終買進與觀望決策（按優先度排序）
+    for cand in sorted_buy_candidates:
         code = cand["stock_code"]
         total_score = cand["total_score"]
         alloc_weight = cand["allocation_weight"]
@@ -716,8 +713,10 @@ def generate_portfolio_decisions(
         else:
             if single_limit < order_price:
                 limit_desc = f"單股交易限額 {single_limit:,.0f} 元低於股票單價 {order_price:,.0f} 元"
+            elif total_budget < order_price:
+                limit_desc = f"當前可用現金餘額 {total_budget:,.0f} 元不足以買入 1 股 (委託價 {order_price:,.0f} 元)"
             else:
-                limit_desc = f"融合分配比例過低且可用資金不足以買入 1 股 (分配額 {budgets[code]:,.0f} 元 < 單價 {order_price:,.0f} 元)"
+                limit_desc = f"優先度排序資金分配不足以買入 1 股 (分配額 {budgets[code]:,.0f} 元 < 委託價 {order_price:,.0f} 元)"
                 
             final_decisions.append({
                 "stock_code": code,

@@ -982,14 +982,26 @@ def prune_old_daily_analysis(days: int = 30) -> None:
         print(f" [日誌管理器] 警告: 清理舊分析執行紀錄失敗: {str(e)}")
 
 
-def log_unfilled_order_db(order: Dict[str, Any], reason: str) -> Any:
+def log_unfilled_order_db(order: Dict[str, Any], reason: str, cancellation_time: Optional[str] = None) -> Any:
     """
-    將因滑價、未成交、下單前安全審查攔截或下單失敗而取消/未送出之訂單紀錄存入 unfilled_orders 資料表
+    將因滑價、未成交、下單前安全審查攔截或下單失敗而取消/未送出之訂單紀錄存入 unfilled_orders 資料表。
+    :param cancellation_time: 若指定，使用判定取消的當下時間；否則自動依據當前台灣時間/沙盒時間生成時間戳記。
     """
     is_paper_default = config.limits.is_paper_trading
     price_val = float(order.get("price") or 0.0)
     qty_val = float(order.get("quantity") or 0.0)
     total_amt_val = float(order.get("total_amount") or (price_val * qty_val))
+
+    # 若未帶入 cancellation_time，優先判斷是否為沙盒模擬時間，否則使用當前即時時間 (避免舊訂單下單時間蓋過判定取消日期)
+    if not cancellation_time:
+        try:
+            from src.services.sandbox_simulator import is_simulation_active, get_effective_date_str
+            if is_simulation_active():
+                cancellation_time = f"{get_effective_date_str()}T13:30:00Z"
+            else:
+                cancellation_time = _get_current_time_iso()
+        except Exception:
+            cancellation_time = _get_current_time_iso()
 
     unfilled_record = {
         "stock_code": order["stock_code"],
@@ -999,7 +1011,7 @@ def log_unfilled_order_db(order: Dict[str, Any], reason: str) -> Any:
         "fee": float(order.get("fee") or 0.0),
         "total_amount": total_amt_val,
         "is_paper": order.get("is_paper", is_paper_default),
-        "executed_at": order.get("executed_at") or _get_current_time_iso(),
+        "executed_at": cancellation_time,
         "order_id": order.get("order_id") or "",
         "reason": reason
     }

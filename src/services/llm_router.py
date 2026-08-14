@@ -4,6 +4,25 @@ from typing import Any, Dict, Optional
 from src.config import config
 from src.services.supabase_client import log_system_event
 
+def _get_daily_seed() -> int:
+    """
+    根據當前台灣交易日期 (或沙盒模擬日期) 雜湊產生當日專屬的固定隨機種子 (Daily Seed)。
+    確保同一天內的每次手動與自動分析輸出 100% 重複一致，而跨日/收盤後則自動更新為新種子。
+    """
+    try:
+        from src.services.sandbox_simulator import is_simulation_active, get_effective_date_str
+        if is_simulation_active():
+            date_str = get_effective_date_str()
+        else:
+            from src.time_manager import get_local_taiwan_date_str
+            date_str = get_local_taiwan_date_str()
+    except Exception:
+        date_str = "default"
+        
+    import hashlib
+    seed = int(hashlib.md5(date_str.encode("utf-8")).hexdigest()[:8], 16) % 1000000
+    return seed
+
 def _call_openai_api(
     prompt: str,
     system_instruction: Optional[str] = None,
@@ -29,9 +48,11 @@ def _call_openai_api(
         messages.append({"role": "system", "content": system_instruction})
     messages.append({"role": "user", "content": prompt})
 
+    daily_seed = _get_daily_seed()
     kwargs: Dict[str, Any] = {
         "model": model_name,
         "messages": messages,
+        "seed": daily_seed  # 當日動態鎖定 Seed，確保同日手動/自動分析一致，跨日自動換新
     }
 
     # 處理 temperature、response_format 與 Schema 注入

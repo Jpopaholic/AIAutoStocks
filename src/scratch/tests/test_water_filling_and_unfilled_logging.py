@@ -110,7 +110,7 @@ class TestWaterFillingAndUnfilledLogging(unittest.TestCase):
         payload = first_call_args[0][1]
         fields = payload["embeds"][0]["fields"]
 
-        unfilled_field = next((f for f in fields if "未成交" in f["name"]), None)
+        unfilled_field = next((f for f in fields if any(k in f["name"] for k in ("未成交", "攔截"))), None)
         self.assertIsNotNone(unfilled_field)
         self.assertIn("00947", unfilled_field["value"])
         self.assertIn("下單前安全審查攔截: 委託總額超出單筆限額", unfilled_field["value"])

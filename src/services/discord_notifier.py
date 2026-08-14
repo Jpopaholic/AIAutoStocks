@@ -381,7 +381,7 @@ def send_daily_report(
         line = f"{prefix} {action_label} {o['stock_code']}{name_display} | {qty:,.0f}股 | 委託價:{limit_price:,.2f} | 原因:{reason_str}"
         unfilled_lines.append(line)
 
-    unfilled_text = "\n".join(unfilled_lines) if unfilled_lines else "今日無任何未成交/滑價取消委託。"
+    unfilled_text = "\n".join(unfilled_lines) if unfilled_lines else ""
 
     # ── 4. 欄位 2: 評分與相對排名 (第二層) ────────────────────────────────
     scores_text = "暫無分析師評分資料。"
@@ -531,7 +531,8 @@ def send_daily_report(
             fields.extend(_split_into_fields("📋 1b. 大盤氣候分析理由", climate_reason, max_len=950))
         fields.extend(_split_into_fields("💰 1c. 帳戶資金狀態", account_header, max_len=950))
         fields.extend(_split_into_fields("💸 1d. 本日交易明細", trades_text, syntax="diff", max_len=950))
-        fields.extend(_split_into_fields("⚠️ 1e. 本日未成交/滑價取消明細", unfilled_text, syntax="diff", max_len=950))
+        if unfilled_text:
+            fields.extend(_split_into_fields("⚠️ 1e. 本日未成交/下單攔截明細", unfilled_text, syntax="diff", max_len=950))
         fields.extend(_split_into_fields("📈 2. 評分與相對排名 (第二層)", section2_value, max_len=950))
         fields.extend(_split_into_fields("🚨 3. 今日停損警告清單", section3_value, max_len=950))
         fields.extend(_split_into_fields("🧠 4. 經理人交易配置與理由 (第三層)", section4_value, max_len=950))
