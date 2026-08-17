@@ -23,28 +23,28 @@ class StockIndicatorReviewOutput(BaseModel):
     )
 
 class IndicatorPatternRule(BaseModel):
-    pattern_rule: str = Field(..., description="指標型態與轉折規則描述（繁體中文）")
+    pattern_rule: str = Field(..., description="指標型態與轉折規則描述（繁體中文，必須為單日即時可判定的客觀條件，嚴禁需跨數天觀望或未來追蹤之規則）")
     expected_probability_pct: int = Field(..., description="預期轉折/勝率機率 (0-100)")
 
 class StockSpecificRule(BaseModel):
     stock_code: str = Field(..., description="股票代號，如 '2330'")
-    anomaly_trait: str = Field(..., description="個股特殊特徵與走勢慣性描述")
+    anomaly_trait: str = Field(..., description="個股特殊特徵與走勢慣性描述（須為單日可識別之客觀特徵）")
     expected_probability_pct: int = Field(..., description="預期轉折/勝率機率 (0-100)")
 
 class ScoreCalibrationRule(BaseModel):
-    calibration_rule: str = Field(..., description="分數校正與偏斜調整規則描述（如『將趨勢比重調高5%』或『買入門檻嚴格化』）")
+    calibration_rule: str = Field(..., description="分數校正與偏斜調整規則描述（如『將趨勢比重調高5%』或『買入門檻嚴格化』，須為單日即時生效規則）")
     expected_probability_pct: int = Field(..., description="預期機率 (0-100)")
 
 class RegimeIndicatorRule(BaseModel):
-    focus: str = Field(..., description="在該大盤氣候下的指標側重或篩選標準描述")
+    focus: str = Field(..., description="在該大盤氣候下的指標側重或篩選標準描述（須為當日即時可判定之篩選標準）")
     expected_probability_pct: int = Field(..., description="預期機率 (0-100)")
 
 class IndicatorSkillsJSON(BaseModel):
     v_shape_reversal_patterns: List[IndicatorPatternRule] = Field(
-        ..., description="2-4 條 V 型強勢反彈指標與型態特徵規則 (含 expected_probability_pct)"
+        ..., description="2-4 條 V 型強勢反彈指標與型態特徵規則 (含 expected_probability_pct，須為當日即時可判定條件)"
     )
     a_shape_top_warnings: List[IndicatorPatternRule] = Field(
-        ..., description="2-4 條 A 型頂點/誘多警戒指標規則 (含 expected_probability_pct)"
+        ..., description="2-4 條 A 型頂點/誘多警戒指標規則 (含 expected_probability_pct，須為當日即時可判定條件)"
     )
     stock_specific_rules: List[StockSpecificRule] = Field(
         default_factory=list, description="0-3 條特定股票之特殊特徵與異常慣性規則 (含 expected_probability_pct)"
@@ -96,13 +96,13 @@ class ExecutionSkillsJSON(BaseModel):
         description="賣出讓價折價規範"
     )
     entry_timing_rules: List[str] = Field(
-        ..., description="2-3 條 Timing 進場規範（如防追高、避開價格前 20% 高檔等）"
+        ..., description="2-3 條 Timing 進場規範（須為單日即時可執行的客觀規則，如防追高、避開當日價格處於前 20% 高檔等，嚴禁跨日觀望規則）"
     )
     regime_posture: Dict[str, str] = Field(
         ..., description="大盤氣候姿態映射，如 {'BULLISH_TREND': 'AGGRESSIVE', 'BEARISH_TREND': 'DEFENSIVE', 'HIGH_VOLATILITY': 'CONSERVATIVE'}"
     )
     tactical_rules: List[str] = Field(
-        ..., description="2-4 條風控與部位執行戰術規則指令"
+        ..., description="2-4 條風控與部位執行戰術規則指令（須為單日當下即時可落地的風控指令）"
     )
 
 class ExecutionReviewSummaryOutput(BaseModel):
@@ -220,8 +220,14 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
         f"{macro_context_str}\n\n"
         f"【各標的 Layer 1 個股指標診斷報告】\n"
         f"{json.dumps(stock_indicator_reports, ensure_ascii=False, indent=2)}\n\n"
-        f"請綜合診斷：1.哪些指標與量價特徵容易形成 V 型反彈與 A 型頂點（請核心著重於『真實 K 線型態、均線排列、價格走勢與成交量放大/萎縮結構』，嚴禁依賴抽象的分數變化，務必產出具體可落地的『指標與量價戰術 Skills』，如：創低後長下影爆量長紅強彈、高檔量價背離長黑跌破均線等） 2.分析師給分偏斜與門檻調整 3.特定股票異常特徵 4.氣候對指標的側重，並產出 Key-Value 結構化 indicator_skills (規則請附帶 expected_probability_pct 表示預期機率 0-100)。"
-
+        f"請綜合診斷：\n"
+        f"1. 哪些指標與量價特徵容易形成 V 型反彈與 A 型頂點（請核心著重於『真實 K 線型態、均線排列、價格走勢與成交量放大/萎縮結構』，嚴禁依賴抽象的分數變化，務必產出具體可落地的『指標與量價戰術 Skills』，如：創低後長下影爆量長紅強彈、高檔量價背離長黑跌破均線等）。\n"
+        f"2. 分析師給分偏斜與門檻調整。\n"
+        f"3. 特定股票異常特徵。\n"
+        f"4. 氣候對指標的側重，並產出 Key-Value 結構化 indicator_skills (規則請附帶 expected_probability_pct 表示預期機率 0-100)。\n\n"
+        f"【⚠️ 極其重要：單日即時可執行與判定規範 (Single-Day Actionability Rule)】\n"
+        f"- 演化產出之所有 pattern_rule、anomaly_trait 與 calibration_rule 必須是【當日 (Day T) 分析師或決策代理人在單一交易日即可憑藉『截至當日之歷史 K 線/指標與當日評分』立即客觀判定的條件】！\n"
+        f"- 嚴禁產出任何需要『觀望數天』、『連續 3-5 天觀察分數走勢』或『未來 2 天確認』等當日無法單獨即時執行的跨日延遲條文。"
     )
     generation_config_l1_reduce = {
         "response_mime_type": "application/json",
@@ -324,7 +330,14 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
         f"{macro_context_str}\n\n"
         f"【各標的 Layer 2 個股交易執行診斷報告】\n"
         f"{json.dumps(stock_execution_reports, ensure_ascii=False, indent=2)}\n\n"
-        f"請綜合診斷：1.Timing 追高與太晚入場原因與改善戰術 2.低迷氣候是否過於保守錯失良機 3.順風盤是否盲目追高 4.離場停損停利與部位權重，並產出 Key-Value 結構化 execution_skills。"
+        f"請綜合診斷：\n"
+        f"1. Timing 追高與太晚入場原因與改善戰術。\n"
+        f"2. 低迷氣候是否過於保守錯失良機。\n"
+        f"3. 順風盤是否盲目追高。\n"
+        f"4. 離場停損停利與部位權重，並產出 Key-Value 結構化 execution_skills。\n\n"
+        f"【⚠️ 極其重要：單日即時可執行規範 (Single-Day Actionability Rule)】\n"
+        f"- 演化產出之所有 entry_timing_rules 與 tactical_rules 必須是【當日 (Day T) 投資組合經理人在單一交易日即可採取的客觀交易動作、位階限制或風控門檻】（如：防追高、避開當日價格處於前 20% 高檔等）！\n"
+        f"- 嚴禁產出需要『觀望數天後再買』或『連續數天追蹤』等當日無法執行的延遲戰術條文。"
     )
     generation_config_l2_reduce = {
         "response_mime_type": "application/json",
