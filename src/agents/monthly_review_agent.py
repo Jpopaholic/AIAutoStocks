@@ -226,8 +226,8 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
         f"3. 特定股票異常特徵。\n"
         f"4. 氣候對指標的側重，並產出 Key-Value 結構化 indicator_skills (規則請附帶 expected_probability_pct 表示預期機率 0-100)。\n\n"
         f"【⚠️ 極其重要：單日即時可執行與判定規範 (Single-Day Actionability Rule)】\n"
-        f"- 演化產出之所有 pattern_rule、anomaly_trait 與 calibration_rule 必須是【當日 (Day T) 分析師或決策代理人在單一交易日即可憑藉『截至當日之歷史 K 線/指標與當日評分』立即客觀判定的條件】！\n"
-        f"- 嚴禁產出任何需要『觀望數天』、『連續 3-5 天觀察分數走勢』或『未來 2 天確認』等當日無法單獨即時執行的跨日延遲條文。"
+        f"- 演化產出之所有 pattern_rule、anomaly_trait 與 calibration_rule 必須是【當日 (Day T) 分析師或決策代理人在單一交易日即可憑藉『截至當日之歷史 K 線與客觀技術指標（如 MA5/MA20 均線排列、RSI、KD、當日/近5日均量、近20日高低位階等）與當日評分』立即當場判定的條件】！歷史指標皆為當日已知的客觀數據，完全屬於合規之單日判定條件。\n"
+        f"- 嚴禁產出任何需要『未來觀望數天』、『連續 3-5 天觀察未來分數走勢』或『等待未來 2 天價格確認』等當日無法單獨即時執行的跨日延遲條文。"
     )
     generation_config_l1_reduce = {
         "response_mime_type": "application/json",
