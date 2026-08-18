@@ -284,9 +284,53 @@ def send_daily_report(
 
     # 帳戶總覽 (NAV)
     from src.services.nav_calculator import calculate_nav
-    cash_balance, _, net_asset_value = calculate_nav()
+    cash_balance, holdings_value, net_asset_value = calculate_nav()
     initial_cash = config.limits.initial_cash
-    net_asset_roi = ((net_asset_value - initial_cash) / initial_cash * 100)
+    net_asset_roi = ((net_asset_value - initial_cash) / initial_cash * 100) if initial_cash > 0 else 0.0
+    total_pnl = net_asset_value - initial_cash
+    total_pnl_roi = net_asset_roi
+
+    # ── 2.8 獲取目前持股明細與未實現損益 ─────────────────────────────
+    holdings_lines = []
+    try:
+        from src.services.supabase_client import get_holdings
+        from src.services.stock_fetcher import get_display_price, fetch_realtime_quotes_batch
+
+        current_holdings = get_holdings()
+        if current_holdings:
+            hold_codes = [h["stock_code"] for h in current_holdings if h.get("stock_code")]
+            if hold_codes:
+                try:
+                    fetch_realtime_quotes_batch(hold_codes)
+                except Exception:
+                    pass
+
+            for h in current_holdings:
+                code = h.get("stock_code", "")
+                name = get_stock_name(code)
+                name_disp = f"({name})" if name else ""
+                qty = float(h.get("quantity") or 0.0)
+                avg_p = float(h.get("average_price") or 0.0)
+                cur_p = get_display_price(code, fallback_price=avg_p)
+                mkt_v = cur_p * qty
+                unreal_pnl = (cur_p - avg_p) * qty
+                unreal_roi = ((cur_p - avg_p) / avg_p * 100) if avg_p > 0 else 0.0
+
+                if unreal_pnl > 0:
+                    prefix = "-"  # 台股習慣：獲利為紅色 (Discord diff 中 '-' 前綴渲染為紅色)
+                elif unreal_pnl < 0:
+                    prefix = "+"  # 台股習慣：虧損為綠色 (Discord diff 中 '+' 前綴渲染為綠色)
+                else:
+                    prefix = " "  # 平盤
+                line = (
+                    f"{prefix} {code}{name_disp} | {qty:,.0f}股 | 成本:{avg_p:,.2f} | 現價:{cur_p:,.2f} | "
+                    f"市值:{mkt_v:,.0f} (未實現: {unreal_pnl:+,.0f} / {unreal_roi:+.2f}%)"
+                )
+                holdings_lines.append(line)
+    except Exception as e:
+        print(f" [Discord通知器] 無法獲取當前持股資訊: {str(e)}")
+
+    holdings_text = "\n".join(holdings_lines) if holdings_lines else "目前無任何手持股票 (全現金部位)。"
 
     # ── 3. 欄位 1: 大盤氣候與本日交易 ─────────────────────────────────
     regime_display = "UNKNOWN"
@@ -333,8 +377,9 @@ def send_daily_report(
 
 
     account_header = (
-        f"• **帳戶淨值 (NAV)**: **`{net_asset_value:,.0f}`** 元 (`{net_asset_roi:+.2f}%`)\n"
+        f"• **帳戶淨值 (NAV)**: **`{net_asset_value:,.0f}`** 元 (總損益: **`{total_pnl:+,.0f}`** 元 / `{net_asset_roi:+.2f}%`)\n"
         f"• **現金餘額**: `{cash_balance:,.0f}` 元\n"
+        f"• **持股市值**: `{holdings_value:,.0f}` 元\n"
         f"• **今日實現損益**: **`{today_realized_pnl:+,.0f}`** 元\n"
     )
 
@@ -530,9 +575,10 @@ def send_daily_report(
         if climate_reason:
             fields.extend(_split_into_fields("📋 1b. 大盤氣候分析理由", climate_reason, max_len=950))
         fields.extend(_split_into_fields("💰 1c. 帳戶資金狀態", account_header, max_len=950))
-        fields.extend(_split_into_fields("💸 1d. 本日交易明細", trades_text, syntax="diff", max_len=950))
+        fields.extend(_split_into_fields("📦 1d. 目前手持股票明細", holdings_text, syntax="diff", max_len=950))
+        fields.extend(_split_into_fields("💸 1e. 本日交易明細", trades_text, syntax="diff", max_len=950))
         if unfilled_text:
-            fields.extend(_split_into_fields("⚠️ 1e. 本日未成交/下單攔截明細", unfilled_text, syntax="diff", max_len=950))
+            fields.extend(_split_into_fields("⚠️ 1f. 本日未成交/下單攔截明細", unfilled_text, syntax="diff", max_len=950))
         fields.extend(_split_into_fields("📈 2. 評分與相對排名 (第二層)", section2_value, max_len=950))
         fields.extend(_split_into_fields("🚨 3. 今日停損警告清單", section3_value, max_len=950))
         fields.extend(_split_into_fields("🧠 4. 經理人交易配置與理由 (第三層)", section4_value, max_len=950))
@@ -581,6 +627,9 @@ def send_daily_report(
             f"{climate_header}\n"
             f"**氣候判定理由**:\n{climate_reason}\n\n"
             f"{account_header}\n\n"
+            f"---\n\n"
+            f"### 📦 目前手持股票明細\n"
+            f"```diff\n{holdings_text}\n```\n\n"
             f"---\n\n"
             f"### 💸 本日交易與成交明細\n"
             f"```diff\n{trades_text}\n```\n\n"
