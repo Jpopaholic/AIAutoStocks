@@ -160,13 +160,14 @@ def fetch_stock_klines(stock_code: str, date_str: str = None) -> List[Dict[str, 
 
     url = f"https://www.twse.com.tw/exchangeReport/STOCK_DAY?response=json&date={date_str}&stockNo={stock_code}"
 
+    klines = []
+
+    # 1. 嘗試從證交所 / 櫃買中心網路 API 獲取官方歷史月 K 線
     try:
         response = _get_with_retry(url)
         data = _safe_json(response)
 
         if data.get("stat") != "OK" or "data" not in data:
-            # 證交所 API 常在當日資料未準備好或尚未整理完成時回傳「查詢日期小於99年1月4日」等錯誤。
-            # 若發生錯誤且傳入日期為今天，嘗試退回前一日重新查詢以載入整月至昨日的歷史數據。
             from datetime import timedelta
             fallback_date_str = None
             try:
@@ -183,79 +184,98 @@ def fetch_stock_klines(stock_code: str, date_str: str = None) -> List[Dict[str, 
                 data = _safe_json(response)
 
             if data.get("stat") != "OK" or "data" not in data:
-                # 證交所無資料，嘗試從櫃買中心 (TPEx) 獲取
                 print(f" [數據擷取器] {stock_code} 在證交所查無資料，嘗試從櫃買中心 (TPEx) 獲取...")
-                return _fetch_tpex_klines(stock_code, date_str)
+                klines = _fetch_tpex_klines(stock_code, date_str)
 
-        klines = []
-        for row in data["data"]:
-            # row 格式: ["日期", "成交股數", "成交金額", "開盤價", "最高價", "最低價", "收盤價", "漲跌價差", "成交筆數"]
-            try:
-                # 1. 解析與校正民國日期: "115/06/01" -> "2026-06-01"
-                date_parts = row[0].split("/")
-                roc_year = int(date_parts[0])
-                ad_year = roc_year + 1911
-                iso_date = f"{ad_year}-{date_parts[1]}-{date_parts[2]}"
+        if "data" in data:
+            for row in data["data"]:
+                try:
+                    date_parts = row[0].split("/")
+                    roc_year = int(date_parts[0])
+                    ad_year = roc_year + 1911
+                    iso_date = f"{ad_year}-{date_parts[1]}-{date_parts[2]}"
 
-                # 2. 轉換欄位為數值並去除千分位逗號
-                volume = int(row[1].replace(",", ""))
-                open_val = float(row[3].replace(",", ""))
-                high_val = float(row[4].replace(",", ""))
-                low_val = float(row[5].replace(",", ""))
-                close_val = float(row[6].replace(",", ""))
+                    volume = int(row[1].replace(",", ""))
+                    open_val = float(row[3].replace(",", ""))
+                    high_val = float(row[4].replace(",", ""))
+                    low_val = float(row[5].replace(",", ""))
+                    close_val = float(row[6].replace(",", ""))
 
-                # 3. 嚴格的資料完整性校驗與防呆
-                # 價格必須大於 0，且最高價不得低於開盤、收盤、最低價
-                if open_val <= 0 or high_val <= 0 or low_val <= 0 or close_val <= 0:
+                    if open_val <= 0 or high_val <= 0 or low_val <= 0 or close_val <= 0:
+                        continue
+                    if high_val < low_val or high_val < open_val or high_val < close_val:
+                        continue
+
+                    klines.append({
+                        "stockCode": stock_code,
+                        "date": iso_date,
+                        "open": open_val,
+                        "high": high_val,
+                        "low": low_val,
+                        "close": close_val,
+                        "volume": volume
+                    })
+                except (ValueError, IndexError):
                     continue
-                if high_val < low_val or high_val < open_val or high_val < close_val:
-                    continue
+    except Exception as fetch_err:
+        print(f" [數據擷取器] 警告: 證交所/櫃買網路 API 擷取 {stock_code} 失敗 (將使用資料庫與即時報價備援): {fetch_err}")
 
-                klines.append({
-                    "stockCode": stock_code,
-                    "date": iso_date,
-                    "open": open_val,
-                    "high": high_val,
-                    "low": low_val,
-                    "close": close_val,
-                    "volume": volume
-                })
-            except (ValueError, IndexError):
-                # 遇到解析錯誤時跳過該行，保證最終產出資料的完整性
-                continue
+    # 2. 若網路 API 失敗/熔斷導致 klines 為空，自動從 Supabase 資料庫載入歷史 K 線作為基礎
+    if not klines:
+        try:
+            from src.services import supabase_client
+            db_records = supabase_client.get_stock_klines(stock_code, limit=60)
+            if db_records:
+                for k in db_records:
+                    klines.append({
+                        "stockCode": k["stock_code"],
+                        "date": str(k["date"]),
+                        "open": float(k["open"]),
+                        "high": float(k["high"]),
+                        "low": float(k["low"]),
+                        "close": float(k["close"]),
+                        "volume": int(k["volume"] or 0)
+                    })
+                klines.sort(key=lambda x: x["date"])
+        except Exception as db_err:
+            print(f" [數據擷取器] 從資料庫載入 {stock_code} 歷史時發生異常: {db_err}")
 
-        # 如果是查詢今天（即沒有指定 date_str），且回傳的 K 線中最後一筆日期不是今天，
-        # 則嘗試透過即時報價補建今天的 K 線（適用於證交所 STOCK_DAY API 尚未更新，但今天確實為交易日的情況）
-        if is_today_query:
-            try:
-                today_str = get_local_taiwan_date_str()
-                latest_k_date = klines[-1]["date"] if klines else None
-                if latest_k_date != today_str:
-                    quote = fetch_realtime_quote(stock_code)
-                    if quote and quote.get("date") == today_str:
-                        if not any(k["date"] == today_str for k in klines):
+    # 3. 核心補建：若為今日查詢且 klines 缺乏今日資料，一律呼叫即時報價 (優先採用永豐 API) 補建今日 K 線
+    if is_today_query:
+        try:
+            today_str = get_local_taiwan_date_str()
+            latest_k_date = klines[-1]["date"] if klines else None
+            if latest_k_date != today_str:
+                quote = fetch_realtime_quote(stock_code, force_refresh=True)
+                if quote and quote.get("price", 0) > 0:
+                    q_date = quote.get("date")
+                    if q_date and q_date != today_str:
+                        print(f" [數據擷取器] 警告: {stock_code} 即時報價日期 ({q_date}) 非今日 ({today_str})，跳過當日 K 線補建以防寫入舊資料。")
+                    else:
+                        target_date = today_str
+                        if not any(k["date"] == target_date for k in klines):
+                            open_p = quote.get("open") if quote.get("open", 0) > 0 else quote["price"]
+                            high_p = quote.get("high") if quote.get("high", 0) > 0 else quote["price"]
+                            low_p = quote.get("low") if quote.get("low", 0) > 0 else quote["price"]
                             klines.append({
                                 "stockCode": stock_code,
-                                "date": today_str,
-                                "open": quote["open"],
-                                "high": quote["high"],
-                                "low": quote["low"],
+                                "date": target_date,
+                                "open": open_p,
+                                "high": high_p,
+                                "low": low_p,
                                 "close": quote["price"],
-                                "volume": quote["volume"]
+                                "volume": quote.get("volume", 0)
                             })
-                            print(f" [數據擷取器] 從即時報價補建今日 ({today_str}) K 線數據: 開={quote['open']}, 收={quote['price']}, 量={quote['volume']}")
-            except Exception as quote_err:
-                print(f" [數據擷取器] 嘗試補建今日 {stock_code} 的 K 線時發生異常: {quote_err}")
+                            print(f" [數據擷取器] 從即時報價(永豐/MIS)成功補建今日 ({target_date}) K 線數據: 開={open_p}, 收={quote['price']}, 量={quote.get('volume')}")
+        except Exception as quote_err:
+            print(f" [數據擷取器] 嘗試補建今日 {stock_code} 的 K 線時發生異常: {quote_err}")
 
-        return klines
-    except Exception as e:
-        print(f" [數據擷取器] 擷取 K 線數據時發生異常: {str(e)}")
-        return []
+    return klines
 
 _QUOTE_CACHE = {}  # maps stock_code -> (quote_dict, timestamp)
 QUOTE_CACHE_TTL = 60.0  # cache for 60 seconds
 
-def fetch_realtime_quotes_batch(stock_codes: List[str]) -> Dict[str, Dict[str, Any]]:
+def fetch_realtime_quotes_batch(stock_codes: List[str], force_refresh: bool = False) -> Dict[str, Dict[str, Any]]:
     """
     批次獲取多檔股票的即時報價，大幅減少網路請求次數，避免觸發頻率限制。
     """
@@ -268,15 +288,61 @@ def fetch_realtime_quotes_batch(stock_codes: List[str]) -> Dict[str, Dict[str, A
     missing_codes = []
 
     for code in stock_codes:
-        if code in _QUOTE_CACHE:
+        if not force_refresh and code in _QUOTE_CACHE:
             cached_val, timestamp = _QUOTE_CACHE[code]
-            if now - timestamp < QUOTE_CACHE_TTL:
+            if cached_val and (now - timestamp < QUOTE_CACHE_TTL):
                 results[code] = cached_val
                 continue
         missing_codes.append(code)
 
     if not missing_codes:
         return results
+
+    # 優先嘗試透過永豐證券 (Shioaji) API 取得高清即時快照 (避免證交所 Web API 延遲與快取問題)
+    try:
+        from src.services import broker_connector
+        api = broker_connector._get_shioaji_api()
+        if api and hasattr(api, "Contracts") and hasattr(api, "snapshots"):
+            contracts = []
+            for code in missing_codes:
+                contract = api.Contracts.Stocks.get(code)
+                if contract:
+                    contracts.append(contract)
+            
+            if contracts:
+                snapshots = api.snapshots(contracts)
+                today_str = get_local_taiwan_date_str()
+                for snap in snapshots:
+                    if snap and getattr(snap, "close", 0) > 0:
+                        code = snap.code
+                        price = float(snap.close)
+                        open_val = float(snap.open) if getattr(snap, "open", 0) > 0 else price
+                        high_val = float(snap.high) if getattr(snap, "high", 0) > 0 else price
+                        low_val = float(snap.low) if getattr(snap, "low", 0) > 0 else price
+                        volume = int(getattr(snap, "total_volume", 0)) * 1000
+                        bids = [float(snap.buy_price)] if getattr(snap, "buy_price", 0) > 0 else []
+                        asks = [float(snap.sell_price)] if getattr(snap, "sell_price", 0) > 0 else []
+                        quote = {
+                            "stockCode": code,
+                            "price": price,
+                            "open": open_val,
+                            "high": high_val,
+                            "low": low_val,
+                            "volume": volume,
+                            "bids": bids,
+                            "asks": asks,
+                            "timestamp": get_utc_now().isoformat().replace("+00:00", "Z"),
+                            "date": today_str
+                        }
+                        _QUOTE_CACHE[code] = (quote, now)
+                        results[code] = quote
+            
+            missing_codes = [c for c in missing_codes if c not in results]
+            if not missing_codes:
+                return results
+    except Exception:
+        # Shioaji 未登入或不可用時，自動 Fallback 至證交所 Web API
+        pass
 
     # Build the ex_ch parameter containing both tse and otc for all missing stocks
     ex_ch_list = []
@@ -381,19 +447,46 @@ def fetch_realtime_quotes_batch(stock_codes: List[str]) -> Dict[str, Dict[str, A
 
     return results
 
-def fetch_realtime_quote(stock_code: str) -> Dict[str, Any]:
+def fetch_realtime_quote(stock_code: str, force_refresh: bool = False) -> Dict[str, Any]:
     """
     自證交所/櫃買中心盤中即時資訊 API 取得個股即時買賣報價與盤口資訊
     :param stock_code: 股票代號 (如 "2330")
+    :param force_refresh: 是否強制繞過快取向 API 發送請求
     :returns: 清理後的即時股票報價結構
     """
-    batch_res = fetch_realtime_quotes_batch([stock_code])
+    batch_res = fetch_realtime_quotes_batch([stock_code], force_refresh=force_refresh)
     return batch_res.get(stock_code, {})
 
 def fetch_taiex_realtime_quote() -> Dict[str, Any]:
     """
-    獲取大盤加權指數的即時點數與日期資訊 (對應 tse_t00.tw)
+    獲取大盤加權指數的即時點數與日期資訊 (優先使用 Shioaji Index 001，Fallback 至 tse_t00.tw)
     """
+    try:
+        from src.services import broker_connector
+        api = broker_connector._get_shioaji_api()
+        if api and hasattr(api, "Contracts") and hasattr(api, "snapshots"):
+            contract = api.Contracts.Indexs.TSE.get('001')
+            if contract:
+                snaps = api.snapshots([contract])
+                if snaps and getattr(snaps[0], "close", 0) > 0:
+                    snap = snaps[0]
+                    price = float(snap.close)
+                    open_val = float(snap.open) if getattr(snap, "open", 0) > 0 else price
+                    high_val = float(snap.high) if getattr(snap, "high", 0) > 0 else price
+                    low_val = float(snap.low) if getattr(snap, "low", 0) > 0 else price
+                    today_str = get_local_taiwan_date_str()
+                    return {
+                        "stockCode": "TAIEX",
+                        "price": price,
+                        "open": open_val,
+                        "high": high_val,
+                        "low": low_val,
+                        "volume": 0,
+                        "date": today_str
+                    }
+    except Exception:
+        pass
+
     url = "https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_t00.tw"
     try:
         response = _get_with_retry(url)
@@ -452,73 +545,94 @@ def fetch_taiex_klines(date_str: str = None) -> List[Dict[str, Any]]:
 
     url = f"https://www.twse.com.tw/indicesReport/MI_5MINS_HIST?response=json&date={date_str}"
 
+    klines = []
+
+    # 1. 嘗試從證交所 API 獲取大盤歷史月 K 線
     try:
         response = _get_with_retry(url)
         data = _safe_json(response)
 
-        if data.get("stat") != "OK" or "data" not in data:
-            print(f" [數據擷取器] 無法取得大盤加權指數的 K 線數據，證交所回應: {data.get('stat')}")
-            return []
+        if "data" in data:
+            for row in data["data"]:
+                try:
+                    date_parts = row[0].split("/")
+                    roc_year = int(date_parts[0])
+                    ad_year = roc_year + 1911
+                    iso_date = f"{ad_year}-{date_parts[1]}-{date_parts[2]}"
 
-        klines = []
-        for row in data["data"]:
-            # row 格式: ["日期", "開盤指數", "最高指數", "最低指數", "收盤指數"]
-            try:
-                # 1. 解析與校正民國日期: "115/06/01" -> "2026-06-01"
-                date_parts = row[0].split("/")
-                roc_year = int(date_parts[0])
-                ad_year = roc_year + 1911
-                iso_date = f"{ad_year}-{date_parts[1]}-{date_parts[2]}"
+                    open_val = float(row[1].replace(",", ""))
+                    high_val = float(row[2].replace(",", ""))
+                    low_val = float(row[3].replace(",", ""))
+                    close_val = float(row[4].replace(",", ""))
 
-                # 2. 轉換欄位為數值並去除千分位逗號
-                open_val = float(row[1].replace(",", ""))
-                high_val = float(row[2].replace(",", ""))
-                low_val = float(row[3].replace(",", ""))
-                close_val = float(row[4].replace(",", ""))
+                    if open_val <= 0 or high_val <= 0 or low_val <= 0 or close_val <= 0:
+                        continue
 
-                # 3. 驗證數據
-                if open_val <= 0 or high_val <= 0 or low_val <= 0 or close_val <= 0:
+                    klines.append({
+                        "stockCode": "TAIEX",
+                        "date": iso_date,
+                        "open": open_val,
+                        "high": high_val,
+                        "low": low_val,
+                        "close": close_val,
+                        "volume": 0
+                    })
+                except (ValueError, IndexError):
                     continue
+    except Exception as fetch_err:
+        print(f" [數據擷取器] 警告: 證交所大盤 K 線 API 擷取失敗 (將使用資料庫與即時報價備援): {fetch_err}")
 
-                klines.append({
-                    "stockCode": "TAIEX",
-                    "date": iso_date,
-                    "open": open_val,
-                    "high": high_val,
-                    "low": low_val,
-                    "close": close_val,
-                    "volume": 0  # 大盤以 0 作為成交股數
-                })
-            except (ValueError, IndexError):
-                continue
+    # 2. 若網路 API 失敗/熔斷導致 klines 為空，自動從 Supabase 資料庫載入歷史 K 線
+    if not klines:
+        try:
+            from src.services import supabase_client
+            db_records = supabase_client.get_stock_klines("TAIEX", limit=60)
+            if db_records:
+                for k in db_records:
+                    klines.append({
+                        "stockCode": "TAIEX",
+                        "date": str(k["date"]),
+                        "open": float(k["open"]),
+                        "high": float(k["high"]),
+                        "low": float(k["low"]),
+                        "close": float(k["close"]),
+                        "volume": 0
+                    })
+                klines.sort(key=lambda x: x["date"])
+        except Exception as db_err:
+            print(f" [數據擷取器] 從資料庫載入大盤歷史時發生異常: {db_err}")
 
-        # 如果是查詢今天（即沒有指定 date_str），且回傳的 K 線中最後一筆日期不是今天，
-        # 則嘗試透過即時報價補建今天的大盤 K 線
-        if is_today_query:
-            try:
-                today_str = get_local_taiwan_date_str()
-                latest_k_date = klines[-1]["date"] if klines else None
-                if latest_k_date != today_str:
-                    quote = fetch_taiex_realtime_quote()
-                    if quote and quote.get("date") == today_str:
-                        if not any(k["date"] == today_str for k in klines):
+    # 3. 核心補建：若為今日查詢且 klines 缺乏今日資料，一律呼叫即時報價 (優先採用永豐 API 001 快照) 補建今日大盤 K 線
+    if is_today_query:
+        try:
+            today_str = get_local_taiwan_date_str()
+            latest_k_date = klines[-1]["date"] if klines else None
+            if latest_k_date != today_str:
+                quote = fetch_taiex_realtime_quote()
+                if quote and quote.get("price", 0) > 0:
+                    q_date = quote.get("date")
+                    if q_date and q_date != today_str:
+                        print(f" [數據擷取器] 警告: 大盤即時點數日期 ({q_date}) 非今日 ({today_str})，跳過當日 K 線補建以防寫入舊資料。")
+                    else:
+                        target_date = today_str
+                        if not any(k["date"] == target_date for k in klines):
+                            open_p = quote.get("open") if quote.get("open", 0) > 0 else quote["price"]
+                            high_p = quote.get("high") if quote.get("high", 0) > 0 else quote["price"]
+                            low_p = quote.get("low") if quote.get("low", 0) > 0 else quote["price"]
                             klines.append({
                                 "stockCode": "TAIEX",
-                                "date": today_str,
-                                "open": quote["open"],
-                                "high": quote["high"],
-                                "low": quote["low"],
+                                "date": target_date,
+                                "open": open_p,
+                                "high": high_p,
+                                "low": low_p,
                                 "close": quote["price"],
                                 "volume": 0
                             })
-                            print(f" [數據擷取器] 從即時報價補建今日 ({today_str}) 大盤 K 線數據: 開={quote['open']}, 收={quote['price']}")
-            except Exception as quote_err:
-                print(f" [數據擷取器] 嘗試補建今日大盤 K 線時發生異常: {quote_err}")
+                            print(f" [數據擷取器] 從即時報價(永豐/MIS)成功補建今日 ({target_date}) 大盤 K 線數據: 開={open_p}, 收={quote['price']}")
+        except Exception as quote_err:
+            print(f" [數據擷取器] 嘗試補建今日大盤 K 線時發生異常: {quote_err}")
 
-        return klines
-    except Exception as e:
-        print(f" [數據擷取器] 擷取大盤加權指數 K 線時發生異常: {str(e)}")
-        return []
+    return klines
 
 
 _DISPLAY_PRICE_CACHE = {}  # maps stock_code -> (price, timestamp)

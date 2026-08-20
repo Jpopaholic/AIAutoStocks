@@ -235,7 +235,7 @@ def run_trading_job_in_background(is_startup: bool = False):
                 run_live_trading_job(stock_codes, is_manual=True)
                 last_run_date_memory = get_local_taiwan_datetime().date()
             
-            log_system_event("INFO", f"[永動機] 進入每日定時自動交易循環 (交易日 15:40-18:00 預約，週末 09:00 起月度檢討)")
+            log_system_event("INFO", f"[永動機] 進入每日定時自動交易循環 (交易日 15:00-18:00 預約，週末 09:00 起月度檢討)")
             
             # 進入永動機定時排程循環
             while not stop_requested:
@@ -262,9 +262,9 @@ def run_trading_job_in_background(is_startup: bool = False):
                 tw_time = tw_now.time()
                 
                 # ---------------------------------------------------------
-                # 1. 平日自動下單排程 (週一至週五 15:40 - 18:00)
+                # 1. 平日自動下單排程 (週一至週五 15:00 - 18:00)
                 # ---------------------------------------------------------
-                in_pre_order_window = (dt_time(15, 40) <= tw_time <= dt_time(18, 0))
+                in_pre_order_window = (dt_time(15, 0) <= tw_time <= dt_time(18, 0))
                 if in_pre_order_window and tw_now.weekday() not in (5, 6):
                     # 若今日尚未執行過 (記憶體層級判斷)
                     if last_run_date_memory != current_date:

@@ -46,15 +46,15 @@ def run_live_trading_job(stock_codes: List[str], is_manual: bool = False) -> Non
 
     # 1a. 自動分析排程時間視窗防護（手動分析不受限制）
     # 自動分析必須在以下合法時段內才會執行：
-    #   15:40 - 18:00 (次日盤中預約單)
+    #   15:00 - 18:00 (次日盤中預約單)
     if not is_manual:
         from datetime import time as dt_time
         tw_time_check = tw_now.time()
-        in_window = (dt_time(15, 40) <= tw_time_check <= dt_time(18, 0))
+        in_window = (dt_time(15, 0) <= tw_time_check <= dt_time(18, 0))
         if not in_window:
             msg = (
                 f"自動分析時間視窗防護：目前時間 {tw_now.strftime('%H:%M:%S')} "
-                f"不在合法排程時段 (15:40-18:00)，跳過本次自動分析。"
+                f"不在合法排程時段 (15:00-18:00)，跳過本次自動分析。"
             )
             print(f" [排程引擎] {msg}")
             supabase_client.log_system_event("INFO", msg)
@@ -81,26 +81,25 @@ def run_live_trading_job(stock_codes: List[str], is_manual: bool = False) -> Non
         from datetime import time as _dt_time
         _today_str = tw_now.strftime("%Y-%m-%d")
         
-        if tw_now.time() < _dt_time(13, 45):
-            # 盤中時段：因證交所 K 線 API 尚未更新今日資料，使用即時報價的交易日期判斷是否開市
-            _quote_2330 = _sf_holiday.fetch_realtime_quote("2330")
-            if not _quote_2330 or _quote_2330.get("date") != _today_str:
+        if tw_now.time() < _dt_time(13, 30):
+            # 盤中時段：使用即時報價的交易日期判斷是否開市
+            _quote_2330 = _sf_holiday.fetch_realtime_quote("2330", force_refresh=True)
+            if not _quote_2330 or (_quote_2330.get("date") and _quote_2330.get("date") != _today_str):
                 msg = f"今日 {_today_str} 在盤中查無最新即時交易數據，判斷為國定假日或臨時休市（如颱風假），自動跳過今日任務。"
                 print(f" [排程引擎] {msg}")
                 supabase_client.log_system_event("INFO", msg)
                 return
         else:
-            # 盤後時段：使用原本比對 K 線最新日期方法
+            # 盤後時段：優先比對 K 線最新日期，若 STOCK_DAY API 尚未更新，則以即時報價雙重驗證
             _tsmc_klines = _sf_holiday.fetch_stock_klines("2330")
-            if _tsmc_klines:
-                _latest_market_date = _tsmc_klines[-1]["date"]
-                if _latest_market_date != _today_str:
+            _latest_market_date = _tsmc_klines[-1]["date"] if _tsmc_klines else ""
+            if _latest_market_date != _today_str:
+                _quote_2330 = _sf_holiday.fetch_realtime_quote("2330", force_refresh=True)
+                if not _quote_2330 or (_quote_2330.get("date") and _quote_2330.get("date") != _today_str):
                     msg = f"今日 {_today_str} 無最新交易數據（最新交易日為 {_latest_market_date}），判斷為國定假日或臨時休市（如颱風假），自動跳過今日任務。"
                     print(f" [排程引擎] {msg}")
                     supabase_client.log_system_event("INFO", msg)
                     return
-            else:
-                print(" [排程引擎] 警告: 無法獲取基準股 (2330) 的 K 線，跳過休市自檢。")
     except Exception as _holiday_err:
         print(f" [排程引擎] 警告: 執行基準股休市自檢時發生異常: {_holiday_err}")
 
@@ -222,11 +221,18 @@ def run_live_trading_job(stock_codes: List[str], is_manual: bool = False) -> Non
             prev_month_dt = tw_now.replace(day=1) - timedelta(days=1)
             prev_date = prev_month_dt.strftime("%Y%m01")
             prev_taiex_klines = stock_fetcher.fetch_taiex_klines(prev_date)
-            all_taiex = taiex_klines + prev_taiex_klines
+            seen_dates = set()
+            merged_taiex = []
+            for k in (taiex_klines + prev_taiex_klines):
+                if k["date"] not in seen_dates:
+                    seen_dates.add(k["date"])
+                    merged_taiex.append(k)
+            merged_taiex.sort(key=lambda x: x["date"])
+            all_taiex = merged_taiex
             
             if all_taiex:
                 supabase_client.save_stock_klines(all_taiex)
-                print(f" [排程引擎] 成功儲存 {len(all_taiex)} 筆大盤 K 線數據至資料庫")
+                print(f" [排程引擎] 成功儲存 {len(all_taiex)} 筆大盤 K 線數據至資料庫 (最新日期: {all_taiex[-1]['date']}, 收盤價: {all_taiex[-1]['close']})")
             else:
                 print(" [排程引擎] 警告: 未能獲取大盤加權指數的最新 K 線。")
     except Exception as taiex_err:
