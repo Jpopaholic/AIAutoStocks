@@ -114,6 +114,61 @@ def run_test(mock_post, mock_quote, mock_nav_calc, mock_holdings_query, mock_ord
 
     mock_post.reset_mock()
 
+    # 1b. Test Decision Sorting in Layer 3 by Layer 2 Scores
+    print("\n--- 測試 1b: 驗證第三層報告個股顯示順序依據第二層分數排名 ---")
+    mock_analyst_scores = [
+        {"stock_code": "2330", "total_score": 75.0, "trend_score": 20, "momentum_score": 20, "volume_score": 15, "safety_score": 20},
+        {"stock_code": "2454", "total_score": 95.0, "trend_score": 25, "momentum_score": 25, "volume_score": 25, "safety_score": 20},
+        {"stock_code": "2308", "total_score": 60.0, "trend_score": 15, "momentum_score": 15, "volume_score": 15, "safety_score": 15},
+    ]
+    # Intentionally provide decisions in random order (2308 first, 2330 second, 2454 last)
+    mock_portfolio_decision = {
+        "ranking_analysis": "綜合排名對比測試。",
+        "decisions": [
+            {"stock_code": "2308", "action": "HOLD", "quantity": 0, "reason": "分數最低觀望", "total_score": 60.0},
+            {"stock_code": "2330", "action": "BUY", "quantity": 1000, "reason": "中等分數加碼", "total_score": 75.0},
+            {"stock_code": "2454", "action": "BUY", "quantity": 2000, "reason": "最高分強力買進", "total_score": 95.0},
+        ]
+    }
+    with patch("src.services.sandbox_simulator.is_simulation_active", return_value=True):
+        send_daily_report(
+            ai_outlook="測試分數排序",
+            analyst_scores=mock_analyst_scores,
+            portfolio_decision=mock_portfolio_decision
+        )
+
+    assert mock_post.called
+    found_section2 = None
+    found_section4 = None
+    for call in mock_post.call_args_list:
+        _, kwargs = call
+        if "json" in kwargs and kwargs["json"] and "embeds" in kwargs["json"]:
+            p = kwargs["json"]
+        elif "data" in kwargs and "payload_json" in kwargs["data"]:
+            p = json.loads(kwargs["data"]["payload_json"])
+        else:
+            continue
+        for emb in p.get("embeds", []):
+            for f in emb.get("fields", []):
+                if "評分與相對排名" in f.get("name", ""):
+                    found_section2 = f["value"]
+                if "經理人交易配置與理由" in f.get("name", ""):
+                    found_section4 = f["value"]
+                    
+    assert found_section4 is not None, "未找到 Section 4 欄位內容！"
+    pos_2454 = found_section4.find("2454")
+    pos_2330 = found_section4.find("2330")
+    pos_2308 = found_section4.find("2308")
+    assert pos_2454 < pos_2330 < pos_2308, f"排序錯誤! 2454(95分) 應優先於 2330(75分) 優先於 2308(60分)。內容:\n{found_section4}"
+    print(" ✅ 驗證成功：第三層報告個股順序 (2454 -> 2330 -> 2308) 完美依照第二層分數降序排名！")
+
+    assert found_section2 is not None, "未找到 Section 2 欄位內容！"
+    assert "__2330 台積電__" in found_section2, f"第二層報告未底線標記持股 2330! 內容:\n{found_section2}"
+    assert "2330" in found_section4 and "| [現正持有]" in found_section4, f"第三層報告未標記持股 2330! 內容:\n{found_section4}"
+    print(" ✅ 驗證成功：第二層 (底線 __股票__) 與第三層 (| [現正持有] 管道標籤) 皆精準標記目前持有之股票！")
+
+    mock_post.reset_mock()
+
     # 2. Test Emergency Email
     print("\n--- 測試 2: 緊急警報通知 ---")
     send_emergency_alert(

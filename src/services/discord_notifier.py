@@ -3,7 +3,7 @@ import time
 from datetime import date, datetime, timezone
 from typing import Dict, List, Any, Optional
 
-from src.config import config, get_stock_name, safe_int
+from src.config import config, get_stock_name, safe_int, safe_float
 from src.services.supabase_client import get_orders, get_holdings, log_system_event, get_unfilled_orders
 # 由於要動態判斷是沙盒還是真實環境以獲取報價，我們引用 sandbox_simulator
 # 它會自動根據當前系統狀態，透明切換即時報價或歷史模擬報價
@@ -292,12 +292,13 @@ def send_daily_report(
 
     # ── 2.8 獲取目前持股明細與未實現損益 ─────────────────────────────
     holdings_lines = []
+    held_stock_codes = set()
     try:
-        from src.services.supabase_client import get_holdings
         from src.services.stock_fetcher import get_display_price, fetch_realtime_quotes_batch
 
         current_holdings = get_holdings()
         if current_holdings:
+            held_stock_codes = {h["stock_code"] for h in current_holdings if h.get("stock_code") and float(h.get("quantity") or 0.0) > 0}
             hold_codes = [h["stock_code"] for h in current_holdings if h.get("stock_code")]
             if hold_codes:
                 try:
@@ -462,9 +463,12 @@ def send_daily_report(
             stock_code = s["stock_code"]
             stock_name = get_stock_name(stock_code)
             name_display = f" {stock_name}" if stock_name else ""
+            stock_text = f"{stock_code}{name_display}"
+            if stock_code in held_stock_codes:
+                stock_text = f"__{stock_text}__"
             reg_score_val = safe_int(s.get('regime_score'), default=10, min_val=0, max_val=20)
             score_lines.append(
-                f"{idx+1}. {stock_code}{name_display} | 總分: **{s['total_score']}** "
+                f"{idx+1}. {stock_text} | 總分: **{s['total_score']}** "
                 f"(趨勢:{s['trend_score']} 動能:{s['momentum_score']} 成交量:{s['volume_score']} 安全:{s['safety_score']} 大盤:{reg_score_val})  "
             )
             
@@ -517,8 +521,26 @@ def send_daily_report(
             f"**經理人橫向配置說明**:\n{ranking_analysis}\n"
         ]
         
+        # 建立第二層個股總評分對照表 (供第三層個股顯示順序根據第二層分數排名對齊)
+        score_lookup = {}
+        if target_scores:
+            for s in target_scores:
+                sc = s.get("stock_code")
+                if sc:
+                    score_lookup[sc] = safe_float(s.get("total_score"), default=0.0)
+
         raw_decs = portfolio_decision.get("decisions", [])
-        for d in raw_decs:
+
+        def _get_dec_score(d_item: Dict[str, Any]) -> float:
+            if d_item.get("total_score") is not None:
+                return safe_float(d_item.get("total_score"), default=0.0)
+            sc = d_item.get("stock_code")
+            if sc and sc in score_lookup:
+                return score_lookup[sc]
+            return 0.0
+
+        sorted_decs = sorted(raw_decs, key=_get_dec_score, reverse=True)
+        for d in sorted_decs:
             code = d.get("stock_code")
             action = d.get("action", "HOLD")
             qty = float(d.get("quantity") or 0.0)
@@ -535,10 +557,11 @@ def send_daily_report(
             action_emoji = "🟢 BUY" if action == "BUY" else ("🔴 SELL" if action == "SELL" else "⚪ HOLD")
             stock_name = get_stock_name(code)
             name_display = f" ({stock_name})" if stock_name else ""
+            hold_tag = " | [現正持有]" if code in held_stock_codes else ""
             
             qty_str = f" | 數量: {qty:,.0f} 股" if action != "HOLD" else ""
             decision_lines.append(
-                f"**{action_emoji}** {code}{name_display}{qty_str}  \n"
+                f"**{action_emoji}** {code}{name_display}{hold_tag}{qty_str}  \n"
                 f"{skills_line}"
                 f"└ *原因*: {reason}\n"
             )
