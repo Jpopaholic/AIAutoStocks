@@ -463,14 +463,16 @@ def send_daily_report(
             stock_code = s["stock_code"]
             stock_name = get_stock_name(stock_code)
             name_display = f" {stock_name}" if stock_name else ""
-            stock_text = f"{stock_code}{name_display}"
-            if stock_code in held_stock_codes:
-                stock_text = f"__{stock_text}__"
             reg_score_val = safe_int(s.get('regime_score'), default=10, min_val=0, max_val=20)
-            score_lines.append(
-                f"{idx+1}. {stock_text} | 總分: **{s['total_score']}** "
+            
+            line_detail = (
+                f"{stock_code}{name_display} | 總分: **{s['total_score']}** "
                 f"(趨勢:{s['trend_score']} 動能:{s['momentum_score']} 成交量:{s['volume_score']} 安全:{s['safety_score']} 大盤:{reg_score_val})  "
             )
+            if stock_code in held_stock_codes:
+                line_detail = f"__{line_detail}__"
+                
+            score_lines.append(f"{idx+1}. {line_detail}")
             
         scores_text = "\n".join(score_lines)
     

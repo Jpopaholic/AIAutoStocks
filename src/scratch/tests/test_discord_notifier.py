@@ -163,7 +163,7 @@ def run_test(mock_post, mock_quote, mock_nav_calc, mock_holdings_query, mock_ord
     print(" ✅ 驗證成功：第三層報告個股順序 (2454 -> 2330 -> 2308) 完美依照第二層分數降序排名！")
 
     assert found_section2 is not None, "未找到 Section 2 欄位內容！"
-    assert "__2330 台積電__" in found_section2, f"第二層報告未底線標記持股 2330! 內容:\n{found_section2}"
+    assert "__2330 台積電" in found_section2 and "大盤:10)  __" in found_section2, f"第二層報告未整行底線標記持股 2330! 內容:\n{found_section2}"
     assert "2330" in found_section4 and "| [現正持有]" in found_section4, f"第三層報告未標記持股 2330! 內容:\n{found_section4}"
     print(" ✅ 驗證成功：第二層 (底線 __股票__) 與第三層 (| [現正持有] 管道標籤) 皆精準標記目前持有之股票！")
 
