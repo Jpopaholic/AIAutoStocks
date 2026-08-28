@@ -247,6 +247,7 @@ def send_daily_report(
         model_label = f"Gemini ({config.gemini_model or 'gemini-3.6-flash'})"
 
     # ── 2. 獲取今日交易委託與成交狀態 ──────────────────────────────────
+    # ── 2. 獲取今日與前次預約委託與成交狀態 ──────────────────────────────
     if override_orders is not None:
         today_orders = override_orders
     else:
@@ -254,10 +255,18 @@ def send_daily_report(
             if sim_active:
                 today_orders = get_orders(sim_date=get_effective_date_str())
             else:
-                start_utc, end_utc = get_local_taiwan_midnight_utc_range()
+                # 包含前一交易日至今的時間區間，確保能捕捉昨日盤後下單並於今日盤中成交的項目
+                from datetime import datetime, timedelta
+                from src.time_manager import get_taiwan_timezone
+                tz = get_taiwan_timezone()
+                today_date_str = get_local_taiwan_date_str()
+                today_dt = datetime.fromisoformat(today_date_str).replace(tzinfo=tz)
+                yesterday_str = (today_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+                start_utc, _ = get_local_taiwan_midnight_utc_range(yesterday_str)
+                _, end_utc = get_local_taiwan_midnight_utc_range(today_date_str)
                 today_orders = get_orders(start_date=start_utc, end_date=end_utc)
         except Exception as e:
-            print(f" [Discord通知器] 無法取得今日交易紀錄: {str(e)}")
+            print(f" [Discord通知器] 無法取得交易紀錄: {str(e)}")
             today_orders = []
 
     # ── 2.5 獲取今日未成交/滑價取消訂單 ────────────────────────────────
@@ -268,19 +277,27 @@ def send_daily_report(
             if sim_active:
                 today_unfilled = get_unfilled_orders(sim_date=get_effective_date_str())
             else:
-                start_utc, end_utc = get_local_taiwan_midnight_utc_range()
+                from datetime import datetime, timedelta
+                from src.time_manager import get_taiwan_timezone
+                tz = get_taiwan_timezone()
+                today_date_str = get_local_taiwan_date_str()
+                today_dt = datetime.fromisoformat(today_date_str).replace(tzinfo=tz)
+                yesterday_str = (today_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+                start_utc, _ = get_local_taiwan_midnight_utc_range(yesterday_str)
+                _, end_utc = get_local_taiwan_midnight_utc_range(today_date_str)
                 today_unfilled = get_unfilled_orders(start_date=start_utc, end_date=end_utc)
         except Exception as e:
-            print(f" [Discord通知器] 無法取得今日未成交紀錄: {str(e)}")
+            print(f" [Discord通知器] 無法取得未成交紀錄: {str(e)}")
             today_unfilled = []
 
-    # 計算實現損益
+    # 區分盤中真正成交項目 (FILLED / PARTFILLED)
+    executed_orders = [o for o in today_orders if o.get("status", "FILLED") in ("FILLED", "PARTFILLED")]
+
+    # 計算今日盤中實際實現損益
     today_realized_pnl = 0.0
-    for o in today_orders:
-        status = o.get("status", "FILLED")
-        if status != "PENDING":
-            realized_pnl = float(o.get("realized_pnl") or 0.0)
-            today_realized_pnl += realized_pnl
+    for o in executed_orders:
+        realized_pnl = float(o.get("realized_pnl") or 0.0)
+        today_realized_pnl += realized_pnl
 
     # 帳戶總覽 (NAV)
     from src.services.nav_calculator import calculate_nav
@@ -656,7 +673,7 @@ def send_daily_report(
             f"### 📦 目前手持股票明細\n"
             f"```diff\n{holdings_text}\n```\n\n"
             f"---\n\n"
-            f"### 💸 本日交易與成交明細\n"
+            f"### 💸 本日已成交交易與實現損益 (前次預約單於今日盤中成交)\n"
             f"```diff\n{trades_text}\n```\n\n"
             f"### ⚠️ 本日未成交/滑價取消明細\n"
             f"```diff\n{unfilled_text}\n```\n\n"
@@ -667,7 +684,7 @@ def send_daily_report(
             f"### 🚨 今日停損警告清單\n"
             f"{section3_value}\n\n"
             f"---\n\n"
-            f"### 🧠 經理人交易配置與理由 (第三層)\n"
+            f"### 🧠 經理人交易配置與理由 (第三層 - 本日AI新決策與次日預約單)\n"
             f"{section4_value}\n"
         )
         report_filename = f"{current_date_label}_Daily_Report.md"
