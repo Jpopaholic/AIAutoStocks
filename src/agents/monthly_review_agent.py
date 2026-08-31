@@ -335,8 +335,9 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
         f"2. 低迷氣候是否過於保守錯失良機。\n"
         f"3. 順風盤是否盲目追高。\n"
         f"4. 離場停損停利與部位權重，並產出 Key-Value 結構化 execution_skills。\n\n"
-        f"【⚠️ 極其重要：單日即時可執行規範 (Single-Day Actionability Rule)】\n"
+        f"【⚠️ 極其重要：單日即時可執行規範與歧義消除優先權 (Single-Day Actionability & Rule Priority)】\n"
         f"- 演化產出之所有 entry_timing_rules 與 tactical_rules 必須是【當日 (Day T) 投資組合經理人在單一交易日即可採取的客觀交易動作、位階限制或風控門檻】（如：防追高、避開當日價格處於前 20% 高檔等）！\n"
+        f"- 演化產出之 tactical_rules 必須明確包含一條【風控與鎖利優先權規範】：『當個股帳面獲利觸發動態鎖利門檻 (take_profit_pct) 或停損門檻時，鎖利與停損條款優先度絕對高於高分龍頭股續抱哲學，經理人必須執行調節平倉。』！\n"
         f"- 嚴禁產出需要『觀望數天後再買』或『連續數天追蹤』等當日無法執行的延遲戰術條文。"
     )
     generation_config_l2_reduce = {
@@ -371,7 +372,7 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
                     "HIGH_VOLATILITY": "CONSERVATIVE"
                 },
                 "tactical_rules": [
-                    "Maintain steady position sizing and strict 5% stop loss."
+                    "【規則優先權】當個股帳面獲利觸發動態鎖利門檻 (take_profit_pct) 或停損門檻時，鎖利與停損條款優先度高於高分續抱哲學，必須執行調節平倉。"
                 ]
             }
         }

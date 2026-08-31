@@ -140,7 +140,9 @@ def get_active_skills_data(is_paper: bool = False) -> Dict[str, Any]:
                 "HIGH_VOLATILITY": "CONSERVATIVE"
             },
             "tactical_rules": [
-                "Maintain strict risk management and follow analyst scores."
+                "【規則優先權】當個股帳面獲利已觸發動態鎖利門檻 (take_profit_pct) 或停損門檻時，鎖利/停損條款優先度高於高分續抱哲學，必須執行調節/平倉。",
+                "在防禦氣候期間，若個股出現 3% 以上的技術性反彈，應主動執行減碼以鎖定利潤，避免回吐。",
+                "嚴格執行離場限價策略，禁止在流動性收縮時使用市價單，以降低成交滑價損失。"
             ]
         }
     }

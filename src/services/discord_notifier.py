@@ -291,7 +291,7 @@ def send_daily_report(
             today_unfilled = []
 
     # 區分盤中真正成交項目 (FILLED / PARTFILLED)
-    executed_orders = [o for o in today_orders if o.get("status", "FILLED") in ("FILLED", "PARTFILLED")]
+    executed_orders = today_orders if override_orders is not None else [o for o in today_orders if o.get("status", "FILLED") in ("FILLED", "PARTFILLED")]
 
     # 計算今日盤中實際實現損益
     today_realized_pnl = 0.0
@@ -403,7 +403,7 @@ def send_daily_report(
 
     # 交易列表 (使用 diff 美化)
     trades_lines = []
-    for o in today_orders:
+    for o in executed_orders:
         status = o.get("status", "FILLED")
         action_label = "買" if o["action"] == "BUY" else "賣"
         stock_name = get_stock_name(o['stock_code'])
@@ -425,6 +425,7 @@ def send_daily_report(
 
     # 未成交/滑價取消/下單攔截列表
     unfilled_lines = []
+    unfilled_seen_keys = set()
     for o in today_unfilled:
         action_label = "買" if o["action"] == "BUY" else "賣"
         stock_name = get_stock_name(o['stock_code'])
@@ -443,8 +444,54 @@ def send_daily_report(
         prefix = "!"
         line = f"{prefix} {action_label} {o['stock_code']}{name_display} | {qty:,.0f}股 | 委託價:{limit_price:,.2f} | 原因:{reason_str}"
         unfilled_lines.append(line)
+        unfilled_seen_keys.add((o.get("stock_code"), o.get("action"), limit_price))
+
+    # 識別並捕捉「前次預約單於今日盤中仍掛單未成交 (PENDING)」之項目
+    new_decision_keys = set()
+    if portfolio_decision and "decisions" in portfolio_decision:
+        for d in portfolio_decision.get("decisions", []):
+            sc = d.get("stock_code") or d.get("stockCode")
+            act = d.get("action")
+            q = float(d.get("quantity") or 0.0)
+            if sc and act in ("BUY", "SELL") and q > 0:
+                new_decision_keys.add((sc, act))
+
+    for o in today_orders:
+        status = o.get("status")
+        sc = o.get("stock_code")
+        act = o.get("action")
+        limit_price = float(o.get("price") or 0.0)
+        qty = float(o.get("quantity") or 0.0)
+        
+        if status == "PENDING" and (sc, act) not in new_decision_keys:
+            key = (sc, act, limit_price)
+            if key not in unfilled_seen_keys:
+                action_label = "買" if act == "BUY" else "賣"
+                stock_name = get_stock_name(sc)
+                name_display = f"({stock_name})" if stock_name else ""
+                line = f"! {action_label} {sc}{name_display} | {qty:,.0f}股 | 委託價:{limit_price:,.2f} | 原因:前次預約單盤中未成交(掛單中/未觸價)"
+                unfilled_lines.append(line)
+                unfilled_seen_keys.add(key)
 
     unfilled_text = "\n".join(unfilled_lines) if unfilled_lines else ""
+
+    # ── 3.7 本日 AI 擬定之次日預約委託單 (預計執行決策) ──────────────────────
+    next_day_orders_lines = []
+    if portfolio_decision and "decisions" in portfolio_decision:
+        for d in portfolio_decision.get("decisions", []):
+            action = d.get("action")
+            qty = float(d.get("quantity") or 0.0)
+            if action in ("BUY", "SELL") and qty > 0:
+                code = d.get("stock_code") or d.get("stockCode")
+                stock_name = get_stock_name(code)
+                name_display = f"({stock_name})" if stock_name else ""
+                price = float(d.get("price") or 0.0)
+                prefix = "+" if action == "BUY" else "-"
+                action_label = "買" if action == "BUY" else "賣"
+                line = f"{prefix} {action_label} {code}{name_display} | {qty:,.0f}股 | 委託價:{price:,.2f} | 預約下單中 (次日生效)"
+                next_day_orders_lines.append(line)
+
+    next_day_orders_text = "\n".join(next_day_orders_lines) if next_day_orders_lines else "🟢 今日 AI 評估無需新增買賣委託單 (全數觀望/續抱)。"
 
     # ── 4. 欄位 2: 評分與相對排名 (第二層) ────────────────────────────────
     scores_text = "暫無分析師評分資料。"
@@ -621,9 +668,10 @@ def send_daily_report(
         fields.extend(_split_into_fields("💸 1e. 本日交易明細", trades_text, syntax="diff", max_len=950))
         if unfilled_text:
             fields.extend(_split_into_fields("⚠️ 1f. 本日未成交/下單攔截明細", unfilled_text, syntax="diff", max_len=950))
+        fields.extend(_split_into_fields("📋 1g. 本日AI擬定之次日預約委託單", next_day_orders_text, syntax="diff", max_len=950))
         fields.extend(_split_into_fields("📈 2. 評分與相對排名 (第二層)", section2_value, max_len=950))
         fields.extend(_split_into_fields("🚨 3. 今日停損警告清單", section3_value, max_len=950))
-        fields.extend(_split_into_fields("🧠 4. 經理人交易配置與理由 (第三層)", section4_value, max_len=950))
+        fields.extend(_split_into_fields("🧠 4. 經理人個股分析與決策理由 (第三層)", section4_value, max_len=950))
 
         # ── Discord Embed 6000 字元限制：拆分多個 Embed 分批發送 ──
         # 💡 將安全防線降低，留足夠的空間給 Discord 後端緩衝，避免 500 錯誤
@@ -675,8 +723,11 @@ def send_daily_report(
             f"---\n\n"
             f"### 💸 本日已成交交易與實現損益 (前次預約單於今日盤中成交)\n"
             f"```diff\n{trades_text}\n```\n\n"
-            f"### ⚠️ 本日未成交/滑價取消明細\n"
+            f"### ⚠️ 本日未成交/滑價取消/未觸價明細\n"
             f"```diff\n{unfilled_text}\n```\n\n"
+            f"---\n\n"
+            f"### 📋 本日AI擬定之次日預約委託單 (預計執行決策)\n"
+            f"```diff\n{next_day_orders_text}\n```\n\n"
             f"---\n\n"
             f"### 📈 分析師評分與相對排名 (第二層)\n"
             f"{section2_value}\n\n"
@@ -684,7 +735,7 @@ def send_daily_report(
             f"### 🚨 今日停損警告清單\n"
             f"{section3_value}\n\n"
             f"---\n\n"
-            f"### 🧠 經理人交易配置與理由 (第三層 - 本日AI新決策與次日預約單)\n"
+            f"### 🧠 經理人個股分析與決策理由 (第三層)\n"
             f"{section4_value}\n"
         )
         report_filename = f"{current_date_label}_Daily_Report.md"
