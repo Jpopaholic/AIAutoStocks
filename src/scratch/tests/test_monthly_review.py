@@ -237,7 +237,7 @@ class TestMonthlyReviewSuite(unittest.TestCase):
         self.assertFalse(res_false)
 
     def test_per_stock_expected_metrics_formatting(self):
-        """驗證 Layer 2 個股期望獲利與期望回撤 (Mean ± Std) 及實際實現損益之格式輸出"""
+        """驗證 Layer 2 (執行層) 與 Layer 3 (總結層) 個股期望獲利與期望最大回撤 (Mean ± Std) 及實際損益在 Discord 與 Markdown 的格式輸出"""
         from src.services.discord_notifier import send_periodic_review_notification
         
         review_data = {
@@ -257,7 +257,10 @@ class TestMonthlyReviewSuite(unittest.TestCase):
                 }
             ],
             "stock_indicator_reports": [
-                {"stock_code": "2330", "indicator_retrospective": "指標穩定"}
+                {
+                    "stock_code": "2330",
+                    "indicator_retrospective": "指標穩定"
+                }
             ],
             "indicator_summary": "指標診斷完成",
             "cio_summary": "執行總評完成",
@@ -270,17 +273,32 @@ class TestMonthlyReviewSuite(unittest.TestCase):
             send_periodic_review_notification(review_data, review_type="月度")
             # 檢查傳送至 webhook 的呼叫次數與內容
             self.assertGreaterEqual(mock_webhook.call_count, 3)
+
+            # 檢查 Layer 1 Discord 卡片維持純粹技術指標與打分品質 (無交易損益/期望值干擾)
+            l1_call_payload = mock_webhook.call_args_list[0].args[1]
+            l1_desc = l1_call_payload["embeds"][0]["description"]
+            self.assertNotIn("【個股期望獲利與最大回撤統計】", l1_desc)
+
+            # 檢查 Layer 2 Discord 卡片 payload 內容包含期望獲利與期望最大回撤
+            l2_call_payload = mock_webhook.call_args_list[2].args[1]
+            l2_desc = l2_call_payload["embeds"][0]["description"]
+            self.assertIn("期望獲利 (Mean ± Std)", l2_desc)
+            self.assertIn("期望最大回撤 (Mean ± Std)", l2_desc)
+
             # 檢查包含附件的第三層呼叫
             file_args = None
             for call in mock_webhook.call_args_list:
-                if "file_tuple" in call.kwargs:
+                if "file_tuple" in call.kwargs and call.kwargs["file_tuple"]:
                     file_args = call.kwargs["file_tuple"]
             self.assertIsNotNone(file_args)
             md_content = file_args[1]
             self.assertIn("期望獲利 (Mean ± Std)", md_content)
+            self.assertIn("期望最大回撤 (Mean ± Std)", md_content)
             self.assertIn("+8.50% (±2.10%)", md_content)
+            self.assertIn("-3.20% (±1.10%)", md_content)
             self.assertIn("實際實現損益", md_content)
             self.assertIn("+15,000 元 (+5.00%)", md_content)
+            self.assertIn("各標的期望獲利與預期最大回撤明細表", md_content)
 
 if __name__ == "__main__":
     unittest.main()

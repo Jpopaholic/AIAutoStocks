@@ -195,6 +195,10 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
             f"- 打分詳細紀錄: {json.dumps(stock_info.get('scores', []), ensure_ascii=False)}\n\n"
             f"請評估該股：技術指標與評分對 V 型強勢反彈或 A 型頂點反轉的捕捉精準度，分析師給分是否存在偏斜/通膨，以及該股是否具有偏離大盤常規的特殊型態/異常走勢慣性 (anomaly_trait)。"
         )
+        exp_up_str = stock_info.get("expected_upside_str", "--")
+        exp_down_str = stock_info.get("expected_drawdown_str", "--")
+        act_pnl_str = stock_info.get("actual_pnl_str", "無平倉交易")
+
         generation_config_l1_map = {
             "response_mime_type": "application/json",
             "response_schema": StockIndicatorReviewOutput,
@@ -205,13 +209,19 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
             parsed_l1 = json.loads(l1_res)
             if isinstance(parsed_l1, dict):
                 parsed_l1["stock_code"] = stock_code
+                parsed_l1["expected_upside_str"] = exp_up_str
+                parsed_l1["expected_drawdown_str"] = exp_down_str
+                parsed_l1["actual_pnl_str"] = act_pnl_str
             stock_indicator_reports.append(parsed_l1)
         except Exception as e:
             print(f" [Monthly Review Agent] 警告: 個股 {stock_code} Layer 1 Map 檢討失敗: {e}")
             stock_indicator_reports.append({
                 "stock_code": stock_code,
                 "indicator_retrospective": f"個股 {stock_code} 技術指標診斷跳過 (LLM 呼叫異常)。",
-                "anomaly_trait": None
+                "anomaly_trait": None,
+                "expected_upside_str": exp_up_str,
+                "expected_drawdown_str": exp_down_str,
+                "actual_pnl_str": act_pnl_str
             })
 
     # Layer 1 Reduce: 綜合指標診斷與 Indicator Skills 產出

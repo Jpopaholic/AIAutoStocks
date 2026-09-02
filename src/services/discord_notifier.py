@@ -880,6 +880,8 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
     target_ind_reports = stock_ind_reports if stock_ind_reports else stock_reports
     for s_rep in target_ind_reports:
         sc = s_rep.get("stock_code", "")
+        sn = get_stock_name(sc)
+        name_str = f" ({sn})" if sn else ""
         retro = s_rep.get("indicator_retrospective") or s_rep.get("stock_retrospective", "")
         anomaly = s_rep.get("anomaly_trait")
         anomaly_text = f"\n\n**【個股特殊特徵與走勢慣性】**\n{anomaly}" if anomaly else ""
@@ -888,7 +890,7 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
             "username": f"AI 檢討 AI - Layer 1 個股指標診斷 ({period_label})",
             "embeds": [
                 {
-                    "title": f"📈 個股指標復盤: {sc} (期間: {review_month})",
+                    "title": f"📈 個股指標復盤: {sc}{name_str} (期間: {review_month})",
                     "description": _safe_embed_description(f"{retro}{anomaly_text}"),
                     "color": 3447003, # 藍色
                     "footer": {"text": f"AIAutoStocks Layer 1 指標診斷 · {sc}"},
@@ -939,11 +941,11 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
 
         metrics_text = ""
         if exp_up or exp_down or actual_pnl:
-            metrics_text = f"\n\n**【個股期望值與實際損益】**\n"
+            metrics_text = f"\n\n**【個股期望獲利與最大回撤統計】**\n"
             if exp_up:
                 metrics_text += f"• **期望獲利 (Mean ± Std)**: `{exp_up}`\n"
             if exp_down:
-                metrics_text += f"• **期望回撤 (Mean ± Std)**: `{exp_down}`\n"
+                metrics_text += f"• **期望最大回撤 (Mean ± Std)**: `{exp_down}`\n"
             if actual_pnl:
                 metrics_text += f"• **實際實現損益**: `{actual_pnl}`\n"
 
@@ -1007,11 +1009,11 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
 
         metrics_md = ""
         if exp_up or exp_down or actual_pnl:
-            metrics_md = "\n> 📊 **個股期望值與損益統計**:\n"
+            metrics_md = "\n> 📊 **個股期望獲利與最大回撤統計**:\n"
             if exp_up:
                 metrics_md += f"> • **期望獲利 (Mean ± Std)**: `{exp_up}`\n"
             if exp_down:
-                metrics_md += f"> • **期望回撤 (Mean ± Std)**: `{exp_down}`\n"
+                metrics_md += f"> • **期望最大回撤 (Mean ± Std)**: `{exp_down}`\n"
             if actual_pnl:
                 metrics_md += f"> • **實際實現損益**: `{actual_pnl}`\n"
 
@@ -1024,6 +1026,29 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
     tactical_rules = exe_skills.get("tactical_rules", [])
     tactical_text = "\n".join([f"• {r}" for r in tactical_rules]) if tactical_rules else "• 維持穩健分批進場紀律"
 
+    # 建立各標的期望獲利與預期最大回撤清單 (Markdown 表格與 Discord 摘要清單)
+    target_all_reports = stock_exe_reports if stock_exe_reports else (stock_ind_reports if stock_ind_reports else stock_reports)
+    per_stock_metrics_rows = []
+    per_stock_metrics_discord_list = []
+
+    for s_rep in target_all_reports:
+        sc = s_rep.get("stock_code", "")
+        sn = get_stock_name(sc)
+        name_str = f"({sn})" if sn else ""
+        exp_up = s_rep.get("expected_upside_str", "--")
+        exp_down = s_rep.get("expected_drawdown_str", "--")
+        act_pnl = s_rep.get("actual_pnl_str", "--")
+        per_stock_metrics_rows.append(f"| `{sc}` {name_str} | `{exp_up}` | `{exp_down}` | `{act_pnl}` |")
+        per_stock_metrics_discord_list.append(f"• **{sc} {name_str}**: 獲利 `{exp_up}` | 最大回撤 `{exp_down}` | 損益 `{act_pnl}`")
+
+    per_stock_metrics_table_md = (
+        "| 股票代號 / 名稱 | 期望獲利 (Mean ± Std) | 期望最大回撤 (Mean ± Std) | 實際實現損益 |\n"
+        "| :--- | :--- | :--- | :--- |\n" +
+        "\n".join(per_stock_metrics_rows)
+    ) if per_stock_metrics_rows else "無個股數據"
+
+    per_stock_metrics_discord_text = "\n".join(per_stock_metrics_discord_list) if per_stock_metrics_discord_list else "無個股數據"
+
     periodic_report_md = (
         f"# 🏆 {period_label} AI 復盤與戰術演化報告 (期間: {review_month})\n\n"
         f"## 📊 當期實盤硬指標統計\n"
@@ -1033,6 +1058,8 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
         f"• 期望潛在回撤 Mean: **{metrics.get('mean_drawdown_ratio', 0)*100:.2f}%** (Std: {metrics.get('std_drawdown_ratio', 0)})\n"
         f"• 成交平均滑價 Mean: **{metrics.get('mean_slippage_ratio', 0)*100:.2f}%** (Std: {metrics.get('std_slippage_ratio', 0)})\n"
         f"• 未成交取消單: **{metrics.get('total_cancelled_orders', 0)}** 筆 (取消率: **{metrics.get('cancellation_rate_pct', 0)}%**)\n\n"
+        f"### 🎯 各標的期望獲利與預期最大回撤明細表\n"
+        f"{per_stock_metrics_table_md}\n\n"
         f"---\n\n"
         f"## 📈 Layer 1 技術指標與打分品質總診斷\n{indicator_summary}\n\n"
         f"### 🔍 各標的 Layer 1 個股指標與打分診斷報告\n{ind_reports_md}\n\n"
@@ -1061,6 +1088,7 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
                     f"• 期望潛在回撤 Mean: **{metrics.get('mean_drawdown_ratio', 0)*100:.2f}%** (Std: {metrics.get('std_drawdown_ratio', 0)})\n"
                     f"• 成交平均滑價 Mean: **{metrics.get('mean_slippage_ratio', 0)*100:.2f}%** (Std: {metrics.get('std_slippage_ratio', 0)})\n"
                     f"• 未成交取消單: **{metrics.get('total_cancelled_orders', 0)}** 筆 (取消率: **{metrics.get('cancellation_rate_pct', 0)}%**)\n\n"
+                    f"**【各標的期望獲利與最大回撤摘要】**\n{per_stock_metrics_discord_text}\n\n"
                     f"{overall_summary}\n\n"
                     f"**【下期關鍵戰術執行守則】**\n{tactical_text}\n\n"
                     f"📎 *完整{period_label}復盤與演化 Skills Markdown 檔案已作為附件發送*"
