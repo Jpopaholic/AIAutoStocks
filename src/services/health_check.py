@@ -63,17 +63,37 @@ def calculate_buffered_order_price(
         
         raw_price = base_price * (1.0 + buffer_pct)
     elif action_upper == "SELL":
-        # 賣出/平倉折價讓價緩衝 (Discount Buffer)
-        if isinstance(sell_discount, dict) and sell_discount:
-            if is_liquidate or total_score < 50:
+        # 賣出/平倉折價讓價與防賤賣緩衝 (Discount Buffer)
+        if is_liquidate:
+            # 一鍵下車 / 緊急平倉：最高優先級果斷讓價變現
+            if isinstance(sell_discount, dict) and "liquidate_or_low_score" in sell_discount:
+                buffer_pct = float(sell_discount.get("liquidate_or_low_score", -0.015))
+            elif isinstance(sell_discount, list) and sell_discount:
+                buffer_pct = min([float(t.get("sell_discount_pct", -0.015)) for t in sell_discount if isinstance(t, dict)])
+            else:
+                buffer_pct = -0.015
+        elif isinstance(sell_discount, list) and sell_discount:
+            # 依分數由低至高階梯匹配 (極低分果斷讓價求售，高分鎖利惜售防賤賣)
+            valid_tiers = [t for t in sell_discount if isinstance(t, dict)]
+            sorted_sell_tiers = sorted(valid_tiers, key=lambda x: float(x.get("max_score", 100)))
+            buffer_pct = -0.010
+            for tier in sorted_sell_tiers:
+                if total_score <= float(tier.get("max_score", 100)):
+                    buffer_pct = float(tier.get("sell_discount_pct", -0.010))
+                    break
+        elif isinstance(sell_discount, dict) and sell_discount:
+            if total_score < 50:
                 buffer_pct = float(sell_discount.get("liquidate_or_low_score", -0.015))
             else:
                 buffer_pct = float(sell_discount.get("normal_sell", -0.010))
         else:
-            if is_liquidate or total_score < 50:
-                buffer_pct = -0.015  # -1.5% 一鍵下車或高風險停損，讓價優先變現
+            # 預設基準階梯 (極低分果斷求售，高分鎖利惜售防賤賣)
+            if total_score < 50:
+                buffer_pct = -0.015  # -1.5% 風險停損/急跌出清
+            elif total_score < 70:
+                buffer_pct = -0.010  # -1.0% 轉弱調節標準讓價
             else:
-                buffer_pct = -0.010  # -1.0% 標準風控賣出讓價
+                buffer_pct = -0.005  # -0.5% 高分鎖利惜售防賤賣
         
         raw_price = max(base_price * (1.0 + buffer_pct), 0.01)
     else:

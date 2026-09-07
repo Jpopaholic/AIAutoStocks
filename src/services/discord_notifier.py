@@ -1057,7 +1057,8 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
         f"• 期望潛在漲幅 Mean: **+{metrics.get('mean_upside_ratio', 0)*100:.2f}%** (Std: {metrics.get('std_upside_ratio', 0)})\n"
         f"• 期望潛在回撤 Mean: **{metrics.get('mean_drawdown_ratio', 0)*100:.2f}%** (Std: {metrics.get('std_drawdown_ratio', 0)})\n"
         f"• 成交平均滑價 Mean: **{metrics.get('mean_slippage_ratio', 0)*100:.2f}%** (Std: {metrics.get('std_slippage_ratio', 0)})\n"
-        f"• 未成交取消單: **{metrics.get('total_cancelled_orders', 0)}** 筆 (取消率: **{metrics.get('cancellation_rate_pct', 0)}%**)\n\n"
+        f"• 未成交取消單: **{metrics.get('total_cancelled_orders', 0)}** 筆 (取消率: **{metrics.get('cancellation_rate_pct', 0)}%**)\n"
+        f"• 買單進場平均位階: **{metrics.get('avg_portfolio_entry_percentile', 50.0):.1f}%** | 追高買單: **{metrics.get('total_chasing_high_trades', 0)}** 筆 | 波段頂點買入: **{metrics.get('total_late_entry_trades', 0)}** 筆\n\n"
         f"### 🎯 各標的期望獲利與預期最大回撤明細表\n"
         f"{per_stock_metrics_table_md}\n\n"
         f"---\n\n"
@@ -1071,7 +1072,7 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
         f"## 🏆 Layer 3 {period_label}整體策略總結\n{overall_summary}\n\n"
         f"**【下期關鍵戰術執行守則】**\n{tactical_text}\n\n"
         f"---\n\n"
-        f"## ⚙️ 演化下期動態戰術 Skills (JSON)\n```json\n{json.dumps(review_result.get('skills', {}), ensure_ascii=False, indent=2)}\n```\n"
+        f"## ⚙️ 演化下期動態戰術 Skills (JSON)\n```json\n{json.dumps(review_result.get('skills') or review_result.get('skills_json', {}), ensure_ascii=False, indent=2)}\n```\n"
     )
     report_filename = f"{review_month}_{period_label}_Review_Report.md"
 
@@ -1087,7 +1088,8 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
                     f"• 期望潛在漲幅 Mean: **+{metrics.get('mean_upside_ratio', 0)*100:.2f}%** (Std: {metrics.get('std_upside_ratio', 0)})\n"
                     f"• 期望潛在回撤 Mean: **{metrics.get('mean_drawdown_ratio', 0)*100:.2f}%** (Std: {metrics.get('std_drawdown_ratio', 0)})\n"
                     f"• 成交平均滑價 Mean: **{metrics.get('mean_slippage_ratio', 0)*100:.2f}%** (Std: {metrics.get('std_slippage_ratio', 0)})\n"
-                    f"• 未成交取消單: **{metrics.get('total_cancelled_orders', 0)}** 筆 (取消率: **{metrics.get('cancellation_rate_pct', 0)}%**)\n\n"
+                    f"• 未成交取消單: **{metrics.get('total_cancelled_orders', 0)}** 筆 (取消率: **{metrics.get('cancellation_rate_pct', 0)}%**)\n"
+                    f"• 買單進場平均位階: **{metrics.get('avg_portfolio_entry_percentile', 50.0):.1f}%** | 追高買單: **{metrics.get('total_chasing_high_trades', 0)}** 筆 | 波段頂點買入: **{metrics.get('total_late_entry_trades', 0)}** 筆\n\n"
                     f"**【各標的期望獲利與最大回撤摘要】**\n{per_stock_metrics_discord_text}\n\n"
                     f"{overall_summary}\n\n"
                     f"**【下期關鍵戰術執行守則】**\n{tactical_text}\n\n"

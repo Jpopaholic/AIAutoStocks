@@ -84,13 +84,15 @@ def calculate_fees(action: str, price: float, quantity: float) -> Dict[str, floa
         "net_amount": (amount + total_fee) if action == "BUY" else (amount - total_fee)
     }
 
+calculate_trading_fee = calculate_fees
+
 def _validate_trading_limits(action: str, price: float, quantity: float) -> None:
     """
     檢查單筆交易金額、今日累計交易總額與帳戶現金餘額是否超出限制或不足
     """
     order_amount = price * quantity
     
-    # 1. 檢查可用現金餘額是否充足 (僅在買入時限制)
+    # 1. 檢查可用現金餘額是否充足 (含手續費總支出，嚴防違約交割與負現金)
     if action == "BUY":
         from src.services.nav_calculator import calculate_nav
         try:
@@ -98,9 +100,11 @@ def _validate_trading_limits(action: str, price: float, quantity: float) -> None
         except Exception:
             cash_balance = config.limits.initial_cash
             
-        if order_amount > cash_balance:
+        fee_info = calculate_fees("BUY", price, quantity)
+        total_required = fee_info["net_amount"]
+        if total_required > cash_balance:
             raise ValueError(
-                f"可用現金餘額不足！欲委託買入金額為 {order_amount:,.0f} 元，而當前帳戶可用現金僅剩 {cash_balance:,.0f} 元。"
+                f" [防呆攔截] 可用現金餘額不足！欲委託買入總支出為 {total_required:,.2f} 元 (股票本金 {order_amount:,.2f} 元 + 手續費 {fee_info['fee']:,.2f} 元)，當前帳戶可用現金僅剩 {cash_balance:,.2f} 元。"
             )
             
     # 2. 檢查單筆限額 (僅在買入時限制，賣出平倉時不限制以確保能順利停損停利)

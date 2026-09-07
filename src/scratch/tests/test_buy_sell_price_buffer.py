@@ -64,6 +64,12 @@ def test_sell_price_buffer_tiers():
     print(f"Standard Sell (55): base={base_price} -> order={order_p} (buf={buf_pct*100:+.1f}%, diff={diff:+.2f})")
     assert buf_pct == -0.010
     assert order_p == 198.0
+
+    # 4. 高分鎖利惜售防賤賣 (score = 75) -> -0.5% -> 200 * 0.995 = 199.0
+    order_p, buf_pct, diff = calculate_buffered_order_price(base_price, code, "SELL", total_score=75)
+    print(f"High Score Anti-Bargain Sell (75): base={base_price} -> order={order_p} (buf={buf_pct*100:+.1f}%, diff={diff:+.2f})")
+    assert buf_pct == -0.005
+    assert order_p == 199.0
     
     print("✅ Test 2 通過！\n")
 

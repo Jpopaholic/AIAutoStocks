@@ -122,14 +122,17 @@ class TestHybridLiquidation(unittest.TestCase):
         self.assertEqual(decision_2454["action"], "HOLD")
         self.assertEqual(decision_2454["quantity"], 0.0)
 
+    @patch("src.services.trading_memory.get_active_skills_data")
     @patch("src.agents.trading_agent.get_system_fault_status")
     @patch("src.agents.trading_agent.get_pending_liquidation_stocks")
     @patch("src.agents.trading_agent.call_gemini_with_rotation")
     @patch("src.services.nav_calculator.calculate_nav")
-    def test_score_weighted_allocation(self, mock_calc_nav, mock_call_gemini, mock_get_pending, mock_get_fault):
+    def test_score_weighted_allocation(self, mock_calc_nav, mock_call_gemini, mock_get_pending, mock_get_fault, mock_skills):
         """
         測試融合量化評分與經理人權重的雙重比例加權分配邏輯。
         """
+        from src.services.trading_memory import DEFAULT_ACTIVE_SKILLS_DATA
+        mock_skills.return_value = DEFAULT_ACTIVE_SKILLS_DATA
         from src.services.nav_calculator import clear_limits_cache
         clear_limits_cache()
         

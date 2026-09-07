@@ -594,50 +594,16 @@ def generate_portfolio_decisions(
                 "total_score": total_score
             })
 
-    # 13. Python 程式端主導買入候選股預算分配 (水箱分配 Water-Filling)
-    total_budget = max(0.0, min(remaining_cash, remaining_daily_limit))
-    
-    # 計算每檔股票的加權因子並按綜合優先度 (weight_factor = total_score * allocation_weight) 降序排序
-    for cand in buy_candidates:
-        cand["weight_factor"] = safe_float(cand["total_score"] * cand["allocation_weight"], default=0.0, min_val=0.0)
-        
-    sorted_buy_candidates = sorted(buy_candidates, key=lambda x: x["weight_factor"], reverse=True)
-    
-    # 用於分配預算的候選清單
-    alloc_candidates = list(sorted_buy_candidates)
-    budgets = {cand["stock_code"]: 0.0 for cand in alloc_candidates}
-    
-    # 比例分配限制單股上限
-    remaining_alloc_budget = total_budget
-    uncapped = list(alloc_candidates)
-    
-    while uncapped and remaining_alloc_budget > 0:
-        total_factor = sum(c["weight_factor"] for c in uncapped)
-        if total_factor <= 0:
-            break
-            
-        new_uncapped = []
-        any_capped = False
-        for c in uncapped:
-            share = remaining_alloc_budget * (c["weight_factor"] / total_factor)
-            if share > single_limit:
-                budgets[c["stock_code"]] = single_limit
-                remaining_alloc_budget -= single_limit
-                any_capped = True
-            else:
-                new_uncapped.append((c, share))
-                
-        if not any_capped:
-            for c, share in new_uncapped:
-                budgets[c["stock_code"]] = share
-            break
-        else:
-            uncapped = [item[0] for item in new_uncapped]
-
-    # 14. 預先為每檔買進候選股計算包含溢價追價緩衝的最高委託限價 (Buffered Limit Price)
+    # 13. 預防違約交割前置檢查：在執行水桶演算法前，預先計算所有買進標的之最高委託限價與單股最低入場成本 (含 20 元手續費)
     from src.services.health_check import calculate_buffered_order_price
+    fee_buffer_per_order = 20.0
+    def _calc_est_buy_fee(amount: float) -> float:
+        if amount <= 0:
+            return 0.0
+        return max(fee_buffer_per_order, float(math.ceil(amount * 0.001425 * 0.6)))
+
     buffered_info = {}
-    for cand in sorted_buy_candidates:
+    for cand in buy_candidates:
         code = cand["stock_code"]
         base_p = cand["price"]
         t_score = cand["total_score"]
@@ -647,95 +613,191 @@ def generate_portfolio_decisions(
         buffered_info[code] = {
             "order_price": order_p,
             "buffer_pct": buf_pct,
-            "base_price": base_p
+            "base_price": base_p,
+            "min_required_cash": order_p + fee_buffer_per_order
         }
 
-    # 計算初步股數與剩餘零星預算（使用溢價後的上限價進行保守控管）
-    fee_buffer_per_order = 20.0
-    quantities = {}
-    costs = {}
-    for cand in sorted_buy_candidates:
+    total_budget = max(0.0, min(remaining_cash, remaining_daily_limit))
+    
+    # 🛡️ 水桶演算法前置防呆檢驗：在進入水桶分配前，先行認知扣除手續費後每檔股票現金餘額是否足夠買入 1 股
+    affordable_candidates = []
+    for cand in buy_candidates:
         code = cand["stock_code"]
         order_p = buffered_info[code]["order_price"]
-        allocated = budgets[code]
+        min_req = buffered_info[code]["min_required_cash"]
         
-        qty = math.floor(allocated / order_p) if order_p > 0 else 0
-        quantities[code] = qty
-        costs[code] = qty * order_p
-
-    # 處理因無條件捨去而留下來的零星預算，按優先度降序進行安全追加，全體總支出 (含手續費預留 20 元/筆) 絕不超過 total_budget
-    for cand in sorted_buy_candidates:
-        code = cand["stock_code"]
-        order_p = buffered_info[code]["order_price"]
-        if order_p <= 0:
-            continue
-            
-        while (costs[code] + order_p) <= single_limit:
-            potential_quantities = dict(quantities)
-            potential_quantities[code] += 1
-            potential_buy_count = sum(1 for q in potential_quantities.values() if q > 0)
-            potential_stock_cost = sum(potential_quantities[c] * buffered_info[c]["order_price"] for c in potential_quantities)
-            
-            if potential_stock_cost + (potential_buy_count * fee_buffer_per_order) <= total_budget:
-                quantities[code] += 1
-                costs[code] += order_p
-            else:
-                break
-
-    # 生成最終買進與觀望決策（按優先度排序）
-    for cand in sorted_buy_candidates:
-        code = cand["stock_code"]
-        total_score = cand["total_score"]
-        alloc_weight = cand["allocation_weight"]
-        base_price = buffered_info[code]["base_price"]
-        order_price = buffered_info[code]["order_price"]
-        buf_pct = buffered_info[code]["buffer_pct"]
-        reason = cand["reason"]
-        qty = quantities[code]
-        cost = costs[code]
-        
-        if qty > 0:
-            final_decisions.append({
-                "stock_code": code,
-                "action": "BUY",
-                "price": order_price,
-                "base_price": base_price,
-                "buffer_pct": buf_pct,
-                "quantity": safe_float(qty, default=0.0, min_val=0.0),
-                "confidence": safe_float(total_score / 100.0, default=0.5, min_val=0.0, max_val=1.0),
-                "reason": f"【投資組合加權分配買入】評定總分 {total_score} 分 (套用 {buf_pct*100:+.1f}% 追價緩衝，委託價 {order_price} 元/參考價 {base_price} 元)，經理人權重 {alloc_weight}，預估預算 {cost:,.0f} 元。{reason}",
-                "trend_score": cand["trend"],
-                "momentum_score": cand["momentum"],
-                "volume_score": cand["volume"],
-                "safety_score": cand["safety"],
-                "regime_score": cand["regime"],
-                "total_score": total_score
-            })
-            remaining_cash -= cost
-            remaining_daily_limit -= cost
-        else:
-            if single_limit < order_price:
-                limit_desc = f"單股交易限額 {single_limit:,.0f} 元低於股票單價 {order_price:,.0f} 元"
-            elif total_budget < order_price:
-                limit_desc = f"當前可用現金餘額 {total_budget:,.0f} 元不足以買入 1 股 (委託價 {order_price:,.0f} 元)"
-            else:
-                limit_desc = f"優先度排序資金分配不足以買入 1 股 (分配額 {budgets[code]:,.0f} 元 < 委託價 {order_price:,.0f} 元)"
-                
+        if total_budget < min_req:
+            # 現金預算扣除手續費後不足以買入 1 股
+            print(f" [決策代理] 提示: 標的 {code} 委託價 {order_p:,.1f} 元 (含手續費最低需 {min_req:,.1f} 元)，超出當前可用預算 {total_budget:,.2f} 元，於水桶演算法前提前阻斷並轉為觀望。")
             final_decisions.append({
                 "stock_code": code,
                 "action": "HOLD",
-                "price": order_price,
-                "base_price": base_price,
+                "price": order_p,
+                "base_price": buffered_info[code]["base_price"],
                 "quantity": 0.0,
-                "confidence": total_score / 100.0,
-                "reason": f"【配置觀望】評分 {total_score} 達到配置標準，但因 {limit_desc} 無法配置。{reason}",
+                "confidence": cand["total_score"] / 100.0,
+                "reason": f"【風控防違約交割觀望】可用現金預算 {total_budget:,.2f} 元 (扣除最低手續費 {fee_buffer_per_order:.0f} 元後) 不足以買入 1 股 (委託價 {order_p:,.1f} 元，最低門檻需 {min_req:,.1f} 元)，防範透支。{cand['reason']}",
                 "trend_score": cand["trend"],
                 "momentum_score": cand["momentum"],
                 "volume_score": cand["volume"],
                 "safety_score": cand["safety"],
                 "regime_score": cand["regime"],
-                "total_score": total_score
+                "total_score": cand["total_score"]
             })
+        elif single_limit < order_p:
+            # 單股交易限額低於股票單價
+            print(f" [決策代理] 提示: 標的 {code} 委託價 {order_p:,.1f} 元超出單股交易限額 {single_limit:,.1f} 元，於水桶演算法前提前阻斷並轉為觀望。")
+            final_decisions.append({
+                "stock_code": code,
+                "action": "HOLD",
+                "price": order_p,
+                "base_price": buffered_info[code]["base_price"],
+                "quantity": 0.0,
+                "confidence": cand["total_score"] / 100.0,
+                "reason": f"【配置觀望】單股交易限額 {single_limit:,.0f} 元低於股票單價 {order_p:,.1f} 元，無法配置。{cand['reason']}",
+                "trend_score": cand["trend"],
+                "momentum_score": cand["momentum"],
+                "volume_score": cand["volume"],
+                "safety_score": cand["safety"],
+                "regime_score": cand["regime"],
+                "total_score": cand["total_score"]
+            })
+        else:
+            affordable_candidates.append(cand)
+
+    if not affordable_candidates:
+        if buy_candidates:
+            print(f" [決策代理] 提示: 經前置預防檢驗，所有候選標的扣除手續費後現金餘額或單筆限額皆不足以買入 1 股，安全阻斷不執行水桶演算法。")
+    else:
+        # 計算每檔股票的加權因子並按綜合優先度 (weight_factor = total_score * allocation_weight) 降序排序
+        for cand in affordable_candidates:
+            cand["weight_factor"] = safe_float(cand["total_score"] * cand["allocation_weight"], default=0.0, min_val=0.0)
+            
+        sorted_buy_candidates = sorted(affordable_candidates, key=lambda x: x["weight_factor"], reverse=True)
+        
+        # 用於分配預算的候選清單
+        alloc_candidates = list(sorted_buy_candidates)
+        budgets = {cand["stock_code"]: 0.0 for cand in alloc_candidates}
+        
+        # 比例分配限制單股上限 (水箱分配 Water-Filling)
+        remaining_alloc_budget = total_budget
+        uncapped = list(alloc_candidates)
+        
+        while uncapped and remaining_alloc_budget > 0:
+            total_factor = sum(c["weight_factor"] for c in uncapped)
+            if total_factor <= 0:
+                break
+                
+            new_uncapped = []
+            any_capped = False
+            for c in uncapped:
+                share = remaining_alloc_budget * (c["weight_factor"] / total_factor)
+                if share > single_limit:
+                    budgets[c["stock_code"]] = single_limit
+                    remaining_alloc_budget -= single_limit
+                    any_capped = True
+                else:
+                    new_uncapped.append((c, share))
+                    
+            if not any_capped:
+                for c, share in new_uncapped:
+                    budgets[c["stock_code"]] = share
+                break
+            else:
+                uncapped = [item[0] for item in new_uncapped]
+
+        quantities = {}
+        costs = {}
+        for cand in sorted_buy_candidates:
+            code = cand["stock_code"]
+            order_p = buffered_info[code]["order_price"]
+            allocated = budgets[code]
+            
+            # 🛡️ 嚴防違約交割：必須先保留單筆手續費緩衝 (最低 20 元)，剩餘預算才可用於換算股數
+            avail_for_stock = max(0.0, allocated - fee_buffer_per_order)
+            qty = math.floor(avail_for_stock / order_p) if order_p > 0 else 0
+            quantities[code] = qty
+            costs[code] = qty * order_p
+
+        # 處理因無條件捨去而留下來的零星預算，按優先度降序進行安全追加，全體總支出 (含手續費預留) 絕不超過 total_budget
+        for cand in sorted_buy_candidates:
+            code = cand["stock_code"]
+            order_p = buffered_info[code]["order_price"]
+            if order_p <= 0:
+                continue
+                
+            while (costs[code] + order_p) <= single_limit:
+                potential_quantities = dict(quantities)
+                potential_quantities[code] += 1
+                
+                # 計算所有買單股票總成本 + 各筆預估手續費
+                potential_stock_cost = sum(potential_quantities[c] * buffered_info[c]["order_price"] for c in potential_quantities)
+                potential_fee_cost = sum(
+                    _calc_est_buy_fee(potential_quantities[c] * buffered_info[c]["order_price"])
+                    for c in potential_quantities if potential_quantities[c] > 0
+                )
+                
+                if (potential_stock_cost + potential_fee_cost) <= total_budget:
+                    quantities[code] += 1
+                    costs[code] += order_p
+                else:
+                    break
+
+        # 生成最終買進與觀望決策（按優先度排序）
+        for cand in sorted_buy_candidates:
+            code = cand["stock_code"]
+            total_score = cand["total_score"]
+            alloc_weight = cand["allocation_weight"]
+            base_price = buffered_info[code]["base_price"]
+            order_price = buffered_info[code]["order_price"]
+            buf_pct = buffered_info[code]["buffer_pct"]
+            reason = cand["reason"]
+            qty = quantities[code]
+            cost = costs[code]
+            
+            if qty > 0:
+                final_decisions.append({
+                    "stock_code": code,
+                    "action": "BUY",
+                    "price": order_price,
+                    "base_price": base_price,
+                    "buffer_pct": buf_pct,
+                    "quantity": safe_float(qty, default=0.0, min_val=0.0),
+                    "confidence": safe_float(total_score / 100.0, default=0.5, min_val=0.0, max_val=1.0),
+                    "reason": f"【投資組合加權分配買入】評定總分 {total_score} 分 (套用 {buf_pct*100:+.1f}% 追價緩衝，委託價 {order_price} 元/參考價 {base_price} 元)，經理人權重 {alloc_weight}，預估預算 {cost:,.0f} 元。{reason}",
+                    "trend_score": cand["trend"],
+                    "momentum_score": cand["momentum"],
+                    "volume_score": cand["volume"],
+                    "safety_score": cand["safety"],
+                    "regime_score": cand["regime"],
+                    "total_score": total_score
+                })
+                order_fee = _calc_est_buy_fee(cost)
+                remaining_cash -= (cost + order_fee)
+                remaining_daily_limit -= cost
+            else:
+                if single_limit < order_price:
+                    limit_desc = f"單股交易限額 {single_limit:,.0f} 元低於股票單價 {order_price:,.0f} 元"
+                elif total_budget < (order_price + fee_buffer_per_order):
+                    limit_desc = f"當前可用現金預算 {total_budget:,.2f} 元 (扣除手續費 {fee_buffer_per_order:.0f} 元後) 不足以買入 1 股 (委託價 {order_price:,.1f} 元，最低需 {order_price + fee_buffer_per_order:,.1f} 元)"
+                else:
+                    limit_desc = f"優先度排序資金分配不足以買入 1 股 (分配額 {budgets[code]:,.0f} 元 < 需含手續費 {order_price + fee_buffer_per_order:,.1f} 元)"
+                    
+                final_decisions.append({
+                    "stock_code": code,
+                    "action": "HOLD",
+                    "price": order_price,
+                    "base_price": base_price,
+                    "quantity": 0.0,
+                    "confidence": total_score / 100.0,
+                    "reason": f"【配置觀望】評分 {total_score} 達到配置標準，但因 {limit_desc} 無法配置。{reason}",
+                    "trend_score": cand["trend"],
+                    "momentum_score": cand["momentum"],
+                    "volume_score": cand["volume"],
+                    "safety_score": cand["safety"],
+                    "regime_score": cand["regime"],
+                    "total_score": total_score
+                })
 
     # ── 14. 檢查是否有風控覆寫，若有則動態追加提示至 ranking_analysis ──
     try:

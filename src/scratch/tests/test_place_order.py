@@ -63,5 +63,33 @@ class TestPlaceOrder(unittest.TestCase):
         # log_system_event should be called to log the error
         mock_log.assert_any_call("ERROR", "真實下單委託異常失敗: 永豐證券下單失敗：餘額不足或憑證無效 (代碼: 1001)")
 
+    @patch("src.services.nav_calculator.calculate_nav")
+    @patch("src.services.nav_calculator.get_dynamic_limits")
+    def test_validate_trading_limits_cash_with_fee(self, mock_limits, mock_calc_nav):
+        """
+        驗證 _validate_trading_limits 會正確調用 calculate_fees，且驗證現金不足 (含手續費) 時會攔截
+        """
+        from src.services.broker_connector import _validate_trading_limits, calculate_trading_fee, calculate_fees
+        
+        # 驗證別名有效
+        self.assertEqual(calculate_trading_fee, calculate_fees)
+        
+        mock_limits.return_value = (50000.0, 50000.0)
+        # 現金 12,500 元。
+        # 委託 143.5 元 * 87 股 = 12,484.5 元，手續費 20 元，總支出 12,504.5 元 > 12,500 元
+        mock_calc_nav.return_value = (12500.0, 0.0, 12500.0)
+        
+        with self.assertRaises(ValueError) as ctx:
+            _validate_trading_limits("BUY", 143.5, 87)
+        self.assertIn("可用現金餘額不足", str(ctx.exception))
+        self.assertIn("12,504.50", str(ctx.exception))
+        
+        # 現金充足 (13,000 元) 時順利通過
+        mock_calc_nav.return_value = (13000.0, 0.0, 13000.0)
+        try:
+            _validate_trading_limits("BUY", 143.5, 87)
+        except ValueError:
+            self.fail("_validate_trading_limits raised ValueError unexpectedly with sufficient cash!")
+
 if __name__ == "__main__":
     unittest.main()

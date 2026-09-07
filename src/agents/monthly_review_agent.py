@@ -88,12 +88,13 @@ class ExecutionSkillsJSON(BaseModel):
         ],
         description="買進動態溢價追價 Tier 規範列表"
     )
-    sell_discount_tiers: Optional[Dict[str, float]] = Field(
-        default={
-            "liquidate_or_low_score": -0.015,
-            "normal_sell": -0.010
-        },
-        description="賣出讓價折價規範"
+    sell_discount_tiers: Optional[Any] = Field(
+        default=[
+            {"max_score": 49, "sell_discount_pct": -0.015, "description": "-1.5% 風險停損/急跌果斷讓價求售"},
+            {"max_score": 69, "sell_discount_pct": -0.010, "description": "-1.0% 轉弱調節標準讓價出清"},
+            {"max_score": 100, "sell_discount_pct": -0.005, "description": "-0.5% 高分鎖利惜售防賤賣"}
+        ],
+        description="賣出讓價與防賤賣 Tier 規範列表 (依風險評分由低至高階梯定價，低分果斷求售，高分鎖利惜售防賤賣)"
     )
     entry_timing_rules: List[str] = Field(
         ..., description="2-3 條 Timing 進場規範（須為單日即時可執行的客觀規則，如防追高、避開當日價格處於前 20% 高檔等，嚴禁跨日觀望規則）"
@@ -343,9 +344,13 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
         f"{json.dumps(stock_execution_reports, ensure_ascii=False, indent=2)}\n\n"
         f"請綜合診斷：\n"
         f"1. Timing 追高與太晚入場原因與改善戰術。\n"
-        f"2. 低迷氣候是否過於保守錯失良機。\n"
-        f"3. 順風盤是否盲目追高。\n"
-        f"4. 離場停損停利與部位權重，並產出 Key-Value 結構化 execution_skills。\n\n"
+        f"2. 買進追價 (chase_buffer_tiers) 與賣出讓價/防賤賣 (sell_discount_tiers) 評估：\n"
+        f"   - 結合當月平均成交滑價 ({metrics.get('mean_slippage_ratio', 0)*100:.2f}%) 與取消單率 ({metrics.get('cancellation_rate_pct', 0)}%)，檢討買進追價溢價是否過高導致成本墊高，或追價不足造成掛單被取消。\n"
+        f"   - 檢討賣出讓價：極低分/急跌停損時是否果斷降價求售避免無法成交而重跌；高分調節/鎖利時是否折價過多導致賤賣在阿呆谷。\n"
+        f"   - 請依評估結果動態演化下月之 chase_buffer_tiers (買進依信心分級追價) 與 sell_discount_tiers (賣出依風險分級讓價/防賤賣)。\n"
+        f"3. 低迷氣候是否過於保守錯失良機。\n"
+        f"4. 順風盤是否盲目追高。\n"
+        f"5. 離場停損停利與部位權重，並產出 Key-Value 結構化 execution_skills。\n\n"
         f"【⚠️ 極其重要：單日即時可執行規範與歧義消除優先權 (Single-Day Actionability & Rule Priority)】\n"
         f"- 演化產出之所有 entry_timing_rules 與 tactical_rules 必須是【當日 (Day T) 投資組合經理人在單一交易日即可採取的客觀交易動作、位階限制或風控門檻】（如：防追高、避開當日價格處於前 20% 高檔等）！\n"
         f"- 演化產出之 tactical_rules 必須明確包含一條【風控與鎖利優先權規範】：『當個股帳面獲利觸發動態鎖利門檻 (take_profit_pct) 或停損門檻時，鎖利與停損條款優先度絕對高於高分龍頭股續抱哲學，經理人必須執行調節平倉。』！\n"
@@ -366,13 +371,24 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
             "key_learnings": [
                 "嚴格執行 5% 個股停損紀律",
                 "避免在股價高檔區間追高建立倉位",
-                "大盤順風天數時落實選股品質防踩雷"
+                "大盤順風天數時落實選股品質防踩雷",
+                "高信心度個股動態追價成交，低分股果斷讓價求售避免套牢"
             ],
             "execution_skills": {
                 "min_buy_score": 65,
                 "max_single_stock_weight": 4,
                 "stop_loss_pct": -0.05,
                 "take_profit_pct": 0.12,
+                "chase_buffer_tiers": [
+                    {"min_score": 85, "buy_buffer_pct": 0.015, "description": "+1.5% 高信心度強勢追價"},
+                    {"min_score": 70, "buy_buffer_pct": 0.010, "description": "+1.0% 標準追價"},
+                    {"min_score": 0,  "buy_buffer_pct": 0.005, "description": "+0.5% 溫和追價"}
+                ],
+                "sell_discount_tiers": [
+                    {"max_score": 49, "sell_discount_pct": -0.015, "description": "-1.5% 風險停損/急跌果斷讓價求售"},
+                    {"max_score": 69, "sell_discount_pct": -0.010, "description": "-1.0% 轉弱調節標準讓價出清"},
+                    {"max_score": 100, "sell_discount_pct": -0.005, "description": "-0.5% 高分鎖利惜售防賤賣"}
+                ],
                 "entry_timing_rules": [
                     "避免在股票當月價格前 20% 高檔區間追高入場",
                     "觀望標的若突破門檻應於次日分批限價入場"
@@ -437,12 +453,29 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
     take_profit = execution_skills.get("take_profit_pct", 0.12)
     tactical_rules_str = "；".join(execution_skills.get("tactical_rules", []))
 
+    chase_tiers = execution_skills.get("chase_buffer_tiers", [])
+    if isinstance(chase_tiers, list) and chase_tiers:
+        chase_str = " | ".join([f">={t.get('min_score', 0)}分: {float(t.get('buy_buffer_pct', 0))*100:+.1f}%" for t in chase_tiers if isinstance(t, dict)])
+    else:
+        chase_str = ">=85分: +1.5% | >=70分: +1.0% | <70分: +0.5%"
+
+    sell_tiers = execution_skills.get("sell_discount_tiers", [])
+    if isinstance(sell_tiers, list) and sell_tiers:
+        sell_str = " | ".join([f"<={t.get('max_score', 100)}分: {float(t.get('sell_discount_pct', 0))*100:+.1f}%" for t in sell_tiers if isinstance(t, dict)])
+    elif isinstance(sell_tiers, dict) and sell_tiers:
+        sell_str = f"緊急/低分: {float(sell_tiers.get('liquidate_or_low_score', -0.015))*100:+.1f}% | 正常: {float(sell_tiers.get('normal_sell', -0.010))*100:+.1f}%"
+    else:
+        sell_str = "<=49分: -1.5% | <=69分: -1.0% | <=100分: -0.5%"
+
     stock_rules_list = indicator_skills.get("stock_specific_rules", [])
     stock_rules_str = "；".join([f"{item.get('stock_code')}: {item.get('anomaly_trait')}" for item in stock_rules_list if isinstance(item, dict)]) if stock_rules_str_condition(stock_rules_list) else "無特別異常標的"
 
     overall_summary = (
         f"【{review_month_str} 月度戰術策略總結】\n"
         f"• **下月風控門檻**：建議最低買入門檻 **{min_score} 分** | 單檔最重權重 **{max_weight} 級** | 個股停損 **{stop_loss*100:.1f}%** | 動態鎖利 **{take_profit*100:.1f}%**\n"
+        f"• **動態定價階梯**：\n"
+        f"  - 🎯 **買進依信心追價**：{chase_str}\n"
+        f"  - 🛡️ **賣出依風險防賤賣**：{sell_str}\n"
         f"• **戰術執行重點**：{tactical_rules_str if tactical_rules_str else '維持穩健分批進場紀律'}\n"
         f"• **個股特殊特徵與關注**：{stock_rules_str}\n"
         f"• **指標與執行綜合評估**：{cio_summary}"

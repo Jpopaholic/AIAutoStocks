@@ -95,6 +95,59 @@ def get_experience_context(limit: int = 3) -> str:
 
     return "\n".join(lines)
 
+import copy
+
+DEFAULT_TACTICAL_SKILLS = {
+    "version": "baseline-v1",
+    "indicator_skills": {
+        "v_shape_reversal_patterns": [
+            {"pattern_rule": "量能突破且 RSI 於 50 以上向上黃金交叉時 V 型反彈機率高", "expected_probability_pct": 80}
+        ],
+        "a_shape_top_warnings": [
+            {"pattern_rule": "高檔乖離率過大且爆大量後無續攻力道時慎防 A 頂誘多", "expected_probability_pct": 85}
+        ],
+        "stock_specific_rules": [],
+        "score_calibration_rules": [
+            {"calibration_rule": "維持標準買入門檻，監督分析師打分品質", "expected_probability_pct": 90}
+        ],
+        "regime_indicator_rules": {
+            "BULLISH_TREND": {"focus": "著重動能與量能突破指標", "expected_probability_pct": 85},
+            "BEARISH_TREND": {"focus": "要求安全得分 >= 15 且有底線支撐", "expected_probability_pct": 90}
+        }
+    },
+    "execution_skills": {
+        "min_buy_score": 60,
+        "max_single_stock_weight": 4,
+        "stop_loss_pct": -0.05,
+        "take_profit_pct": 0.12,
+        "chase_buffer_tiers": [
+            {"min_score": 85, "buy_buffer_pct": 0.015, "description": "+1.5% 高信心度強勢追價"},
+            {"min_score": 70, "buy_buffer_pct": 0.010, "description": "+1.0% 標準追價"},
+            {"min_score": 0,  "buy_buffer_pct": 0.005, "description": "+0.5% 溫和追價"}
+        ],
+        "sell_discount_tiers": [
+            {"max_score": 49, "sell_discount_pct": -0.015, "description": "-1.5% 風險停損/急跌果斷求售變現"},
+            {"max_score": 69, "sell_discount_pct": -0.010, "description": "-1.0% 轉弱調節標準讓價出清"},
+            {"max_score": 100, "sell_discount_pct": -0.005, "description": "-0.5% 高分鎖利惜售防賤賣"}
+        ],
+        "regime_posture": {
+            "BULLISH_TREND": "AGGRESSIVE",
+            "BEARISH_TREND": "DEFENSIVE",
+            "HIGH_VOLATILITY": "CONSERVATIVE"
+        },
+        "tactical_rules": [
+            "【規則優先權】當個股帳面獲利已觸發動態鎖利門檻 (take_profit_pct) 或停損門檻時，鎖利/停損條款優先度高於高分續抱哲學，必須執行調節/平倉。",
+            "在防禦氣候期間，若個股出現 3% 以上的技術性反彈，應主動執行減碼以鎖定利潤，避免回吐。",
+            "嚴格執行離場限價策略，禁止在流動性收縮時使用市價單，以降低成交滑價損失。"
+        ]
+    }
+}
+
+DEFAULT_ACTIVE_SKILLS_DATA = {
+    "review_month": "預設基準",
+    "skills": DEFAULT_TACTICAL_SKILLS
+}
+
 def get_active_skills_data(is_paper: bool = False) -> Dict[str, Any]:
     """
     從 Supabase monthly_skills 表中，精準撈取最新單一筆 (ORDER BY created_at DESC LIMIT 1) 之 JSON 戰術 Skills 字典與月份。
@@ -102,50 +155,7 @@ def get_active_skills_data(is_paper: bool = False) -> Dict[str, Any]:
     from src.services.supabase_client import supabase
     import json
 
-    default_skills = {
-        "version": "baseline-v1",
-        "indicator_skills": {
-            "v_shape_reversal_patterns": [
-                {"pattern_rule": "量能突破且 RSI 於 50 以上向上黃金交叉時 V 型反彈機率高", "expected_probability_pct": 80}
-            ],
-            "a_shape_top_warnings": [
-                {"pattern_rule": "高檔乖離率過大且爆大量後無續攻力道時慎防 A 頂誘多", "expected_probability_pct": 85}
-            ],
-            "stock_specific_rules": [],
-            "score_calibration_rules": [
-                {"calibration_rule": "維持標準買入門檻，監督分析師打分品質", "expected_probability_pct": 90}
-            ],
-            "regime_indicator_rules": {
-                "BULLISH_TREND": {"focus": "著重動能與量能突破指標", "expected_probability_pct": 85},
-                "BEARISH_TREND": {"focus": "要求安全得分 >= 15 且有底線支撐", "expected_probability_pct": 90}
-            }
-        },
-        "execution_skills": {
-            "min_buy_score": 60,
-            "max_single_stock_weight": 4,
-            "stop_loss_pct": -0.05,
-            "take_profit_pct": 0.12,
-            "chase_buffer_tiers": [
-                {"min_score": 85, "buy_buffer_pct": 0.015, "description": "+1.5% 高信心度強勢追價"},
-                {"min_score": 70, "buy_buffer_pct": 0.010, "description": "+1.0% 標準追價"},
-                {"min_score": 0,  "buy_buffer_pct": 0.005, "description": "+0.5% 溫和追價"}
-            ],
-            "sell_discount_tiers": {
-                "liquidate_or_low_score": -0.015,
-                "normal_sell": -0.010
-            },
-            "regime_posture": {
-                "BULLISH_TREND": "AGGRESSIVE",
-                "BEARISH_TREND": "DEFENSIVE",
-                "HIGH_VOLATILITY": "CONSERVATIVE"
-            },
-            "tactical_rules": [
-                "【規則優先權】當個股帳面獲利已觸發動態鎖利門檻 (take_profit_pct) 或停損門檻時，鎖利/停損條款優先度高於高分續抱哲學，必須執行調節/平倉。",
-                "在防禦氣候期間，若個股出現 3% 以上的技術性反彈，應主動執行減碼以鎖定利潤，避免回吐。",
-                "嚴格執行離場限價策略，禁止在流動性收縮時使用市價單，以降低成交滑價損失。"
-            ]
-        }
-    }
+    default_skills = copy.deepcopy(DEFAULT_TACTICAL_SKILLS)
 
     try:
         res = supabase.table("monthly_skills") \
@@ -164,6 +174,12 @@ def get_active_skills_data(is_paper: bool = False) -> Dict[str, Any]:
             else:
                 skills_json = default_skills
             rev_month = data[0].get("review_month", "最新")
+            # 確保向後相容性：若歷史 skills 缺漏 chase_buffer_tiers 或 sell_discount_tiers，補齊預設階梯
+            exec_s = skills_json.setdefault("execution_skills", {})
+            if "chase_buffer_tiers" not in exec_s:
+                exec_s["chase_buffer_tiers"] = default_skills["execution_skills"]["chase_buffer_tiers"]
+            if "sell_discount_tiers" not in exec_s:
+                exec_s["sell_discount_tiers"] = default_skills["execution_skills"]["sell_discount_tiers"]
         else:
             skills_json = default_skills
             rev_month = "預設基準"
