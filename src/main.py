@@ -27,13 +27,13 @@ def run_live_trading_job(stock_codes: List[str], is_manual: bool = False) -> Non
 
     tw_now = get_taiwan_time()
 
-    # 自動清理 7 天前的舊日誌 / 30 天前的舊分析紀錄
+    # 自動清理 7 天前的舊日誌 / 60 天前的舊分析紀錄 (節省資料庫空間，並確保跨月復盤具備完整週期緩衝)
     try:
         supabase_client.prune_old_db_logs(days=7)
     except Exception as prune_err:
         print(f" [排程引擎] 警告: 自動清理舊日誌失敗: {prune_err}")
     try:
-        supabase_client.prune_old_daily_analysis(days=30)
+        supabase_client.prune_old_daily_analysis(days=60)
     except Exception as prune_err:
         print(f" [排程引擎] 警告: 自動清理舊分析紀錄失敗: {prune_err}")
         

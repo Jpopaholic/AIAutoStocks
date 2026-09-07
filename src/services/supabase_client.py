@@ -953,9 +953,9 @@ def get_daily_analysis_today() -> Optional[Dict[str, Any]]:
 
 
 
-def prune_old_daily_analysis(days: int = 30) -> None:
+def prune_old_daily_analysis(days: int = 60) -> None:
     """
-    定期清理過舊的分析執行紀錄，預設保留最近 30 天。
+    定期清理過舊的分析執行紀錄，預設保留最近 60 天（兼顧節省空間與跨月復盤安全邊界）。
     """
     from datetime import datetime, timedelta
     cutoff_time = (datetime.utcnow() - timedelta(days=days)).isoformat() + "Z"

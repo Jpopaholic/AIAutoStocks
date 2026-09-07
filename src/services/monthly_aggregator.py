@@ -537,6 +537,7 @@ def aggregate_monthly_data(year: int, month: int, is_paper: bool = False) -> Dic
             "end_date": curr_date_str
         },
         "is_paper": is_paper,
+        "daily_analysis_count": len(daily_analysis_ids),
         "daily_analysis_ids": daily_analysis_ids,
         "metrics": {
             "total_trades": total_trades,

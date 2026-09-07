@@ -402,18 +402,33 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
         "execution_skills": execution_skills
     }
 
-    # 寫入 Supabase monthly_skills 表
+    # 寫入 Supabase monthly_skills 表 (改存 daily_analysis_count 有效分析天數)
+    daily_count = aggregated_data.get("daily_analysis_count", len(aggregated_data.get("daily_analysis_ids", [])))
+    insert_payload = {
+        "review_month": review_month_str,
+        "daily_analysis_count": daily_count,
+        "skills": unified_skills_dict,
+        "is_paper": is_paper
+    }
     try:
-        insert_payload = {
-            "review_month": review_month_str,
-            "daily_analysis_ids": aggregated_data["daily_analysis_ids"],
-            "skills": unified_skills_dict,
-            "is_paper": is_paper
-        }
         supabase.table("monthly_skills").insert(insert_payload).execute()
-        print(f" [Monthly Review Agent] 成功寫入 monthly_skills 表: 月份 {review_month_str}")
+        print(f" [Monthly Review Agent] 成功寫入 monthly_skills 表: 月份 {review_month_str} (納入 {daily_count} 天日分析)")
     except Exception as e:
-        print(f" [Monthly Review Agent] 警告: 寫入 monthly_skills 資料表失敗: {e}")
+        # 容錯降級：若 Supabase 尚未執行 ALTER TABLE 新增 daily_analysis_count 欄位，自動切換相容舊格式寫入
+        if "daily_analysis_count" in str(e):
+            try:
+                fallback_payload = {
+                    "review_month": review_month_str,
+                    "daily_analysis_ids": [],
+                    "skills": unified_skills_dict,
+                    "is_paper": is_paper
+                }
+                supabase.table("monthly_skills").insert(fallback_payload).execute()
+                print(f" [Monthly Review Agent] 成功相容寫入 monthly_skills 表 (相容舊 schema): 月份 {review_month_str}")
+            except Exception as e_fb:
+                print(f" [Monthly Review Agent] 警告: 降級寫入 monthly_skills 資料表失敗: {e_fb}")
+        else:
+            print(f" [Monthly Review Agent] 警告: 寫入 monthly_skills 資料表失敗: {e}")
 
     # 產生 Discord 與 Web 展示用之自然繁體中文策略總結
     min_score = execution_skills.get("min_buy_score", 65)
