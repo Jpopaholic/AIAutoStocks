@@ -147,22 +147,23 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
     metrics = aggregated_data["metrics"]
     per_stock_data = aggregated_data["per_stock_data"]
 
-    # 🛡️ 防崩盤與無效 Token 浪費保護：若該區間完全無任何每日分析與個股資料，跳過檢討
-    if not aggregated_data.get("daily_analysis_ids") and not per_stock_data:
-        print(f" [Monthly Review Agent] 提示: {review_month_str} 區間內完全無任何歷史分析與交易紀錄，安全跳過檢討。")
+    # 🛡️ 復盤門檻保護：月檢討至少需累積 10 筆以上的日分析紀錄，避免樣本不足造成模型誤判
+    daily_analysis_count = len(aggregated_data.get("daily_analysis_ids", []))
+    if daily_analysis_count < 10 or not per_stock_data:
+        print(f" [Monthly Review Agent] 提示: {review_month_str} 區間內日分析紀錄不足 10 筆 (目前 {daily_analysis_count} 筆)，安全跳過檢討。")
         return {
             "review_month": review_month_str,
             "is_paper": is_paper,
             "skipped": True,
-            "message": f"區間 ({aggregated_data['date_range']['start_date']} ~ {aggregated_data['date_range']['end_date']}) 內完全無歷史交易與分析資料，跳過檢討。",
+            "message": f"區間 ({aggregated_data['date_range']['start_date']} ~ {aggregated_data['date_range']['end_date']}) 內日分析紀錄不足 10 筆 (目前 {daily_analysis_count} 筆，門檻需 >= 10 筆)，安全跳過檢討以避免樣本不足導致模型誤判。",
             "metrics": metrics,
             "stock_indicator_reports": [],
             "stock_execution_reports": [],
             "stock_reports": [],
-            "indicator_summary": f"區間 ({review_month_str}) 內尚無歷史分析紀錄。",
-            "cio_summary": f"區間 ({review_month_str}) 內尚無歷史交易紀錄。",
-            "overall_summary": f"區間 ({review_month_str}) 內尚無歷史分析與交易紀錄，維持現有戰術防線。",
-            "key_learnings": ["區間內無交易與分析資料，保持觀望與現有配置"],
+            "indicator_summary": f"區間 ({review_month_str}) 內日分析紀錄不足 10 筆，維持現有策略。",
+            "cio_summary": f"區間 ({review_month_str}) 內日分析紀錄不足 10 筆，維持現有風控配置。",
+            "overall_summary": f"區間 ({review_month_str}) 內日分析紀錄不足 10 筆 (目前 {daily_analysis_count} 筆，門檻需 >= 10 筆)，安全跳過檢討，維持現有戰術防線。",
+            "key_learnings": ["月度日分析樣本不足 10 筆，保持觀望與現有配置"],
             "indicator_skills": None,
             "execution_skills": None,
             "skills_json": None
