@@ -11,10 +11,23 @@ from src.time_manager import get_utc_now
 _supabase_url = config.supabase.url
 _supabase_key = config.supabase.key
 
-# 建立自訂的 httpx Client 以停用 HTTP/2，解決 Supabase API 連線不穩（ConnectionState.CLOSED、PROTOCOL_ERROR 等）的問題
-# 並將逾時設定為與 Supabase 預設一致的 120 秒，避免 5 秒預設逾時影響大型查詢。
-_custom_http_client = httpx.Client(
+# 建立自訂的 HTTPTransport 與 httpx Client：
+# 1. 停用 HTTP/2（http1=True, http2=False），避免 Supabase API 頻繁發生 ConnectionState.CLOSED、PROTOCOL_ERROR 等連線問題。
+# 2. 啟用 Transport 級重試（retries=1），當 Keep-Alive 連線遭遠端伺服器（Cloudflare / Supabase）單方面切斷時，底層自動清除死連線並重建。
+# 3. 設置連線池 Limits：縮短 keepalive_expiry 至 10.0 秒，避免長時間閒置的連線殘留於連線池中造成髒連線污染。
+# 4. 逾時設定為 120 秒，避免預設逾時影響大型歷史查詢。
+_custom_transport = httpx.HTTPTransport(
+    retries=1,
+    http1=True,
     http2=False,
+    limits=httpx.Limits(
+        max_keepalive_connections=10,
+        max_connections=20,
+        keepalive_expiry=10.0
+    )
+)
+_custom_http_client = httpx.Client(
+    transport=_custom_transport,
     timeout=120.0
 )
 _client_options = ClientOptions(
@@ -35,7 +48,7 @@ def _get_current_time_iso() -> str:
         return eff_dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
     return get_utc_now().isoformat().replace("+00:00", "Z")
 
-def execute_with_retry(query_fn: Callable[[], Any], retries: int = 3, delay: float = 1.0) -> Any:
+def execute_with_retry(query_fn: Callable[[], Any], retries: int = 4, delay: float = 1.0) -> Any:
     """
     通用的資料庫操作重試包裝器（支援指數退避，若資料表不存在則立即中斷重試）
     """
