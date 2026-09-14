@@ -43,12 +43,16 @@ graph TD
     LR --> G[gemini_rotator.py Gemini多密鑰輪替]
     LR --> OA[OpenAI GPT-4o / mini 驅動]
     
-    F2 --> M[trading_memory.py 經驗檢索]
+    F2 --> M[trading_memory.py 經驗檢索與雙層Skills合流]
     F3 --> M
     
     A --> MR[monthly_review_agent.py 月度AI復盤]
     MR --> MA[monthly_aggregator.py 績效與滑價聚合]
     MR --> C
+    
+    A --> QR[quarterly_review_agent.py 季度AI復盤與策略委員會]
+    QR --> QA[quarterly_aggregator.py 3月度跨度無縫聚合]
+    QR --> C
     
     A --> I[broker_connector.py 下單連接與對帳]
     A --> J[discord_notifier.py Discord富文本報告]
@@ -108,6 +112,7 @@ graph TD
 
 10. **Web UI 儀表板控制台 (`web_server.py` & `src/static/index.html`)**：
     - 即時視覺化展示帳戶資產淨值 (NAV)、現金餘額、持股庫存與各部位帳面損益。
+    - **雙層 Skills 分區展示**：月度 Skills 與季度 Skills 各自擁有專屬獨立預覽卡片、版本標籤與執行控制區，並行非同步載入。
     - 即時編輯與切換自選股清單、系統參數（如初始資金、風控限額比例、AI_PROVIDER 模型引擎切換、模擬/實盤模式）。
     - 提供系統運行日誌 (`system_logs`) 檢視、手動觸發/停止交易排程、一鍵下車平倉、手動對帳、故障鎖解除與 Discord 測試通知按鈕。
     - 預設綁定 `0.0.0.0:8080`，輕量化記憶體佔用（僅需 256MB），無縫相容 Fly.io 雲端容器部署。
@@ -127,26 +132,26 @@ graph TD
 14. **多 Gemini API 金鑰輪替與冷卻機制 (`gemini_rotator.py`)**：
     - 支援多組 Gemini API 金鑰自動輪替。當某金鑰觸發 429 限制（RPM/RPD）時，自動標記冷卻並切換至其他可用金鑰，確保分析決策不中斷。
 
-15. **Few-Shot 交易記憶管理器 (`trading_memory.py`)**：
-    - 自 Supabase 讀取過往平倉交易記錄，動態篩選出高收益的「成功交易」與虧損的「失敗交易」作為經驗背景注入 Prompt，促使 AI 吸取歷史教訓。
+15. **Few-Shot 交易記憶與雙層 Skills 融合管理器 (`trading_memory.py`)**：
+    - 自 Supabase 讀取過往平倉交易記錄，動態篩選出高收益的「成功交易」與虧損的「失敗交易」作為經驗背景注入 Prompt。
+    - **雙層 Skills 衝突裁決與覆蓋**：自動彙整最新生效之月度與季度 Skills，當產生矛盾衝突時，**以「季度 Skills」為主導最高優先準則（季優先於月）**，全面覆蓋買入門檻、部位上限、停損停利、ATR 乘數、追價階梯，並將季度戰術風控指令排在最優先順序。
 
 16. **安全憑證解密管理器 (`credential_manager.py`)**：
     - 利用 AES-256-GCM 演算法將敏感憑證（Supabase Key、Discord Webhooks 網址、Gemini 多組 API Key、OpenAI API Key、證券商 API Key 等）加密保存於 `credentials.enc`。
     - 執行時透過環境變數傳入主密鑰 `MASTER_KEY` 於記憶體中解密，確保敏感憑證不進原始碼版本控制。
 
 17. **精美 Discord Webhook 報告系統 (`discord_notifier.py`)**：
-    - 每日報告依據分析師評分進行**由高至低降序排列**，並針對當前庫存個股採用**全行底線 (Underline) 顯著標註**，便於快速盤點持股與決策重點。
+    - 每日報告依據分析師評分進行**由高至低降序排列**，並針對當前庫存個股採用**全行底線 (Underline) 顯著標註**。
     - 支援分流通知管道：沙盒交易 (`webhookSandbox`)、實盤交易 (`webhookLive`)、月度復盤 (`webhookMonthlyReview`)、季度復盤 (`webhookQuarterlyReview`)、年度復盤 (`webhookYearlyReview`)。
-    - 控制台提供專屬 Discord 測試發送按鈕，便於驗證通知連線狀態。
+    - **季度專屬強制防線**：季度復盤通知強制要求配置 `DISCORD_WEBHOOK_QUARTERLY_REVIEW`，未配置直接拋出例外報錯，嚴禁降級回退。
 
-18. **月度與長週期 AI 復盤演化系統 (`monthly_review_agent.py` & `monthly_aggregator.py`)**：
-    - 每月或週末自動/手動執行雙層 AI 復盤（Layer 1: 技術指標與打分診斷、Layer 2: 投資組合與倉位控制診斷）。
-    - 聚合當月交易實績、滑價率、勝率、上下行預期，生成結構化 JSON Skills 並存入 Supabase `monthly_skills` 資料表。
-    - 次月交易自動載入最新演化出的 Skills 規範，實現 AI 交易策略的自主進化與經驗傳承。
-    - **週期跨度規範**：依據統一標準，季度與年度檢討統一以週六復盤日為基準跨度（季度涵蓋 3 個月度復盤日跨度 / 年度涵蓋 12 個月度復盤日跨度），確保紀錄無縫銜接。
+18. **月度與季度雙層長週期 AI 復盤演化系統 (`monthly_review_agent.py` & `quarterly_review_agent.py`)**：
+    - **月度 AI 復盤 (Monthly Review)**：固定於每月結算後首個**週六 09:00** 執行（雙層架構），針對單月日分析數據微調技術指標評分與執行參數，產出 `monthly_skills`。
+    - **季度 AI 復盤與策略委員會 (Quarterly Review)**：固定於每季結算後首個**週日 09:00** 執行（四層架構），無縫聚合 3 個月度復盤日數據（3 格跨度），由 **Layer 3 量化策略委員會 (Meta-Quant Committee)** 深度診斷 3 個月份的技能演化軌跡、嚴格審查單月過度擬合 (Overfitting) 與消除跨月規則衝突，最終將宏觀規範寫入獨立隔離的 `quarterly_skills` 資料表。
+    - **排程時間解耦**：月檢討（週六）、季檢討（週日），兩者時間完全隔離互不衝突，週日季度檢討能無縫取用週六月檢討成果。
     - **復盤檢討執行門檻**：
       - **月度檢討**：該月至少需累積 10 筆（含）以上的日分析紀錄 (`daily_analysis >= 10`)，避免樣本不足造成模型誤判。
-      - **季度檢討**：對應的 3 個月份中，每個月都必須至少有一筆有效月度檢討紀錄。
+      - **季度檢討**：對應季度的 3 個月份中，每個月都必須至少有一筆有效月度檢討紀錄（3 個月份皆具備月檢討紀錄，缺一不可），確保季度宏觀評估具備扎實的月度基石。
       - **年度檢討**：該年度至少需累積完整 4 季的季度檢討紀錄，方可啟動年度大復盤。
 
 ---
@@ -160,6 +165,7 @@ AIAutoStocks/
 │   │   ├── analyst_agent.py        # 技術分析師代理 (K線多維度評分、V轉/A頂型態辨識與指標分析)
 │   │   ├── decision_agent.py       # 投資組合配置經理代理 (水箱預算分配、追價/讓價、同日防沖與風控護欄)
 │   │   ├── monthly_review_agent.py # 月度 AI 復盤與 Skills 自我演化代理 (雙層復盤診斷)
+│   │   ├── quarterly_review_agent.py # 季度 AI 復盤與宏觀戰略代理 (含 Layer 3 策略委員會四層架構)
 │   │   ├── regime_agent.py         # 大盤氣候診斷代理 (6階Regime與5階Posture動態姿態判定)
 │   │   └── trading_agent.py        # 雙層 Agent 管線門面 (Facade) 與故障鎖避險機制
 │   ├── services/
@@ -170,13 +176,14 @@ AIAutoStocks/
 │   │   ├── health_check.py         # 運行前診斷、價格緩衝計算與下單安全審查器
 │   │   ├── llm_router.py           # 多 LLM 提供者路由引擎 (Gemini & OpenAI 雙驅動)
 │   │   ├── monthly_aggregator.py   # 月度交易數據、滑價率、上下行預期與績效指標聚合計算器
+│   │   ├── quarterly_aggregator.py # 季度交易數據聚合器 (計算 3 個月度復盤日無縫 3 格跨度與月檢討門檻)
 │   │   ├── nav_calculator.py       # 資產淨值 (NAV) 計算與動態限額快取
 │   │   ├── sandbox_simulator.py    # 沙盒回測演練與歷史行情重播器
 │   │   ├── stock_fetcher.py        # 台股與大盤 K 線與即時報價擷取器 (含休市/颱風假自檢)
 │   │   ├── supabase_client.py      # Supabase 連線與資料庫 CRUD / TTL 日誌清理封裝
 │   │   ├── technical_indicators.py # 價格/成交量指標計算器 (SMA, EMA, RSI, MACD, DMI, ADX)
 │   │   ├── totp_service.py         # TOTP 驗證與 Session Token 管理服務
-│   │   └── trading_memory.py       # 交易得失與 Few-Shot 經驗檢索管理器
+│   │   └── trading_memory.py       # 交易經驗檢索與月度/季度 Skills 雙層彙整管理器 (衝突以季為準)
 │   ├── scratch/                    # 維護、診斷與測試腳本目錄
 │   │   ├── tests/                  # 完整 pytest 單元測試套件 (65+ passed)
 │   │   │   ├── test_buy_sell_price_buffer.py              # 雙向溢價/折價緩衝測試
@@ -358,16 +365,23 @@ python src/web_server.py
 python import_history.py --stocks top5 --start-date 2026-05-01 --end-date 2026-06-08
 ```
 
-### 7. 手動觸發月度 AI 復盤與 Skills 自主演化
-- 可在 Web 控制台介面點擊「執行月度檢討」或呼叫 API `POST /api/monthly-skills/run`。
-- 系統預設限制於週末假日（週六、週日）執行，若需於平日除錯可傳入 `override_weekend_check: true`。
-- 檢討產出之動態戰術 Skills 可透過 `GET /api/monthly-skills/active` 即時檢視。
+### 7. 手動觸發月度／季度 AI 復盤與雙層 Skills 自主演化
+- **月度 AI 復盤**：
+  - 可在 Web 控制台介面點擊「一鍵月度檢討」或呼叫 API `POST /api/monthly-skills/run`。
+  - 系統限制於週末假日（週六、週日）執行，可傳入任意日期自動對齊該月份；若需於平日除錯可傳入 `override_weekend_check: true`。
+  - 生效之月度動態戰術 Skills 可透過 `GET /api/monthly-skills/active` 即時檢視。
+- **季度 AI 復盤**：
+  - 可在 Web 控制台介面點擊「一鍵季度檢討」或呼叫 API `POST /api/quarterly-skills/run`。
+  - 同樣限制於週末假日（週六、週日）開放，涵蓋 3 個完整月度復盤日無縫跨度，且必須具備 3 個月份的月檢討基石支撐。
+  - 生效之季度宏觀戰略 Skills 可透過 `GET /api/quarterly-skills/active` 即時檢視。
+- **雙層 Skills 協同與合流**：
+  - Web 儀表板分區展示月度與季度 Skills，交易決策引擎在盤後自動彙整雙層規範；**當產生矛盾衝突時，一律以季度 Skills 為最高指導準則**。
 
 ---
 
 ## 🗄️ Supabase 資料庫建置 (SQL Schema)
 
-請在 Supabase 專案的 **SQL Editor** 中執行根目錄下的 [supabase_schema.sql](supabase_schema.sql)，建立所需的 11 張資料表、查詢索引與自動觸發器：
+請在 Supabase 專案的 **SQL Editor** 中執行根目錄下的 [supabase_schema.sql](supabase_schema.sql)，建立所需的 12 張資料表、查詢索引與自動觸發器：
 
 1. `watchlist` — 自選監控股票清單（支援 Upsert 與動態增刪）
 2. `holdings` — 目前持股明細（支援 Paper Trading / 實盤劃分）
@@ -380,15 +394,16 @@ python import_history.py --stocks top5 --start-date 2026-05-01 --end-date 2026-0
 9. `unfilled_orders` — 未成交與護欄攔截訂單紀錄
 10. `stock_analysis_scores` — 股票 AI 分析評分與量化明細紀錄
 11. `monthly_skills` — 月度 AI 復盤檢討與動態演化戰術規則庫
+12. `quarterly_skills` — 季度 AI 決策檢討與動態演化宏觀戰略庫（獨立隔離，嚴防污染月檢討）
 
 ---
 
 ## 🧪 單元測試
 
-專案使用 `pytest` 建立了完整的單元測試套件，涵蓋 LLM 路由、氣候判定、價格緩衝、水箱分配、排程護欄、溢位防禦與對帳同步：
+專案使用 `pytest` 與 `unittest` 建立了完整的單元測試套件，涵蓋 LLM 路由、氣候判定、價格緩衝、水箱分配、排程護欄、溢位防禦、對帳同步、月度復盤、以及季度四層審議與 Skills 優先權衝突覆蓋：
 
 ```bash
-# 執行所有單元測試套件 (65 passed)
+# 執行所有單元測試套件
 pytest src/scratch/tests/
 ```
 
@@ -400,17 +415,22 @@ pytest src/scratch/tests/
 
 - [x] **月度 AI 決策檢討與戰術 Skills 演化 (Phase 1 - 現已上線)**
   - 聚焦微觀戰術與技術指標診斷（V 轉反彈、A 頂預警、打分校正）。
+  - 固定於每月第一個週六 09:00 自動執行，門檻需累積 10 筆以上日分析數據。
   - 產出月度動態 `monthly_skills` 規範並傳承至次月交易。
-  - 設定專屬 Discord 月度檢討通知管道 (`webhookMonthlyReview`)。
+  - 配套專屬 Discord 月度檢討通知管道 (`webhookMonthlyReview`)。
 
-- [ ] **季度戰略檢討 Agent (Quarterly Review Agent - 規劃中)**
-  - 聚焦中長線產業趨勢、大盤氣候轉換與個股資金輪動。
-  - 統一以週六復盤日為基準邊界，涵蓋 3 個月度復盤日跨度（3 格跨度），歸納與升級戰術經驗。
-  - 配套專屬 Discord 季度復盤通知 (`webhookQuarterlyReview`)。
+- [x] **季度戰略檢討與量化策略委員會 Agent (Phase 2 - 現已上線)**
+  - 聚焦中長線產業趨勢、大盤氣候轉換、部位上限、ATR 動態乘數與單月過度擬合審查。
+  - 統一以週六復盤日為基準邊界，無縫涵蓋 3 個月度復盤日跨度（3 格跨度）。
+  - 設立專屬 **Layer 3 量化策略委員會 (Meta-Quant Committee)**，逐月審核調參成效並消除跨月規則衝突。
+  - **核心衝突裁決原則**：當季與月 Skills 衝突時，一律由季度長線防線主導覆蓋。
+  - 固定於每季結束後第一個週日 09:00 自動執行，需具備 3 個月份完整月檢討基石。
+  - 寫入獨立 `quarterly_skills` 表防污染，配套強制專屬 Discord 季度復盤通知 (`webhookQuarterlyReview`)。
 
 - [ ] **年度宏觀檢討與策略基因演化 Agent (Yearly Review Agent - 規劃中)**
   - 檢討年度整體投資組合夏普比率 (Sharpe Ratio)、最大回撤 (MDD) 與實質勝率。
-  - 涵蓋 12 個月度復盤日跨度（12 格跨度），實現全流程無死角銜接與策略自主演化。
+  - 涵蓋 12 個月度復盤日跨度（4 季完整基石，12 格跨度），實現全流程無死角銜接與跨週期策略自主演化。
+  - 遵循「年度 > 季度 > 月度」的超長線宏觀指導原則。
   - 配套專屬 Discord 年度復盤通知 (`webhookYearlyReview`)。
 
 ---
