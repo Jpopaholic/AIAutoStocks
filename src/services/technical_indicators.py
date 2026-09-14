@@ -190,6 +190,41 @@ def calculate_dmi(
             
     return plus_di, minus_di, adx
 
+def calculate_atr(
+    highs: List[float], 
+    lows: List[float], 
+    closes: List[float], 
+    period: int = 14
+) -> List[Optional[float]]:
+    """
+    計算平均真實波幅 (ATR - Average True Range)。
+    使用標準 Wilder's Smoothing 平滑法。
+    """
+    n = len(closes)
+    if n < period:
+        return [None] * n
+
+    tr = [0.0] * n
+    tr[0] = highs[0] - lows[0]
+    for i in range(1, n):
+        tr[i] = max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1])
+        )
+
+    atr: List[Optional[float]] = [None] * n
+    # 第 1 個 ATR 值採用前 period 根的 TR 簡單平均
+    first_atr = sum(tr[:period]) / period
+    atr[period - 1] = first_atr
+
+    current_atr = first_atr
+    for i in range(period, n):
+        current_atr = (current_atr * (period - 1) + tr[i]) / period
+        atr[i] = current_atr
+
+    return atr
+
 def compute_all_indicators(klines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     計算 klines 中的所有技術指標並附加回字典中。
@@ -220,6 +255,9 @@ def compute_all_indicators(klines: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     
     # DMI
     plus_di, minus_di, adx14 = calculate_dmi(highs, lows, closes, 14)
+
+    # ATR (平均真實波幅)
+    atr14 = calculate_atr(highs, lows, closes, 14)
     
     for i, k in enumerate(klines):
         k["ma5"] = ma5[i]
@@ -234,5 +272,8 @@ def compute_all_indicators(klines: List[Dict[str, Any]]) -> List[Dict[str, Any]]
         k["plus_di"] = plus_di[i]
         k["minus_di"] = minus_di[i]
         k["adx"] = adx14[i]
+        k["atr14"] = atr14[i]
+        curr_close = closes[i]
+        k["atr_pct"] = (atr14[i] / curr_close * 100.0) if (atr14[i] is not None and curr_close > 0) else None
         
     return klines

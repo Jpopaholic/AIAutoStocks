@@ -80,6 +80,14 @@ class ExecutionSkillsJSON(BaseModel):
     max_single_stock_weight: int = Field(..., description="建議單一標的最重部位權重 (1-5)")
     stop_loss_pct: float = Field(..., description="建議個股硬停損百分比，如 -0.05 代表 -5%")
     take_profit_pct: float = Field(..., description="建議動態鎖利觸發百分比，如 0.12 代表 12%")
+    stop_loss_atr_mult: Optional[float] = Field(
+        default=2.0,
+        description="建議個股 ATR 動態停損乘數（如 2.0 代表成本 - 2.0*ATR 停損出場，針對各股波動度差異自適應調整）"
+    )
+    take_profit_atr_mult: Optional[float] = Field(
+        default=3.5,
+        description="建議個股 ATR 動態鎖利乘數（如 3.5 代表成本 + 3.5*ATR 動態鎖利，針對各股波動度差異自適應調整）"
+    )
     chase_buffer_tiers: Optional[List[Dict[str, Any]]] = Field(
         default=[
             {"min_score": 85, "buy_buffer_pct": 0.015, "description": "+1.5% 高信心度強勢追價"},
@@ -194,6 +202,7 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
             f"【個股指標與打分歷史數據】\n"
             f"- 分析師打分紀錄筆數: {len(stock_info.get('scores', []))}\n"
             f"- 當月該股總振幅 (Price Range Ratio): {stock_info.get('price_range_ratio', 0.0) * 100:.2f}%\n"
+            f"- 個股 ATR(14) 波動度: {stock_info.get('atr_pct', 0.0):.2f}% (波動屬性: {stock_info.get('volatility_tier', 'NORMAL')})\n"
             f"- 打分詳細紀錄: {json.dumps(stock_info.get('scores', []), ensure_ascii=False)}\n\n"
             f"請評估該股：技術指標與評分對 V 型強勢反彈或 A 型頂點反轉的捕捉精準度，分析師給分是否存在偏斜/通膨，以及該股是否具有偏離大盤常規的特殊型態/異常走勢慣性 (anomaly_trait)。"
         )
@@ -294,6 +303,7 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
             f"【注意：1. 本階段請專注於入場 Timing、追高/遲入場、觀望錯失機會、成交滑價與離場風控！ 2. 回傳 JSON 中的 stock_code 欄位必須嚴格保持為 '{stock_code}'，不得填寫複雜文字或免責聲明。】\n\n"
             f"{macro_context_str}\n\n"
             f"【個股交易與觀望數據】\n"
+            f"- 個股波動屬性: {stock_info.get('volatility_tier', 'NORMAL')} (ATR%: {stock_info.get('atr_pct', 0.0):.2f}%, ATR14: {stock_info.get('atr14', 0.0):.2f}元)\n"
             f"- 成交單筆數: {len(stock_info.get('filled_orders', []))}\n"
             f"- 未成交/被取消單筆數: {len(stock_info.get('cancelled_orders', []))}\n"
             f"- 期望潛在獲利 (Mean ± Std): {exp_up_str}\n"
@@ -339,6 +349,7 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
         f"- 期望潛在漲幅 (Mean Upside): +{metrics['mean_upside_ratio']*100:.2f}% | 期望潛在回撤: {metrics['mean_drawdown_ratio']*100:.2f}%\n"
         f"- 平均成交滑價: {metrics.get('mean_slippage_ratio', 0)*100:.2f}% | 未成交/取消單: {metrics.get('total_cancelled_orders', 0)} 筆 (取消率: {metrics.get('cancellation_rate_pct', 0)}%)\n"
         f"- 全月買單平均入場分位數: {metrics.get('avg_portfolio_entry_percentile', 50.0)}% | 追高買單: {metrics.get('total_chasing_high_trades', 0)} 筆 | 太晚入場單: {metrics.get('total_late_entry_trades', 0)} 筆\n"
+        f"- 標的平均波動率 (Mean ATR%): {metrics.get('portfolio_mean_atr_pct', 0.0):.2f}% (高波動: {metrics.get('high_volatility_stock_count', 0)} 檔 | 標準: {metrics.get('normal_volatility_stock_count', 0)} 檔 | 低波動: {metrics.get('low_volatility_stock_count', 0)} 檔)\n"
         f"{macro_context_str}\n\n"
         f"【各標的 Layer 2 個股交易執行診斷報告】\n"
         f"{json.dumps(stock_execution_reports, ensure_ascii=False, indent=2)}\n\n"
@@ -350,7 +361,7 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
         f"   - 請依評估結果動態演化下月之 chase_buffer_tiers (買進依信心分級追價) 與 sell_discount_tiers (賣出依風險分級讓價/防賤賣)。\n"
         f"3. 低迷氣候是否過於保守錯失良機。\n"
         f"4. 順風盤是否盲目追高。\n"
-        f"5. 離場停損停利與部位權重，並產出 Key-Value 結構化 execution_skills。\n\n"
+        f"5. 離場停損停利與部位權重：除固定百分比 (stop_loss_pct / take_profit_pct) 外，請結合個股波動特性演化 ATR 動態停損乘數 (stop_loss_atr_mult，如 1.5 - 2.5 倍 ATR) 與動態鎖利乘數 (take_profit_atr_mult，如 3.0 - 4.5 倍 ATR)，並產出 Key-Value 結構化 execution_skills。\n\n"
         f"【⚠️ 極其重要：單日即時可執行規範與歧義消除優先權 (Single-Day Actionability & Rule Priority)】\n"
         f"- 演化產出之所有 entry_timing_rules 與 tactical_rules 必須是【當日 (Day T) 投資組合經理人在單一交易日即可採取的客觀交易動作、位階限制或風控門檻】（如：防追高、避開當日價格處於前 20% 高檔等）！\n"
         f"- 演化產出之 tactical_rules 必須明確包含一條【風控與鎖利優先權規範】：『當個股帳面獲利觸發動態鎖利門檻 (take_profit_pct) 或停損門檻時，鎖利與停損條款優先度絕對高於高分龍頭股續抱哲學，經理人必須執行調節平倉。』！\n"
@@ -379,6 +390,8 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
                 "max_single_stock_weight": 4,
                 "stop_loss_pct": -0.05,
                 "take_profit_pct": 0.12,
+                "stop_loss_atr_mult": 2.0,
+                "take_profit_atr_mult": 3.5,
                 "chase_buffer_tiers": [
                     {"min_score": 85, "buy_buffer_pct": 0.015, "description": "+1.5% 高信心度強勢追價"},
                     {"min_score": 70, "buy_buffer_pct": 0.010, "description": "+1.0% 標準追價"},
@@ -451,6 +464,8 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
     max_weight = execution_skills.get("max_single_stock_weight", 4)
     stop_loss = execution_skills.get("stop_loss_pct", -0.05)
     take_profit = execution_skills.get("take_profit_pct", 0.12)
+    stop_loss_atr = execution_skills.get("stop_loss_atr_mult", 2.0)
+    take_profit_atr = execution_skills.get("take_profit_atr_mult", 3.5)
     tactical_rules_str = "；".join(execution_skills.get("tactical_rules", []))
 
     chase_tiers = execution_skills.get("chase_buffer_tiers", [])
@@ -472,7 +487,7 @@ def run_monthly_review(year: int, month: int, is_paper: bool = False, call_gemin
 
     overall_summary = (
         f"【{review_month_str} 月度戰術策略總結】\n"
-        f"• **下月風控門檻**：建議最低買入門檻 **{min_score} 分** | 單檔最重權重 **{max_weight} 級** | 個股停損 **{stop_loss*100:.1f}%** | 動態鎖利 **{take_profit*100:.1f}%**\n"
+        f"• **下月風控門檻**：建議最低買入門檻 **{min_score} 分** | 單檔最重權重 **{max_weight} 級** | 動態 ATR 停損 **-{stop_loss_atr:.1f}x ATR** (底線 {stop_loss*100:.1f}%) | 動態 ATR 鎖利 **+{take_profit_atr:.1f}x ATR** (基準 {take_profit*100:.1f}%)\n"
         f"• **動態定價階梯**：\n"
         f"  - 🎯 **買進依信心追價**：{chase_str}\n"
         f"  - 🛡️ **賣出依風險防賤賣**：{sell_str}\n"

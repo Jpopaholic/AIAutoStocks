@@ -11,6 +11,7 @@ from src.services.supabase_client import (
     get_orders,
     get_holdings
 )
+from src.services.technical_indicators import calculate_atr
 
 TAIWAN_TZ = pytz.timezone("Asia/Taipei")
 
@@ -337,8 +338,11 @@ def aggregate_monthly_data(year: int, month: int, is_paper: bool = False) -> Dic
     mean_upside_ratio, std_upside_ratio = calculate_mean_and_std(upside_ratios)
     mean_drawdown_ratio, std_drawdown_ratio = calculate_mean_and_std(drawdown_ratios)
 
-    # 7. 計算各個股整月總振幅 monthly_price_range_ratio
+    # 7. 計算各個股整月總振幅 monthly_price_range_ratio 與 ATR 波動度
     stock_price_ranges: Dict[str, float] = {}
+    stock_atr_metrics: Dict[str, Dict[str, Any]] = {}
+    portfolio_atrs: List[float] = []
+
     for sc, klines in klines_map.items():
         if not klines:
             continue
@@ -346,6 +350,53 @@ def aggregate_monthly_data(year: int, month: int, is_paper: bool = False) -> Dic
         m_low = min([float(k.get("low") or 999999.0) for k in klines])
         if m_low > 0 and m_high >= m_low:
             stock_price_ranges[sc] = (m_high - m_low) / m_low
+
+        # 計算個股 ATR(14) 與波動度 Tier
+        highs = [float(k.get("high") or 0.0) for k in klines]
+        lows = [float(k.get("low") or 0.0) for k in klines]
+        closes = [float(k.get("close") or 0.0) for k in klines]
+
+        atr14_val = 0.0
+        atr_pct_val = 0.0
+        mean_atr_pct = 0.0
+        tier = "NORMAL"
+
+        if len(closes) >= 2:
+            period = 14 if len(closes) >= 14 else len(closes)
+            atr_series = calculate_atr(highs, lows, closes, period)
+            valid_atrs = [a for a in atr_series if a is not None]
+            if not valid_atrs:
+                # 容錯：若短序列不足 period，以真實波幅 TR 均值替代
+                trs = [highs[0] - lows[0]] + [
+                    max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1]))
+                    for i in range(1, len(closes))
+                ]
+                valid_atrs = [sum(trs) / len(trs)] if trs else []
+
+            if valid_atrs:
+                atr14_val = valid_atrs[-1]
+                latest_close = closes[-1] if closes[-1] > 0 else 1.0
+                atr_pct_val = (atr14_val / latest_close) * 100.0
+
+                # 計算全月平均 ATR%
+                sub_closes = closes[-len(valid_atrs):]
+                mean_close = sum(sub_closes) / len(sub_closes) if sub_closes else latest_close
+                mean_atr_pct = (sum(valid_atrs) / len(valid_atrs) / mean_close * 100.0) if mean_close > 0 else atr_pct_val
+
+                if atr_pct_val >= 3.5:
+                    tier = "HIGH"
+                elif atr_pct_val < 2.0:
+                    tier = "LOW"
+                else:
+                    tier = "NORMAL"
+                portfolio_atrs.append(atr_pct_val)
+
+        stock_atr_metrics[sc] = {
+            "atr14": round(atr14_val, 2),
+            "atr_pct": round(atr_pct_val, 2),
+            "mean_atr_pct": round(mean_atr_pct, 2),
+            "volatility_tier": tier
+        }
 
     # 8. 打分效能與分佈 (Score Calibration Breakdown)
     high_scores = [s for s in scores_list if (s.get("trend_score", 0) + s.get("momentum_score", 0) + s.get("volume_score", 0) + s.get("safety_score", 0) + s.get("regime_score", 0)) >= 80]
@@ -504,6 +555,7 @@ def aggregate_monthly_data(year: int, month: int, is_paper: bool = False) -> Dic
         else:
             actual_pnl_display = "無交易"
 
+        atr_info = stock_atr_metrics.get(sc, {"atr14": 0.0, "atr_pct": 0.0, "mean_atr_pct": 0.0, "volatility_tier": "NORMAL"})
         per_stock_data[sc] = {
             "stock_code": sc,
             "scores": sc_scores,
@@ -512,6 +564,10 @@ def aggregate_monthly_data(year: int, month: int, is_paper: bool = False) -> Dic
             "cancelled_orders": sc_cancelled_orders,
             "klines": sc_klines,
             "price_range_ratio": round(sc_range, 4),
+            "atr14": atr_info["atr14"],
+            "atr_pct": atr_info["atr_pct"],
+            "mean_atr_pct": atr_info["mean_atr_pct"],
+            "volatility_tier": atr_info["volatility_tier"],
             "expected_upside_mean": round(sc_mean_up, 4),
             "expected_upside_std": round(sc_std_up, 4),
             "expected_drawdown_mean": round(sc_mean_down, 4),
@@ -529,6 +585,10 @@ def aggregate_monthly_data(year: int, month: int, is_paper: bool = False) -> Dic
         }
 
     avg_portfolio_percentile = (sum(all_portfolio_entry_percentiles) / len(all_portfolio_entry_percentiles)) if all_portfolio_entry_percentiles else 0.5
+    portfolio_mean_atr = (sum(portfolio_atrs) / len(portfolio_atrs)) if portfolio_atrs else 0.0
+    high_vol_count = sum(1 for m in stock_atr_metrics.values() if m.get("volatility_tier") == "HIGH")
+    normal_vol_count = sum(1 for m in stock_atr_metrics.values() if m.get("volatility_tier") == "NORMAL")
+    low_vol_count = sum(1 for m in stock_atr_metrics.values() if m.get("volatility_tier") == "LOW")
 
     return {
         "review_month": review_month_str,
@@ -560,6 +620,10 @@ def aggregate_monthly_data(year: int, month: int, is_paper: bool = False) -> Dic
             "total_chasing_high_trades": all_portfolio_chasing_high_count,
             "total_late_entry_trades": all_portfolio_late_entry_count,
             "avg_portfolio_entry_percentile": round(avg_portfolio_percentile * 100.0, 1),
+            "portfolio_mean_atr_pct": round(portfolio_mean_atr, 2),
+            "high_volatility_stock_count": high_vol_count,
+            "normal_volatility_stock_count": normal_vol_count,
+            "low_volatility_stock_count": low_vol_count,
             "defensive_days_count": defensive_days_count,
             "defensive_period_mean_upside_pct": round(defensive_mean_upside * 100.0, 2),
             "defensive_period_buy_count": defensive_buy_count,

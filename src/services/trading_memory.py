@@ -120,6 +120,8 @@ DEFAULT_TACTICAL_SKILLS = {
         "max_single_stock_weight": 4,
         "stop_loss_pct": -0.05,
         "take_profit_pct": 0.12,
+        "stop_loss_atr_mult": 2.0,
+        "take_profit_atr_mult": 3.5,
         "chase_buffer_tiers": [
             {"min_score": 85, "buy_buffer_pct": 0.015, "description": "+1.5% 高信心度強勢追價"},
             {"min_score": 70, "buy_buffer_pct": 0.010, "description": "+1.0% 標準追價"},
@@ -136,7 +138,8 @@ DEFAULT_TACTICAL_SKILLS = {
             "HIGH_VOLATILITY": "CONSERVATIVE"
         },
         "tactical_rules": [
-            "【規則優先權】當個股帳面獲利已觸發動態鎖利門檻 (take_profit_pct) 或停損門檻時，鎖利/停損條款優先度高於高分續抱哲學，必須執行調節/平倉。",
+            "【規則優先權】當個股帳面獲利已觸發動態鎖利門檻 (take_profit_pct 或 take_profit_atr_mult) 或停損門檻時，鎖利/停損條款優先度高於高分續抱哲學，必須執行調節/平倉。",
+            "【ATR動態風控】高波動標的 (ATR% >= 3.0%) 應尊重其震盪呼吸空間，依成本 - 2.0*ATR 設防，切忌被正常洗盤雜訊震出場；低波動標的 (ATR% <= 1.5%) 應收緊防線並提早鎖利。",
             "在防禦氣候期間，若個股出現 3% 以上的技術性反彈，應主動執行減碼以鎖定利潤，避免回吐。",
             "嚴格執行離場限價策略，禁止在流動性收縮時使用市價單，以降低成交滑價損失。"
         ]
@@ -148,9 +151,218 @@ DEFAULT_ACTIVE_SKILLS_DATA = {
     "skills": DEFAULT_TACTICAL_SKILLS
 }
 
+def merge_monthly_and_quarterly_skills(
+    monthly_skills: Dict[str, Any],
+    quarterly_skills: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    彙整月度與季度動態戰術 Skills：
+    核心原則：【當季與月 Skills 矛盾衝突時，以季 Skills 為主導最高準則】。
+    1. 執行參數 (Execution Skills)：
+       - 門檻得分、最重權重、停損停利百分比、ATR 停損停利乘數：季優先覆蓋月。
+       - 買進追價 (chase_buffer_tiers) 與 賣出讓價 (sell_discount_tiers)：季階梯優先覆蓋月階梯。
+       - 大盤姿態 (regime_posture)：季氣候設定覆蓋月氣候設定。
+       - 戰術與風控規則 (tactical_rules & entry_timing_rules)：季度戰術規則置於最前列（最高優先權），月度非衝突規則隨後補齊。
+    2. 指標技能 (Indicator Skills)：
+       - 氣候指標側重 (regime_indicator_rules)：季覆蓋月。
+       - 評分校正規則 (score_calibration_rules)：季優先。
+       - 個股特殊特徵 (stock_specific_rules)：同個股以季優先。
+       - V 轉與 A 頂型態特徵：季度規則優先列於前。
+    """
+    merged = copy.deepcopy(monthly_skills) if monthly_skills else copy.deepcopy(DEFAULT_TACTICAL_SKILLS)
+    if not quarterly_skills:
+        return merged
+
+    q_copy = copy.deepcopy(quarterly_skills)
+
+    # 1. 處理 Execution Skills
+    m_exec = merged.setdefault("execution_skills", {})
+    q_exec = q_copy.get("execution_skills", {})
+
+    scalar_keys = [
+        "min_buy_score", "max_single_stock_weight", "stop_loss_pct",
+        "take_profit_pct", "stop_loss_atr_mult", "take_profit_atr_mult"
+    ]
+    for k in scalar_keys:
+        if k in q_exec and q_exec[k] is not None:
+            m_exec[k] = q_exec[k]
+
+    if "chase_buffer_tiers" in q_exec and q_exec["chase_buffer_tiers"]:
+        m_exec["chase_buffer_tiers"] = q_exec["chase_buffer_tiers"]
+
+    if "sell_discount_tiers" in q_exec and q_exec["sell_discount_tiers"]:
+        m_exec["sell_discount_tiers"] = q_exec["sell_discount_tiers"]
+
+    # 大盤姿態合併：季覆蓋月
+    m_regime = m_exec.setdefault("regime_posture", {})
+    q_regime = q_exec.get("regime_posture", {})
+    if isinstance(m_regime, dict) and isinstance(q_regime, dict):
+        m_regime.update(q_regime)
+
+    # 戰術規則列表：季前置優先
+    q_tactical = q_exec.get("tactical_rules", [])
+    m_tactical = m_exec.get("tactical_rules", [])
+    combined_tactical = list(q_tactical)
+    for r in m_tactical:
+        if r not in combined_tactical:
+            combined_tactical.append(r)
+    m_exec["tactical_rules"] = combined_tactical
+
+    # 進場 Timing 規則：季前置優先
+    q_timing = q_exec.get("entry_timing_rules", [])
+    m_timing = m_exec.get("entry_timing_rules", [])
+    combined_timing = list(q_timing)
+    for r in m_timing:
+        if r not in combined_timing:
+            combined_timing.append(r)
+    m_exec["entry_timing_rules"] = combined_timing
+
+    # 2. 處理 Indicator Skills
+    m_ind = merged.setdefault("indicator_skills", {})
+    q_ind = q_copy.get("indicator_skills", {})
+
+    if "regime_indicator_rules" in q_ind and isinstance(q_ind["regime_indicator_rules"], dict):
+        m_ind_regime = m_ind.setdefault("regime_indicator_rules", {})
+        if isinstance(m_ind_regime, dict):
+            m_ind_regime.update(q_ind["regime_indicator_rules"])
+
+    for rule_key in ["v_shape_reversal_patterns", "a_shape_top_warnings", "score_calibration_rules"]:
+        q_rules = q_ind.get(rule_key, [])
+        m_rules = m_ind.get(rule_key, [])
+        combined = list(q_rules)
+        for mr in m_rules:
+            if mr not in combined:
+                combined.append(mr)
+        m_ind[rule_key] = combined
+
+    # 個股特殊特徵規則：季覆蓋同股代碼
+    q_stock_rules = {r.get("stock_code"): r for r in q_ind.get("stock_specific_rules", []) if isinstance(r, dict) and r.get("stock_code")}
+    m_stock_rules = {r.get("stock_code"): r for r in m_ind.get("stock_specific_rules", []) if isinstance(r, dict) and r.get("stock_code")}
+    m_stock_rules.update(q_stock_rules)
+    m_ind["stock_specific_rules"] = list(m_stock_rules.values())
+
+    merged["resolution_principle"] = "當季與月 Skills 矛盾衝突時，以季 Skills 為主導最高準則"
+    return merged
+
+
 def get_active_skills_data(is_paper: bool = False) -> Dict[str, Any]:
     """
-    從 Supabase monthly_skills 表中，精準撈取最新單一筆 (ORDER BY created_at DESC LIMIT 1) 之 JSON 戰術 Skills 字典與月份。
+    從 Supabase 撈取最新 monthly_skills 與 quarterly_skills 並進行戰術彙整。
+    核心原則：【當季與月 Skills 矛盾衝突時，以季 Skills 為主導最高準則】。
+    """
+    from src.services.supabase_client import supabase
+    import json
+
+    default_skills = copy.deepcopy(DEFAULT_TACTICAL_SKILLS)
+    monthly_skills = None
+    quarterly_skills = None
+    rev_month = None
+    rev_quarter = None
+
+    # 1. 撈取最新 monthly_skills
+    try:
+        m_res = supabase.table("monthly_skills") \
+            .select("skills, review_month, created_at") \
+            .eq("is_paper", is_paper) \
+            .order("created_at", desc=True) \
+            .limit(1) \
+            .execute()
+        m_data = m_res.data or []
+        if m_data and "skills" in m_data[0]:
+            raw = m_data[0]["skills"]
+            monthly_skills = raw if isinstance(raw, dict) else json.loads(raw)
+            rev_month = m_data[0].get("review_month")
+    except Exception as e:
+        print(f" [交易記憶管理器] 警告: 撈取 monthly_skills 失敗: {e}")
+
+    # 2. 撈取最新 quarterly_skills
+    try:
+        q_res = supabase.table("quarterly_skills") \
+            .select("skills, review_quarter, created_at") \
+            .eq("is_paper", is_paper) \
+            .order("created_at", desc=True) \
+            .limit(1) \
+            .execute()
+        q_data = q_res.data or []
+        if q_data and "skills" in q_data[0]:
+            raw_q = q_data[0]["skills"]
+            quarterly_skills = raw_q if isinstance(raw_q, dict) else json.loads(raw_q)
+            rev_quarter = q_data[0].get("review_quarter")
+    except Exception as e:
+        print(f" [交易記憶管理器] 警告: 撈取 quarterly_skills 失敗: {e}")
+
+    # 3. 執行彙整：衝突以季為主
+    if monthly_skills and quarterly_skills:
+        final_skills = merge_monthly_and_quarterly_skills(monthly_skills, quarterly_skills)
+    elif quarterly_skills:
+        final_skills = quarterly_skills
+    elif monthly_skills:
+        final_skills = monthly_skills
+    else:
+        final_skills = default_skills
+
+    # 確保階梯與乘數向後相容
+    exec_s = final_skills.setdefault("execution_skills", {})
+    if "chase_buffer_tiers" not in exec_s:
+        exec_s["chase_buffer_tiers"] = default_skills["execution_skills"]["chase_buffer_tiers"]
+    if "sell_discount_tiers" not in exec_s:
+        exec_s["sell_discount_tiers"] = default_skills["execution_skills"]["sell_discount_tiers"]
+    if "stop_loss_atr_mult" not in exec_s:
+        exec_s["stop_loss_atr_mult"] = default_skills["execution_skills"].get("stop_loss_atr_mult", 2.0)
+    if "take_profit_atr_mult" not in exec_s:
+        exec_s["take_profit_atr_mult"] = default_skills["execution_skills"].get("take_profit_atr_mult", 3.5)
+
+    return {
+        "review_month": rev_month or "預設基準",
+        "review_quarter": rev_quarter,
+        "skills": final_skills
+    }
+
+
+def get_active_skills_context(is_paper: bool = False) -> str:
+    """
+    從 Supabase 撈取彙整後之動態 JSON 戰術 Skills，
+    組裝為 System Prompt 文字傳給 decision_agent。
+    明確標註：當季與月 Skills 矛盾衝突時，以「季 Skills」為主導最高準則！
+    """
+    import json
+    data_info = get_active_skills_data(is_paper=is_paper)
+    rev_month = data_info["review_month"]
+    rev_quarter = data_info.get("review_quarter")
+    skills_json = data_info["skills"]
+    skills_pretty = json.dumps(skills_json, ensure_ascii=False, indent=2)
+
+    version_str = f"月度: {rev_month} | 季度: {rev_quarter}" if rev_quarter else f"月度: {rev_month}"
+
+    return (
+        f"【當前生效之動態交易戰術規範 (Active Dynamic JSON Skills - {version_str})】\n"
+        f"【⚠️ 優先權架構規範】：此規範彙整自月度檢討與季度檢討；當季與月 Skills 矛盾衝突時，以「季 Skills」為主導最高準則！\n"
+        f"```json\n{skills_pretty}\n```\n"
+        f"請投資組合經理 AI 嚴格遵守上述最新買入門檻得分、部位權重與風控停損比率。"
+    )
+
+
+def get_indicator_skills_context(is_paper: bool = False) -> str:
+    """
+    撈取彙整後之 indicator_skills Context，供 analyst_agent 打分前置參考。
+    若季與月衝突，以季指標 Skills 為主。
+    """
+    import json
+    data_info = get_active_skills_data(is_paper=is_paper)
+    rev_month = data_info["review_month"]
+    rev_quarter = data_info.get("review_quarter")
+    skills_json = data_info["skills"]
+    ind_skills = skills_json.get("indicator_skills", {})
+    if ind_skills:
+        ind_pretty = json.dumps(ind_skills, ensure_ascii=False, indent=2)
+        version_str = f"季度: {rev_quarter} + 月度: {rev_month}" if rev_quarter else f"月度: {rev_month}"
+        return (
+            f"【最新技術指標與評分 Skills 規範 ({version_str}，衝突以季為主)】:\n"
+            f"```json\n{ind_pretty}\n```"
+        )
+    return ""
+    """
+    從 Supabase quarterly_skills 表中，精準撈取最新單一筆 (ORDER BY created_at DESC LIMIT 1) 之 JSON 戰術 Skills 字典與季度。
     """
     from src.services.supabase_client import supabase
     import json
@@ -158,8 +370,8 @@ def get_active_skills_data(is_paper: bool = False) -> Dict[str, Any]:
     default_skills = copy.deepcopy(DEFAULT_TACTICAL_SKILLS)
 
     try:
-        res = supabase.table("monthly_skills") \
-            .select("skills, review_month, created_at") \
+        res = supabase.table("quarterly_skills") \
+            .select("skills, review_quarter, created_at") \
             .eq("is_paper", is_paper) \
             .order("created_at", desc=True) \
             .limit(1) \
@@ -173,68 +385,32 @@ def get_active_skills_data(is_paper: bool = False) -> Dict[str, Any]:
                 skills_json = json.loads(raw_skills)
             else:
                 skills_json = default_skills
-            rev_month = data[0].get("review_month", "最新")
-            # 確保向後相容性：若歷史 skills 缺漏 chase_buffer_tiers 或 sell_discount_tiers，補齊預設階梯
-            exec_s = skills_json.setdefault("execution_skills", {})
-            if "chase_buffer_tiers" not in exec_s:
-                exec_s["chase_buffer_tiers"] = default_skills["execution_skills"]["chase_buffer_tiers"]
-            if "sell_discount_tiers" not in exec_s:
-                exec_s["sell_discount_tiers"] = default_skills["execution_skills"]["sell_discount_tiers"]
+            rev_quarter = data[0].get("review_quarter", "最新季度")
         else:
             skills_json = default_skills
-            rev_month = "預設基準"
+            rev_quarter = "預設基準"
     except Exception as e:
-        print(f" [交易記憶管理器] 警告: 撈取最新 monthly_skills 失敗，使用預設 Skills: {e}")
+        print(f" [交易記憶管理器] 警告: 撈取最新 quarterly_skills 失敗: {e}")
         skills_json = default_skills
-        rev_month = "預設基準"
+        rev_quarter = "預設基準"
 
     return {
-        "review_month": rev_month,
+        "review_quarter": rev_quarter,
         "skills": skills_json
     }
 
-def get_active_skills_context(is_paper: bool = False) -> str:
+
+def get_active_quarterly_skills_context(is_paper: bool = False) -> str:
     """
-    從 Supabase monthly_skills 表中，精準撈取最新單一筆 JSON 戰術 Skills，
-    組裝為 System Prompt 文字傳給 decision_agent。
+    從 Supabase quarterly_skills 表中撈取最新單一筆 JSON 戰術 Skills 組裝 Context。
     """
     import json
-    data_info = get_active_skills_data(is_paper=is_paper)
-    rev_month = data_info["review_month"]
+    data_info = get_active_quarterly_skills_data(is_paper=is_paper)
+    rev_quarter = data_info["review_quarter"]
     skills_json = data_info["skills"]
     skills_pretty = json.dumps(skills_json, ensure_ascii=False, indent=2)
 
     return (
-        f"【當前生效之動態交易戰術規範 (Active Dynamic JSON Skills - 月份: {rev_month})】\n"
-        f"(此規範由「月度檢討 Agent」根據實盤損益全權演化產出，徹底替代傳統硬編碼程式覆寫)：\n"
-        f"```json\n{skills_pretty}\n```\n"
-        f"請投資組合經理 AI 嚴格遵守上述演化出的最新買入門檻得分、部位權重與風控停損比率。"
+        f"【當前生效之季度動態戰術規範 (Active Quarterly Dynamic JSON Skills - 季度: {rev_quarter})】\n"
+        f"```json\n{skills_pretty}\n```"
     )
-
-def get_indicator_skills_context(is_paper: bool = False) -> str:
-    """
-    特別撈取 Layer 1 產出之 indicator_skills Context，供 analyst_agent 打分前置參考。
-    """
-    from src.services.supabase_client import supabase
-    import json
-
-    try:
-        res = supabase.table("monthly_skills") \
-            .select("skills, review_month") \
-            .eq("is_paper", is_paper) \
-            .order("created_at", desc=True) \
-            .limit(1) \
-            .execute()
-        data = res.data or []
-        if data and "skills" in data[0]:
-            skills_json = data[0]["skills"]
-            if isinstance(skills_json, str):
-                skills_json = json.loads(skills_json)
-            ind_skills = skills_json.get("indicator_skills", {})
-            if ind_skills:
-                ind_pretty = json.dumps(ind_skills, ensure_ascii=False, indent=2)
-                return f"【最新技術指標與評分 Skills 規範】:\n```json\n{ind_pretty}\n```"
-    except Exception as e:
-        print(f" [交易記憶管理器] 警告: 撈取 indicator_skills 失敗: {e}")
-    return ""
-

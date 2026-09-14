@@ -140,31 +140,69 @@ def generate_portfolio_decisions(
         pat_tag = s.get("pattern_tag", "NEUTRAL")
         pat_sum = s.get("pattern_summary", "")
         pat_info = f" | [第2.5層型態: {pat_tag}] ({pat_sum})" if pat_tag != "NEUTRAL" else ""
+        atr14_s = s.get("atr14", 0.0)
+        atr_pct_s = s.get("atr_pct", 0.0)
+        vol_tier_s = s.get("volatility_tier", "NORMAL")
+        atr_info = f" | ATR(14): {atr14_s:.2f}元 (日波幅: {atr_pct_s:.1f}%, 股性: {vol_tier_s})" if atr14_s > 0 else ""
         analyst_report_lines.append(
             f"排名 {idx+1}. 股票 {s['stock_code']} | 技術總分: {s['total_score']} "
-            f"(趨勢:{s['trend_score']}, 動能:{s['momentum_score']}, 成交量:{s['volume_score']}, 安全:{s['safety_score']}, 大盤:{s['regime_score']}){pat_info} "
+            f"(趨勢:{s['trend_score']}, 動能:{s['momentum_score']}, 成交量:{s['volume_score']}, 安全:{s['safety_score']}, 大盤:{s['regime_score']}){pat_info}{atr_info} "
             f"| 最新收盤價: {s['price']} 元\n  分析理由: {s['reason']}"
         )
     analyst_report_text = "\n".join(analyst_report_lines)
 
-    # 8. 格式化目前持股現況
+    # 8. 載入第 3 層動態戰術 Skills
+    from src.services.trading_memory import get_active_skills_data, get_active_skills_context
+    active_skills_info = get_active_skills_data(is_paper=False)
+    rev_month = active_skills_info.get("review_month", "最新")
+    rev_quarter = active_skills_info.get("review_quarter")
+    exec_skills = active_skills_info.get("skills", {}).get("execution_skills", {})
+    min_score = exec_skills.get("min_buy_score", 60)
+    max_weight = exec_skills.get("max_single_stock_weight", 4)
+    stop_loss = exec_skills.get("stop_loss_pct", -0.05)
+    sl_atr_mult = float(exec_skills.get("stop_loss_atr_mult", 2.0))
+    tp_atr_mult = float(exec_skills.get("take_profit_atr_mult", 3.5))
+
+    version_label = f"季度: {rev_quarter} + 月度: {rev_month} (衝突以季為主)" if rev_quarter else f"月度: {rev_month}"
+    print(f" [決策代理] 成功載入動態戰術 Skills ({version_label} | 最低買入門檻: {min_score}分 | 最重權重: {max_weight}級 | 停損: {stop_loss*100:.1f}% | ATR停損: -{sl_atr_mult:.1f}x | ATR鎖利: +{tp_atr_mult:.1f}x) 並前置注入至 System Instruction。")
+    active_skills_text = get_active_skills_context(is_paper=False)
+
+    # 8b. 格式化目前持股現況 (整合 ATR 個股動態停損與動態停利點位)
     holdings_lines = []
     for h in current_holdings:
         code = h["stock_code"]
         qty = h["quantity"]
         avg_price = h["average_price"]
         current_price = avg_price
+        stock_s = None
         for s in analyst_scores:
             if s["stock_code"] == code:
                 current_price = s["price"]
+                stock_s = s
                 break
         cost = qty * avg_price
         mkt_val = qty * current_price
         pnl = mkt_val - cost
         pnl_pct = (pnl / cost * 100.0) if cost > 0 else 0.0
+
+        atr_str = ""
+        if stock_s and avg_price > 0:
+            atr_val = stock_s.get("atr14", 0.0)
+            atr_pct_val = stock_s.get("atr_pct", 0.0)
+            if atr_val > 0:
+                dyn_sl_price = max(avg_price - sl_atr_mult * atr_val, 0.0)
+                dyn_sl_pct = ((dyn_sl_price - avg_price) / avg_price) * 100.0
+                dyn_tp_price = avg_price + tp_atr_mult * atr_val
+                dyn_tp_pct = ((dyn_tp_price - avg_price) / avg_price) * 100.0
+                atr_str = (
+                    f" | ATR: {atr_val:.2f}元 (日波幅: {atr_pct_val:.1f}%) "
+                    f"| 建議動態停損 (-{sl_atr_mult:.1f}x ATR): {dyn_sl_price:.2f}元 ({dyn_sl_pct:+.1f}%) "
+                    f"| 建議動態停利 (+{tp_atr_mult:.1f}x ATR): {dyn_tp_price:.2f}元 ({dyn_tp_pct:+.1f}%)"
+                )
+
         holdings_lines.append(
             f"  - 股票: {code} | 持有股數: {qty:,.0f} 股 | 平均成本: {avg_price:,.2f} 元 | "
-            f"當前價格: {current_price:,.2f} 元 | 帳面損益: {pnl:+,.0f} 元 ({pnl_pct:+.2f}%)"
+            f"當前價格: {current_price:,.2f} 元 | 帳面損益: {pnl:+,.0f} 元 ({pnl_pct:+.2f}%){atr_str}"
         )
     holdings_text = "\n".join(holdings_lines) if holdings_lines else "目前無任何股票持股。"
 
@@ -186,17 +224,6 @@ def generate_portfolio_decisions(
         )
 
     # 10. 構建經理人系統指令
-    from src.services.trading_memory import get_active_skills_data, get_active_skills_context
-    active_skills_info = get_active_skills_data(is_paper=False)
-    rev_month = active_skills_info.get("review_month", "最新")
-    exec_skills = active_skills_info.get("skills", {}).get("execution_skills", {})
-    min_score = exec_skills.get("min_buy_score", 60)
-    max_weight = exec_skills.get("max_single_stock_weight", 4)
-    stop_loss = exec_skills.get("stop_loss_pct", -0.05)
-
-    print(f" [決策代理] 成功載入第 3 層動態戰術 Skills (月度版本: {rev_month} | 最低買入門檻: {min_score}分 | 最重權重: {max_weight}級 | 停損: {stop_loss*100:.1f}%) 並前置注入至 System Instruction。")
-    active_skills_text = get_active_skills_context(is_paper=False)
-
     pm_system_instruction = f"""
 你是一個極其資深且穩健的台股投資組合配置經理 (Portfolio Manager)。
 你的任務是審查分析師提供的個股技術評分報告，並根據當前大盤氣候環境、可用資金及目前持股，產出最終的交易決策與部位資金分配比例。
@@ -207,9 +234,10 @@ def generate_portfolio_decisions(
 1. 你的投資風格是「中長期穩健投資」，必須極力避免頻繁交易與短線投機。交易印花稅與手續費滑價是利潤的殺手。
 2. 你必須進行多檔個股的橫向相對比較。對於技術總分名列前茅（如排名前 1-3 名，且總分高於買入門檻如 >= 75 分）且符合當前大盤氣候姿態的優質標的，你應果斷給予 `BUY` 買入決策進行部位配置（單筆下單金額由風險限額乘數防護控管），切勿因盲目保守而錯失優質防禦建倉點。
 3. 除非某檔持股技術面極度崩壞跌破防線，否則不應輕易發出 SELL 決策。
-4. 【規則優先權與歧義消除規範 (Rule Priority Protocol)】：
-   - 當持股帳面獲利已達到或超過當前月度 Skills 設定之動態鎖利門檻 (如 take_profit_pct 8%) 或硬停損門檻時，【戰術風控與鎖利條款】之優先度絕對高於個股高分續抱哲學。
-   - 經理人即使對排名第一或高分優質標的偏多看待，亦必須遵循戰術 Skills 執行調節/分批停利，嚴禁僅因個股技術總分高或排名第一而忽視已觸發的戰術停利門檻。
+4. 【規則優先權與 ATR 動態風控協議 (Rule Priority & Volatility-Adaptive Protocol)】：
+   - 當持股帳面獲利達到或超過【建議動態停利點】（或月度 Skills take_profit_pct）時，鎖利條款優先度絕對高於個股高分續抱哲學，必須執行調節/分批停利。
+   - 當持股帳面跌破【建議動態停損點】（如成本 - 2.0*ATR）或硬停損門檻時，必須果斷停損或減碼。
+   - 【股性差別化處置】：高波動股票（ATR% >= 3.0%，如正2、熱門IC設計股）應預留足夠之震盪呼吸空間，切忌因日內正常洗盤就驚慌停損；低波動防守型股票（ATR% <= 1.5%，如金融股）波動幅度小，若跌破動態停損或月線失守，應果斷換股，切勿死抱死守。
 5. 避免對微小分差進行無效調倉；但在大盤姿態允許的資金範圍內，應積極為強勢高分標的建立組合配置。
 6. 買入決策時，技術面總分必須是群體中最優秀的前列；賣出決策時，總分必須顯著低於其他標的。
 7. 【戰術 Skills 引用與可解釋性】：

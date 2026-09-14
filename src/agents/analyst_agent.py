@@ -160,9 +160,12 @@ def generate_analyst_assessments(
 
             macd_str = f"(快線:{k['macd']:.2f}, 慢線:{k['macd_signal']:.2f}, 柱狀圖:{k['macd_hist']:.2f})" if (k.get('macd') is not None and k.get('macd_signal') is not None and k.get('macd_hist') is not None) else "N/A"
             dmi_str = f"(+DI:{k['plus_di']:.1f}, -DI:{k['minus_di']:.1f}, ADX:{k['adx']:.1f})" if (k.get('adx') is not None and k.get('plus_di') is not None and k.get('minus_di') is not None) else "N/A"
+            atr_val = k.get('atr14')
+            atr_pct = k.get('atr_pct')
+            atr_str = f"{atr_val:.2f} ({atr_pct:.1f}%)" if (atr_val is not None and atr_pct is not None) else "N/A"
             klines_lines.append(
                 f"  日期: {k['date']} | 開盤: {k['open']} | 最高: {k['high']} | 最低: {k['low']} | 收盤: {k['close']} | MA5: {ma5_str} | MA20: {ma20_str} | MA60 (季線): {ma60_str} | RSI: {rsi_str} | "
-                f"成交量: {vol:,.0f}{vol_ratio_str} (5日均量: {vol_ma5_str}, 20日均量: {vol_ma20_str}) | MACD: {macd_str} | DMI: {dmi_str}"
+                f"成交量: {vol:,.0f}{vol_ratio_str} (5日均量: {vol_ma5_str}, 20日均量: {vol_ma20_str}) | MACD: {macd_str} | DMI: {dmi_str} | ATR(14): {atr_str}"
             )
         klines_text = "\n".join(klines_lines)
 
@@ -292,6 +295,16 @@ def generate_analyst_assessments(
 
         pattern_summary = str(s_item.get("pattern_summary", "")).strip()
 
+        latest_k = klines[-1] if klines else {}
+        atr14_val = safe_float(latest_k.get("atr14"), default=0.0, min_val=0.0)
+        atr_pct_val = safe_float(latest_k.get("atr_pct"), default=0.0, min_val=0.0)
+        if atr_pct_val >= 3.0:
+            vol_tier = "HIGH"
+        elif atr_pct_val <= 1.5:
+            vol_tier = "LOW"
+        else:
+            vol_tier = "NORMAL"
+
         analyst_scores.append({
             "stock_code": code,
             "trend_score": trend,
@@ -306,6 +319,9 @@ def generate_analyst_assessments(
             "a_top_prob": a_prob,
             "pattern_tag": pattern_tag,
             "pattern_summary": pattern_summary,
+            "atr14": atr14_val,
+            "atr_pct": atr_pct_val,
+            "volatility_tier": vol_tier,
             "reason": s_item.get("reason", "").strip() or "技術量化指標尚可。"
         })
 

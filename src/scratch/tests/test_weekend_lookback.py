@@ -67,12 +67,14 @@ class TestWeekendLookback(unittest.TestCase):
         self.assertTrue(end_utc.startswith("2026-07-24T15:59:59"))
 
     @patch("src.services.broker_connector.config")
+    @patch("src.services.broker_connector.delete_order_db")
+    @patch("src.services.broker_connector.log_unfilled_order_db")
     @patch("src.services.broker_connector.update_holding_after_fill")
     @patch("src.services.broker_connector.update_order_status")
     @patch("src.services.broker_connector.get_pending_real_orders")
     @patch("src.services.broker_connector._get_shioaji_api")
     def test_sync_broker_orders_updates_executed_at(
-        self, mock_get_api, mock_get_pending, mock_update_status, mock_update_holding, mock_config
+        self, mock_get_api, mock_get_pending, mock_update_status, mock_update_holding, mock_log_unfilled, mock_delete_order, mock_config
     ):
         from src.services.broker_connector import sync_broker_orders
 

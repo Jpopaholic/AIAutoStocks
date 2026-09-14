@@ -227,6 +227,7 @@ def run_trading_job_in_background(is_startup: bool = False):
             
             last_run_date_memory = None
             last_monthly_review_memory = None
+            last_quarterly_review_memory = None
 
             if is_startup:
                 log_system_event("INFO", "[永動機] 伺服器重啟/重新部署自檢完成，進入等待排程狀態（無立即執行）。")
@@ -295,16 +296,16 @@ def run_trading_job_in_background(is_startup: bool = False):
                         last_run_date_memory = current_date
 
                 # ---------------------------------------------------------
-                # 2. 週末月度 AI 自我檢討與 Skills 演化排程 (週六、週日 09:00 起)
+                # 2. 週六月度 AI 自我檢討與 Skills 演化排程 (僅週六 09:00 起)
                 # ---------------------------------------------------------
-                if tw_now.weekday() in (5, 6) and tw_time >= dt_time(9, 0):
+                if tw_now.weekday() == 5 and tw_time >= dt_time(9, 0):
                     from src.services.monthly_aggregator import resolve_manual_review_month
                     target_year, target_month = resolve_manual_review_month()
                     
                     if last_monthly_review_memory != (target_year, target_month):
                         from src.services.supabase_client import has_monthly_review_run
                         if not has_monthly_review_run(target_year, target_month, is_paper=start_mode_is_paper):
-                            log_system_event("INFO", f"[永動機] 進入週末月度復盤時段 ({tw_now.strftime('%H:%M:%S')})，開始執行 {target_year}-{target_month:02d} 月度 AI 自我檢討與演化...")
+                            log_system_event("INFO", f"[永動機] 進入週六月度復盤時段 ({tw_now.strftime('%H:%M:%S')})，開始執行 {target_year}-{target_month:02d} 月度 AI 自我檢討與演化...")
                             try:
                                 from src.agents.monthly_review_agent import run_monthly_review
                                 from src.services.discord_notifier import send_monthly_review_notification
@@ -322,6 +323,37 @@ def run_trading_job_in_background(is_startup: bool = False):
                             log_system_event("INFO", f"[永動機] 偵測到 {target_year}-{target_month:02d} 月度 AI 檢討已執行過 (手動或先前自動)，跳過本次自動執行。")
 
                         last_monthly_review_memory = (target_year, target_month)
+
+                # ---------------------------------------------------------
+                # 3. 週日季度 AI 自我檢討與 Skills 演化排程 (僅週日 09:00 起)
+                # ---------------------------------------------------------
+                if tw_now.weekday() == 6 and tw_time >= dt_time(9, 0):
+                    from src.services.quarterly_aggregator import resolve_manual_review_quarter
+                    target_q_year, target_quarter = resolve_manual_review_quarter()
+                    
+                    if last_quarterly_review_memory != (target_q_year, target_quarter):
+                        from src.services.supabase_client import has_quarterly_review_run
+                        if not has_quarterly_review_run(target_q_year, target_quarter, is_paper=start_mode_is_paper):
+                            log_system_event("INFO", f"[永動機] 進入週日季度復盤時段 ({tw_now.strftime('%H:%M:%S')})，開始執行 {target_q_year}-Q{target_quarter} 季度 AI 自我檢討與演化...")
+                            try:
+                                from src.agents.quarterly_review_agent import run_quarterly_review
+                                from src.services.discord_notifier import send_quarterly_review_notification
+
+                                q_review_result = run_quarterly_review(target_q_year, target_quarter, is_paper=start_mode_is_paper)
+                                if not q_review_result.get("skipped"):
+                                    try:
+                                        send_quarterly_review_notification(q_review_result)
+                                    except Exception as notify_err:
+                                        log_system_event("WARN", f"[永動機] 季度復盤 Discord 通知發送失敗: {notify_err}")
+                                else:
+                                    log_system_event("INFO", f"[永動機] {q_review_result.get('message')}")
+                                log_system_event("INFO", f"[永動機] {target_q_year}-Q{target_quarter} 季度 AI 復盤與 Skills 演化自動執行完成。")
+                            except Exception as ex:
+                                log_system_event("ERROR", f"[永動機] 執行季度 AI 復盤時發生異常: {ex}")
+                        else:
+                            log_system_event("INFO", f"[永動機] 偵測到 {target_q_year}-Q{target_quarter} 季度 AI 檢討已執行過 (手動或先前自動)，跳過本次自動執行。")
+
+                        last_quarterly_review_memory = (target_q_year, target_quarter)
 
         
         if stop_requested:
@@ -980,6 +1012,90 @@ def api_get_skills_history():
         return {"status": "ok", "history": res.data or []}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"獲取歷史 Skills 紀錄失敗: {str(e)}")
+
+
+# =====================================================================
+# 季度 AI 自我檢討與 Skills 演化 Web API
+# =====================================================================
+class QuarterlyReviewRequest(BaseModel):
+    target_quarter: Optional[str] = None
+    override_weekend_check: Optional[bool] = False
+
+@app.post("/api/quarterly-skills/run")
+def api_run_quarterly_review(payload: QuarterlyReviewRequest):
+    """
+    手動觸發季度 AI 復盤與 Skills 演化（限制僅限週末假日執行以維持平日實盤穩定）。
+    """
+    if not is_weekend_taiwan() and not payload.override_weekend_check:
+        raise HTTPException(
+            status_code=400,
+            detail="為維護平日實盤交易穩定，手動執行 AI 季度檢討僅限於週末假日 (週六與週日) 執行。"
+        )
+
+    try:
+        from src.services.quarterly_aggregator import resolve_manual_review_quarter
+        from src.agents.quarterly_review_agent import run_quarterly_review
+        from src.services.discord_notifier import send_quarterly_review_notification
+
+        year, quarter = resolve_manual_review_quarter(payload.target_quarter)
+        is_paper = config.limits.is_paper_trading
+
+        print(f" [Web API] 開始手動觸發 {year}-Q{quarter} 季度 AI 自我檢討與演化...")
+        review_result = run_quarterly_review(year, quarter, is_paper=is_paper)
+
+        if review_result.get("skipped"):
+            return {
+                "status": "ok",
+                "message": review_result.get("message", f"該季度 ({year}-Q{quarter}) 門檻未滿足，已跳過檢討。"),
+                "data": review_result
+            }
+
+        # 觸發 Discord Webhook 通知 (強制使用專屬 quarterly webhook)
+        try:
+            send_quarterly_review_notification(review_result)
+        except Exception as notify_err:
+            print(f" [Web API] 警告: 季度復盤通知發送失敗: {notify_err}")
+
+        return {
+            "status": "ok",
+            "message": f"成功完成 {year}-Q{quarter} 季度 AI 自我檢討與 Skills 演化！",
+            "data": review_result
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"執行季度 AI 檢討失敗: {str(e)}")
+
+@app.get("/api/quarterly-skills/active")
+def api_get_active_quarterly_skills():
+    """撈取當前最新生效的單一筆 (LIMIT 1) 季度 JSON Skills 規範"""
+    try:
+        is_paper = config.limits.is_paper_trading
+        res = supabase.table("quarterly_skills") \
+            .select("*") \
+            .eq("is_paper", is_paper) \
+            .order("created_at", desc=True) \
+            .limit(1) \
+            .execute()
+        data = res.data or []
+        if data:
+            return {"status": "ok", "active_skill": data[0]}
+        else:
+            return {"status": "ok", "active_skill": None, "message": "目前尚無季度演化出的 Skills 紀錄，使用系統預設基準策略。"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"獲取最新季度 Skills 失敗: {str(e)}")
+
+@app.get("/api/quarterly-skills/history")
+def api_get_quarterly_skills_history():
+    """撈取歷史所有季度檢討與 Skills 紀錄"""
+    try:
+        is_paper = config.limits.is_paper_trading
+        res = supabase.table("quarterly_skills") \
+            .select("*") \
+            .eq("is_paper", is_paper) \
+            .order("created_at", desc=True) \
+            .execute()
+        return {"status": "ok", "history": res.data or []}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"獲取歷史季度 Skills 紀錄失敗: {str(e)}")
 
 
 # =====================================================================

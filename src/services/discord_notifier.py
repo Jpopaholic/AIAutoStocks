@@ -831,22 +831,35 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
     發送多層週期性 (月 / 季 / 年) AI 復盤與 Skills 演化報告至專屬的 DISCORD_WEBHOOK_REVIEW 頻道。
     依據 Layer 1 (指標診斷) -> Layer 2 (交易執行診斷) -> Layer 3 (整體策略總結) 有序推播並附帶全文 .md 檔案。
     """
-    webhook_url = config.discord.webhook_monthly_review or config.discord.webhook_live
-    if not webhook_url:
-        print(" [Discord通知器] 警告: 未配置 DISCORD_WEBHOOK_MONTHLY_REVIEW 網址，跳過推播。")
-        return
-
-    review_month = str(review_result.get("review_month") or review_result.get("period", "未知期間"))
+    review_month = str(review_result.get("review_month") or review_result.get("review_quarter") or review_result.get("period", "未知期間"))
     
     # 自動推算復盤週期標籤 (月度 / 季度 / 年度)
     if review_type:
         period_label = review_type
-    elif "Q" in review_month.upper():
+    elif "review_quarter" in review_result or "Q" in review_month.upper():
         period_label = "季度"
     elif len(review_month) == 4 and review_month.isdigit():
         period_label = "年度"
     else:
         period_label = "月度"
+
+    # Webhook 路由與嚴格驗證
+    if period_label == "季度":
+        webhook_url = config.discord.webhook_quarterly_review
+        if not webhook_url:
+            error_msg = " [Discord通知器] 錯誤: 未配置 DISCORD_WEBHOOK_QUARTERLY_REVIEW 網址！季度復盤必須強制配置專屬 Webhook 頻道，嚴禁回退或跳過。"
+            log_system_event("ERROR", error_msg)
+            raise ValueError(error_msg)
+    elif period_label == "年度":
+        webhook_url = config.discord.webhook_yearly_review or config.discord.webhook_monthly_review or config.discord.webhook_live
+        if not webhook_url:
+            print(" [Discord通知器] 警告: 未配置年度復盤 Webhook 網址，跳過推播。")
+            return
+    else:
+        webhook_url = config.discord.webhook_monthly_review or config.discord.webhook_live
+        if not webhook_url:
+            print(" [Discord通知器] 警告: 未配置 DISCORD_WEBHOOK_MONTHLY_REVIEW 網址，跳過推播。")
+            return
 
     metrics = review_result.get("metrics", {})
     stock_ind_reports = review_result.get("stock_indicator_reports", [])
@@ -860,6 +873,7 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
     
     ind_skills = review_result.get("indicator_skills") or {}
     exe_skills = review_result.get("execution_skills") or {}
+    per_stock_data = review_result.get("per_stock_data", {})
 
     from datetime import datetime, timezone
     ts = datetime.now(timezone.utc).isoformat()
@@ -928,10 +942,16 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
         exp_up = s_rep.get("expected_upside_str", "")
         exp_down = s_rep.get("expected_drawdown_str", "")
         actual_pnl = s_rep.get("actual_pnl_str", "")
+        ps = per_stock_data.get(sc, {})
+        atr_pct = ps.get("atr_pct") or s_rep.get("atr_pct")
+        atr14 = ps.get("atr14") or s_rep.get("atr14")
+        tier = ps.get("volatility_tier") or s_rep.get("volatility_tier")
 
         metrics_text = ""
-        if exp_up or exp_down or actual_pnl:
+        if exp_up or exp_down or actual_pnl or atr_pct:
             metrics_text = f"\n\n**【個股期望獲利與最大回撤統計】**\n"
+            if atr_pct is not None and atr_pct > 0:
+                metrics_text += f"• **ATR(14) 波動度**: `{atr14}` 元 (`{atr_pct:.1f}%` - `{tier}`)\n"
             if exp_up:
                 metrics_text += f"• **期望獲利 (Mean ± Std)**: `{exp_up}`\n"
             if exp_down:
@@ -996,10 +1016,16 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
         exp_up = s_rep.get("expected_upside_str", "")
         exp_down = s_rep.get("expected_drawdown_str", "")
         actual_pnl = s_rep.get("actual_pnl_str", "")
+        ps = per_stock_data.get(sc, {})
+        atr_pct = ps.get("atr_pct") or s_rep.get("atr_pct")
+        atr14 = ps.get("atr14") or s_rep.get("atr14")
+        tier = ps.get("volatility_tier") or s_rep.get("volatility_tier")
 
         metrics_md = ""
-        if exp_up or exp_down or actual_pnl:
+        if exp_up or exp_down or actual_pnl or atr_pct:
             metrics_md = "\n> 📊 **個股期望獲利與最大回撤統計**:\n"
+            if atr_pct is not None and atr_pct > 0:
+                metrics_md += f"> • **ATR(14) 波動度**: `{atr14}` 元 (`{atr_pct:.1f}%` - `{tier}`)\n"
             if exp_up:
                 metrics_md += f"> • **期望獲利 (Mean ± Std)**: `{exp_up}`\n"
             if exp_down:
@@ -1011,7 +1037,56 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
     exe_reports_md = "\n\n".join(exe_md_blocks) if exe_md_blocks else "無個股執行診斷數據。"
 
     # =====================================================================
-    # 3. 發送 Layer 3：整體復盤與下期戰術策略總結卡片 (附帶 .md 全文附件)
+    # 2.5 季度專屬：發送 Layer 3 月度技能演化與調參成效診斷卡片
+    # =====================================================================
+    monthly_skills_retrospective = review_result.get("monthly_skills_retrospective")
+    if period_label == "季度" and monthly_skills_retrospective and isinstance(monthly_skills_retrospective, dict):
+        traj_sum = monthly_skills_retrospective.get("trajectory_summary", "")
+        overfit = monthly_skills_retrospective.get("overfitting_verdict", "")
+        adj_verdicts = monthly_skills_retrospective.get("monthly_adjustments_verdict", [])
+        conflict_res = monthly_skills_retrospective.get("rule_conflict_resolutions", [])
+        strat_takeaways = monthly_skills_retrospective.get("strategic_takeaways", [])
+
+        adj_text = "\n".join([f"• {v}" for v in adj_verdicts]) if adj_verdicts else "無特別調整"
+        conflict_text = "\n".join([f"• {c}" for c in conflict_res]) if conflict_res else "無規則衝突"
+        takeaways_text = "\n".join([f"• {t}" for t in strat_takeaways]) if strat_takeaways else "無宏觀教訓"
+
+        desc_text = f"**【演化軌跡回顧】**\n{traj_sum}\n\n**【過度擬合 (Overfitting) 審查】**\n{overfit}"
+
+        l3_meta_payload = {
+            "username": f"AI 檢討 AI - Layer 3 技能成效與超參數審議 (季度)",
+            "embeds": [
+                {
+                    "title": f"🧠 季度月度技能成效深度復盤: (期間: {review_month})",
+                    "description": _safe_embed_description(desc_text),
+                    "color": 10181046,  # 紫色 (Purple)
+                    "fields": [
+                        {
+                            "name": "⚖️ 逐月調參成效裁定",
+                            "value": _safe_embed_value(adj_text),
+                            "inline": False
+                        },
+                        {
+                            "name": "🔍 規則語義與優先權裁決",
+                            "value": _safe_embed_value(conflict_text),
+                            "inline": False
+                        },
+                        {
+                            "name": "🏛️ 跨季宏觀戰略教訓",
+                            "value": _safe_embed_value(takeaways_text),
+                            "inline": False
+                        }
+                    ],
+                    "footer": {"text": "AIAutoStocks Layer 3 策略委員會 · 超參數與技能審查"},
+                    "timestamp": ts
+                }
+            ]
+        }
+        _send_discord_webhook(webhook_url, l3_meta_payload)
+        time.sleep(1.0)
+
+    # =====================================================================
+    # 3. 發送 Layer 4：整體復盤與下期戰術策略總結卡片 (附帶 .md 全文附件)
     # =====================================================================
     tactical_rules = exe_skills.get("tactical_rules", [])
     tactical_text = "\n".join([f"• {r}" for r in tactical_rules]) if tactical_rules else "• 維持穩健分批進場紀律"
@@ -1028,16 +1103,28 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
         exp_up = s_rep.get("expected_upside_str", "--")
         exp_down = s_rep.get("expected_drawdown_str", "--")
         act_pnl = s_rep.get("actual_pnl_str", "--")
-        per_stock_metrics_rows.append(f"| `{sc}` {name_str} | `{exp_up}` | `{exp_down}` | `{act_pnl}` |")
-        per_stock_metrics_discord_list.append(f"• **{sc} {name_str}**: 獲利 `{exp_up}` | 最大回撤 `{exp_down}` | 損益 `{act_pnl}`")
+        ps = per_stock_data.get(sc, {})
+        atr_pct = ps.get("atr_pct") or s_rep.get("atr_pct")
+        tier = ps.get("volatility_tier") or s_rep.get("volatility_tier")
+        if atr_pct is not None and atr_pct > 0:
+            atr_col = f"`{atr_pct:.1f}%` ({tier})"
+            atr_desc = f"波動 `{atr_pct:.1f}%` ({tier}) | "
+        else:
+            atr_col = "--"
+            atr_desc = ""
+        per_stock_metrics_rows.append(f"| `{sc}` {name_str} | {atr_col} | `{exp_up}` | `{exp_down}` | `{act_pnl}` |")
+        per_stock_metrics_discord_list.append(f"• **{sc} {name_str}**: {atr_desc}獲利 `{exp_up}` | 最大回撤 `{exp_down}` | 損益 `{act_pnl}`")
 
     per_stock_metrics_table_md = (
-        "| 股票代號 / 名稱 | 期望獲利 (Mean ± Std) | 期望最大回撤 (Mean ± Std) | 實際實現損益 |\n"
-        "| :--- | :--- | :--- | :--- |\n" +
+        "| 股票代號 / 名稱 | ATR 波動度 | 期望獲利 (Mean ± Std) | 期望最大回撤 (Mean ± Std) | 實際實現損益 |\n"
+        "| :--- | :--- | :--- | :--- | :--- |\n" +
         "\n".join(per_stock_metrics_rows)
     ) if per_stock_metrics_rows else "無個股數據"
 
     per_stock_metrics_discord_text = "\n".join(per_stock_metrics_discord_list) if per_stock_metrics_discord_list else "無個股數據"
+
+    atr_mean_val = metrics.get('portfolio_mean_atr_pct')
+    atr_summary_line = f"• 標的平均波動度 (ATR%): **{atr_mean_val:.2f}%** (高波動: **{metrics.get('high_volatility_stock_count', 0)}** 檔 | 標準: **{metrics.get('normal_volatility_stock_count', 0)}** 檔 | 低波動: **{metrics.get('low_volatility_stock_count', 0)}** 檔)\n" if atr_mean_val is not None else ""
 
     periodic_report_md = (
         f"# 🏆 {period_label} AI 復盤與戰術演化報告 (期間: {review_month})\n\n"
@@ -1048,7 +1135,8 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
         f"• 期望潛在回撤 Mean: **{metrics.get('mean_drawdown_ratio', 0)*100:.2f}%** (Std: {metrics.get('std_drawdown_ratio', 0)})\n"
         f"• 成交平均滑價 Mean: **{metrics.get('mean_slippage_ratio', 0)*100:.2f}%** (Std: {metrics.get('std_slippage_ratio', 0)})\n"
         f"• 未成交取消單: **{metrics.get('total_cancelled_orders', 0)}** 筆 (取消率: **{metrics.get('cancellation_rate_pct', 0)}%**)\n"
-        f"• 買單進場平均位階: **{metrics.get('avg_portfolio_entry_percentile', 50.0):.1f}%** | 追高買單: **{metrics.get('total_chasing_high_trades', 0)}** 筆 | 波段頂點買入: **{metrics.get('total_late_entry_trades', 0)}** 筆\n\n"
+        f"• 買單進場平均位階: **{metrics.get('avg_portfolio_entry_percentile', 50.0):.1f}%** | 追高買單: **{metrics.get('total_chasing_high_trades', 0)}** 筆 | 波段頂點買入: **{metrics.get('total_late_entry_trades', 0)}** 筆\n"
+        f"{atr_summary_line}\n"
         f"### 🎯 各標的期望獲利與預期最大回撤明細表\n"
         f"{per_stock_metrics_table_md}\n\n"
         f"---\n\n"
@@ -1079,7 +1167,8 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
                     f"• 期望潛在回撤 Mean: **{metrics.get('mean_drawdown_ratio', 0)*100:.2f}%** (Std: {metrics.get('std_drawdown_ratio', 0)})\n"
                     f"• 成交平均滑價 Mean: **{metrics.get('mean_slippage_ratio', 0)*100:.2f}%** (Std: {metrics.get('std_slippage_ratio', 0)})\n"
                     f"• 未成交取消單: **{metrics.get('total_cancelled_orders', 0)}** 筆 (取消率: **{metrics.get('cancellation_rate_pct', 0)}%**)\n"
-                    f"• 買單進場平均位階: **{metrics.get('avg_portfolio_entry_percentile', 50.0):.1f}%** | 追高買單: **{metrics.get('total_chasing_high_trades', 0)}** 筆 | 波段頂點買入: **{metrics.get('total_late_entry_trades', 0)}** 筆\n\n"
+                    f"• 買單進場平均位階: **{metrics.get('avg_portfolio_entry_percentile', 50.0):.1f}%** | 追高買單: **{metrics.get('total_chasing_high_trades', 0)}** 筆 | 波段頂點買入: **{metrics.get('total_late_entry_trades', 0)}** 筆\n"
+                    f"{atr_summary_line}\n"
                     f"**【各標的期望獲利與最大回撤摘要】**\n{per_stock_metrics_discord_text}\n\n"
                     f"{overall_summary}\n\n"
                     f"**【下期關鍵戰術執行守則】**\n{tactical_text}\n\n"
@@ -1096,6 +1185,10 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
 
 # 別名相容：月度復盤直接對應至通用週期復盤
 send_monthly_review_notification = send_periodic_review_notification
+
+def send_quarterly_review_notification(review_result: Dict[str, Any]) -> None:
+    """專用季度復盤推播函式，強制要求配置 DISCORD_WEBHOOK_QUARTERLY_REVIEW"""
+    send_periodic_review_notification(review_result, review_type="季度")
 
 
 def send_test_notification(webhook_type: str = "monthly_review", test_mode: str = "simple") -> Dict[str, Any]:

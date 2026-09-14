@@ -249,4 +249,20 @@ CREATE INDEX IF NOT EXISTS idx_monthly_skills_paper ON monthly_skills (is_paper)
 ALTER TABLE monthly_skills ENABLE ROW LEVEL SECURITY;
 
 
+-- -----------------------------------------------------------------------------
+-- 12. quarterly_skills — 季度 AI 決策檢討與動態 JSON Skills 戰術庫 (獨立表隔離)
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS quarterly_skills (
+    id                   BIGSERIAL PRIMARY KEY,
+    review_quarter       TEXT NOT NULL,                  -- 分析季度，格式如 '2026-Q3'
+    months_included      TEXT[] NOT NULL,                -- 涵蓋之 3 個月份清單，如 ARRAY['2026-07', '2026-08', '2026-09']
+    daily_analysis_count INTEGER NOT NULL DEFAULT 0,    -- 該季納入檢討之有效日分析天數
+    skills               JSONB NOT NULL,                 -- 季度 AI 檢討產出的動態 JSON 戰術 Skills
+    is_paper             BOOLEAN NOT NULL DEFAULT FALSE, -- 預設 FALSE (僅記錄真實操盤檢討)
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
+CREATE INDEX IF NOT EXISTS idx_quarterly_skills_quarter ON quarterly_skills (review_quarter DESC);
+CREATE INDEX IF NOT EXISTS idx_quarterly_skills_paper ON quarterly_skills (is_paper);
+
+ALTER TABLE quarterly_skills ENABLE ROW LEVEL SECURITY;

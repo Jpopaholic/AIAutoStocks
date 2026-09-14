@@ -1177,33 +1177,89 @@
                     </div>
                 </div>
 
-                <!-- 🤖 AI 月度自我檢討與策略演化控制卡片 -->
-                <div class="glass-card" style="margin-top: 20px;">
+                <!-- 🧠 AI 雙層 Skills 協同與策略演化控制區 -->
+                <div style="margin-top: 24px; padding: 10px 14px; border-radius: 10px; background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.2); font-size: 11px; display: flex; align-items: center; justify-content: space-between;">
+                    <span style="color: #c7d2fe; display: flex; align-items: center; gap: 6px;">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+                        <b>AI 雙層 Skills 協同體系</b>：月度靈活微調 ＋ 季度宏觀防線
+                    </span>
+                    <span style="font-size: 10px; font-weight: 700; color: #facc15; background: rgba(234, 179, 8, 0.15); border: 1px solid rgba(234, 179, 8, 0.3); padding: 2px 8px; border-radius: 99px;">
+                        ⚡ 衝突時以季 Skills 為主
+                    </span>
+                </div>
+
+                <!-- 📅 位置一：AI 月度自我檢討與策略演化 (Monthly Skills) -->
+                <div class="glass-card" style="margin-top: 12px; border-color: rgba(99, 102, 241, 0.2);">
                     <div class="section-title">
                         <span>
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-                            🤖 AI 月度自我檢討與策略演化
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                            📅 月度 AI 戰術技能演化 (Monthly Skills)
                         </span>
                     </div>
 
-                    <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 12px; line-height: 1.5;">
-                        <span id="weekend-status-badge" style="display: inline-block; padding: 2px 8px; border-radius: 4px; font-weight: 600; font-size: 11px; margin-bottom: 6px;"></span>
-                        <div id="weekend-notice-text">⚠️ 手動檢討僅限週六/週日開放，避免干擾平日盤中交易。</div>
+                    <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 12px; line-height: 1.5;">
+                        <span id="monthly-weekend-status-badge" style="display: inline-block; padding: 2px 8px; border-radius: 4px; font-weight: 600; font-size: 11px; margin-bottom: 6px;"></span>
+                        <div id="monthly-weekend-notice-text">固定於每個月結算後週六 09:00 自動執行（手動檢討限週末假日）。</div>
                     </div>
 
-                    <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+                    <div style="display: flex; gap: 8px; margin-bottom: 14px;">
                         <input type="date" id="monthly-review-month-picker" class="form-control" title="選擇該月份任意日期 (選填)" style="flex: 1; font-size: 12px;">
-                        <button class="btn btn-primary" id="btn-run-monthly-review" onclick="runMonthlyReviewUI()" style="padding: 6px 14px; font-size: 12px; font-weight: 600;">
+                        <button class="btn btn-primary" id="btn-run-monthly-review" onclick="runMonthlyReviewUI()" style="padding: 6px 14px; font-size: 12px; font-weight: 600; white-space: nowrap;">
                             一鍵月度檢討
                         </button>
                     </div>
 
                     <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid var(--glass-border); border-radius: 8px; padding: 12px;">
                         <div style="font-size: 12px; font-weight: 600; color: var(--text-primary); margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
-                            <span>當前生效 JSON Skills 規範</span>
-                            <span id="active-skill-version" style="font-size: 10px; color: var(--color-primary);">載入中...</span>
+                            <span style="display: flex; align-items: center; gap: 5px;">
+                                <span style="width: 6px; height: 6px; border-radius: 50%; background: #6366f1;"></span>
+                                當前月度生效 Skills
+                            </span>
+                            <span id="active-monthly-skill-version" style="font-size: 10px; color: #a5b4fc;">載入中...</span>
                         </div>
-                        <pre id="active-skill-json-display" style="font-size: 11px; color: #a5f3fc; font-family: monospace; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto; background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; margin: 0;">目前無生效中的 Skills</pre>
+                        <pre id="active-monthly-skill-json-display" style="font-size: 11px; color: #a5f3fc; font-family: monospace; white-space: pre-wrap; word-break: break-all; max-height: 180px; overflow-y: auto; background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; margin: 0;">目前無生效中的月度 Skills</pre>
+                    </div>
+                </div>
+
+                <!-- 🏛️ 位置二：AI 季度策略復盤與宏觀技能 (Quarterly Skills) -->
+                <div class="glass-card" style="margin-top: 16px; border-color: rgba(168, 85, 247, 0.25); background: linear-gradient(180deg, rgba(30, 27, 75, 0.35) 0%, rgba(15, 23, 42, 0.45) 100%);">
+                    <div class="section-title">
+                        <span style="color: #e9d5ff;">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#a855f7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l9 4.9V17L12 22l-9-5V6.9L12 2z"></path><path d="M12 22V12"></path><path d="M12 12L2.9 7.4"></path><path d="M12 12l9.1-4.6"></path></svg>
+                            🏛️ 季度 AI 宏觀戰略技能 (Quarterly Skills)
+                        </span>
+                        <span style="font-size: 10px; font-weight: 700; color: #d8b4fe; background: rgba(168, 85, 247, 0.2); border: 1px solid rgba(168, 85, 247, 0.4); padding: 2px 6px; border-radius: 4px;">
+                            👑 最高主導裁決
+                        </span>
+                    </div>
+
+                    <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 12px; line-height: 1.5;">
+                        <span id="quarterly-weekend-status-badge" style="display: inline-block; padding: 2px 8px; border-radius: 4px; font-weight: 600; font-size: 11px; margin-bottom: 6px;"></span>
+                        <div id="quarterly-weekend-notice-text">固定於每季結束後週日 09:00 自動執行（手動檢討同樣僅限週末假日開放，且需滿 3 個月基石）。</div>
+                    </div>
+
+                    <div style="display: flex; gap: 8px; margin-bottom: 14px;">
+                        <select id="quarterly-review-picker" class="form-control" style="flex: 1; font-size: 12px;">
+                            <option value="">自動推算最新結束季度</option>
+                            <option value="2026-Q3">2026-Q3 (7月~9月)</option>
+                            <option value="2026-Q2">2026-Q2 (4月~6月)</option>
+                            <option value="2026-Q1">2026-Q1 (1月~3月)</option>
+                            <option value="2025-Q4">2025-Q4 (10月~12月)</option>
+                        </select>
+                        <button class="btn btn-primary" id="btn-run-quarterly-review" onclick="runQuarterlyReviewUI()" style="padding: 6px 14px; font-size: 12px; font-weight: 600; background: linear-gradient(135deg, #7c3aed 0%, #a855f7 100%); border-color: #9333ea; white-space: nowrap;">
+                            一鍵季度檢討
+                        </button>
+                    </div>
+
+                    <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(168, 85, 247, 0.2); border-radius: 8px; padding: 12px;">
+                        <div style="font-size: 12px; font-weight: 600; color: #f3e8ff; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
+                            <span style="display: flex; align-items: center; gap: 5px;">
+                                <span style="width: 6px; height: 6px; border-radius: 50%; background: #a855f7;"></span>
+                                當前季度生效 Skills
+                            </span>
+                            <span id="active-quarterly-skill-version" style="font-size: 10px; color: #d8b4fe;">載入中...</span>
+                        </div>
+                        <pre id="active-quarterly-skill-json-display" style="font-size: 11px; color: #e9d5ff; font-family: monospace; white-space: pre-wrap; word-break: break-all; max-height: 180px; overflow-y: auto; background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; margin: 0;">目前無生效中的季度 Skills</pre>
                     </div>
                 </div>
             </div>
@@ -2396,14 +2452,14 @@
             }
         }
 
-        // 🤖 月度 AI 檢討與 Skills UI 邏輯
-        async function loadActiveSkillsUI() {
+        // 🤖 月度與季度雙層 AI Skills UI 載入與檢討控制邏輯
+        async function loadActiveMonthlySkillsUI() {
+            const jsonDisplay = document.getElementById("active-monthly-skill-json-display");
+            const verDisplay = document.getElementById("active-monthly-skill-version");
             try {
                 const response = await authFetch(`${API_BASE}/api/monthly-skills/active`);
                 if (!response.ok) return;
                 const data = await response.json();
-                const jsonDisplay = document.getElementById("active-skill-json-display");
-                const verDisplay = document.getElementById("active-skill-version");
                 
                 if (data.active_skill && data.active_skill.skills) {
                     if (verDisplay) verDisplay.innerText = `版本: ${data.active_skill.review_month || "最新"}`;
@@ -2413,36 +2469,100 @@
                     if (jsonDisplay) jsonDisplay.innerText = "目前無月度演化出的 Skills 紀錄，使用系統預設基準策略。";
                 }
             } catch (err) {
-                console.error("載入 Skills 失敗:", err);
+                console.error("載入月度 Skills 失敗:", err);
+                if (jsonDisplay) jsonDisplay.innerText = "載入月度 Skills 時發生錯誤。";
             }
         }
 
+        async function loadActiveQuarterlySkillsUI() {
+            const jsonDisplay = document.getElementById("active-quarterly-skill-json-display");
+            const verDisplay = document.getElementById("active-quarterly-skill-version");
+            try {
+                const response = await authFetch(`${API_BASE}/api/quarterly-skills/active`);
+                if (!response.ok) return;
+                const data = await response.json();
+                
+                if (data.active_skill && data.active_skill.skills) {
+                    const qLabel = data.active_skill.review_quarter || "最新";
+                    if (verDisplay) verDisplay.innerText = `版本: ${qLabel} (優先準則)`;
+                    if (jsonDisplay) jsonDisplay.innerText = JSON.stringify(data.active_skill.skills, null, 2);
+                } else {
+                    if (verDisplay) verDisplay.innerText = "基準宏觀策略";
+                    if (jsonDisplay) jsonDisplay.innerText = "目前無季度演化出的 Skills 紀錄，遵循月度與系統預設基準策略。";
+                }
+            } catch (err) {
+                console.error("載入季度 Skills 失敗:", err);
+                if (jsonDisplay) jsonDisplay.innerText = "載入季度 Skills 時發生錯誤。";
+            }
+        }
+
+        // 同時並行載入月度與季度 Skills
+        async function loadAllSkillsUI() {
+            await Promise.allSettled([
+                loadActiveMonthlySkillsUI(),
+                loadActiveQuarterlySkillsUI()
+            ]);
+        }
+
         function checkWeekendStatusUI() {
-            const badge = document.getElementById("weekend-status-badge");
-            const btn = document.getElementById("btn-run-monthly-review");
-            const notice = document.getElementById("weekend-notice-text");
             const now = new Date();
             const day = now.getDay(); // 0 is Sunday, 6 is Saturday
             const isWeekend = (day === 0 || day === 6);
 
+            // 月度狀態
+            const mBadge = document.getElementById("monthly-weekend-status-badge");
+            const mBtn = document.getElementById("btn-run-monthly-review");
+            const mNotice = document.getElementById("monthly-weekend-notice-text");
+
+            // 季度狀態
+            const qBadge = document.getElementById("quarterly-weekend-status-badge");
+            const qBtn = document.getElementById("btn-run-quarterly-review");
+            const qNotice = document.getElementById("quarterly-weekend-notice-text");
+
             if (isWeekend) {
-                if (badge) {
-                    badge.style.background = "rgba(16, 185, 129, 0.2)";
-                    badge.style.color = "#6ee7b7";
-                    badge.style.border = "1px solid rgba(16, 185, 129, 0.4)";
-                    badge.innerText = "🟢 週末假日開放中";
+                const weekendStyleBg = "rgba(16, 185, 129, 0.2)";
+                const weekendStyleColor = "#6ee7b7";
+                const weekendStyleBorder = "1px solid rgba(16, 185, 129, 0.4)";
+
+                if (mBadge) {
+                    mBadge.style.background = weekendStyleBg;
+                    mBadge.style.color = weekendStyleColor;
+                    mBadge.style.border = weekendStyleBorder;
+                    mBadge.innerText = "🟢 週末假日開放中";
                 }
-                if (notice) notice.innerText = "今日為週末，可以點擊下方按鈕手動觸發月度 AI 復盤。";
-                if (btn) btn.disabled = false;
+                if (mNotice) mNotice.innerText = "今日為週末，可以點擊「一鍵月度檢討」手動觸發月度 AI 復盤。";
+                if (mBtn) mBtn.disabled = false;
+
+                if (qBadge) {
+                    qBadge.style.background = "rgba(168, 85, 247, 0.25)";
+                    qBadge.style.color = "#d8b4fe";
+                    qBadge.style.border = "1px solid rgba(168, 85, 247, 0.5)";
+                    qBadge.innerText = "🟣 週末假日開放中";
+                }
+                if (qNotice) qNotice.innerText = "今日為週末，可以點擊「一鍵季度檢討」手動觸發宏觀策略復盤（需滿 3 個月基石）。";
+                if (qBtn) qBtn.disabled = false;
             } else {
-                if (badge) {
-                    badge.style.background = "rgba(245, 158, 11, 0.2)";
-                    badge.style.color = "#fde047";
-                    badge.style.border = "1px solid rgba(245, 158, 11, 0.4)";
-                    badge.innerText = "🔒 平日盤中鎖定中";
+                const weekdayStyleBg = "rgba(245, 158, 11, 0.2)";
+                const weekdayStyleColor = "#fde047";
+                const weekdayStyleBorder = "1px solid rgba(245, 158, 11, 0.4)";
+
+                if (mBadge) {
+                    mBadge.style.background = weekdayStyleBg;
+                    mBadge.style.color = weekdayStyleColor;
+                    mBadge.style.border = weekdayStyleBorder;
+                    mBadge.innerText = "🔒 平日盤中鎖定中";
                 }
-                if (notice) notice.innerText = "⚠️ 手動檢討僅限週六/週日開放，避免干擾平日盤中交易。";
-                if (btn) btn.disabled = true;
+                if (mNotice) mNotice.innerText = "⚠️ 手動月度檢討僅限週末開放，避免干擾平日盤中交易。";
+                if (mBtn) mBtn.disabled = true;
+
+                if (qBadge) {
+                    qBadge.style.background = weekdayStyleBg;
+                    qBadge.style.color = weekdayStyleColor;
+                    qBadge.style.border = weekdayStyleBorder;
+                    qBadge.innerText = "🔒 平日盤中鎖定中";
+                }
+                if (qNotice) qNotice.innerText = "⚠️ 手動季度檢討僅限週末開放，避免干擾平日盤中交易。";
+                if (qBtn) qBtn.disabled = true;
             }
         }
 
@@ -2473,7 +2593,7 @@
                     showToast(data.detail || data.message || "檢討失敗", "error");
                 } else {
                     showToast(data.message || "成功完成月度 AI 復盤！", "success");
-                    loadActiveSkillsUI();
+                    loadAllSkillsUI();
                     loadLogs();
                 }
             } catch (err) {
@@ -2485,9 +2605,48 @@
             }
         }
 
+        async function runQuarterlyReviewUI() {
+            const picker = document.getElementById("quarterly-review-picker");
+            const targetQuarter = picker ? picker.value : "";
+            
+            if (!confirm(`確定要手動觸發季度 AI 復盤與宏觀 Skills 演化嗎？${targetQuarter ? '\n指定季度: ' + targetQuarter : '\n(將會自動推算最新完整結算季度)'}\n⚠️ 備註：依系統規範，該季度 3 個月份皆須具備有效月檢討紀錄方可成功復盤。`)) {
+                return;
+            }
+
+            const btn = document.getElementById("btn-run-quarterly-review");
+            const originalHTML = btn ? btn.innerHTML : "";
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = `<span class="loading-spinner" style="width:12px;height:12px;border-width:2px;"></span> 季度復盤中...`;
+            }
+
+            try {
+                const response = await authFetch(`${API_BASE}/api/quarterly-skills/run`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ target_quarter: targetQuarter })
+                });
+
+                const data = await response.json();
+                if (!response.ok) {
+                    showToast(data.detail || data.message || "季度檢討失敗", "error");
+                } else {
+                    showToast(data.message || "成功完成季度 AI 復盤！", "success");
+                    loadAllSkillsUI();
+                    loadLogs();
+                }
+            } catch (err) {
+                console.error("執行季度檢討失敗:", err);
+                showToast("連線後端伺服器時發生錯誤。", "error");
+            } finally {
+                checkWeekendStatusUI();
+                if (btn && !btn.disabled) btn.innerHTML = originalHTML;
+            }
+        }
+
         // 初始化時呼叫
         document.addEventListener("DOMContentLoaded", () => {
-            loadActiveSkillsUI();
+            loadAllSkillsUI();
             checkWeekendStatusUI();
         });
 
