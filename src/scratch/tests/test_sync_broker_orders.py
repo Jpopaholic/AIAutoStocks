@@ -1,7 +1,7 @@
 import os
 import sys
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, ANY
 
 # Set mock environment variables before importing config to pass startup validation
 os.environ["DISCORD_WEBHOOK_SANDBOX"] = "https://discord.com/api/webhooks/mock_sandbox"
@@ -396,7 +396,8 @@ class TestSyncBrokerOrders(unittest.TestCase):
             "quantity": 400.0,
             "fee": 205.0,
             "total_amount": 239405.0,
-            "realized_pnl": 0.0
+            "realized_pnl": 0.0,
+            "executed_at": ANY
         })
         
         # Check holdings updated with the first 400 shares
@@ -446,7 +447,8 @@ class TestSyncBrokerOrders(unittest.TestCase):
             "quantity": 1000.0,
             "fee": 513.0,
             "total_amount": 600313.0,
-            "realized_pnl": 0.0
+            "realized_pnl": 0.0,
+            "executed_at": ANY
         })
         
         # Check holdings updated only with the delta (600 shares at 601.0)
@@ -515,7 +517,8 @@ class TestSyncBrokerOrders(unittest.TestCase):
             "quantity": 400.0,
             "fee": 205.0,
             "total_amount": 239405.0,
-            "realized_pnl": 0.0
+            "realized_pnl": 0.0,
+            "executed_at": ANY
         })
         
         # holdings should NOT be updated because delta is 0

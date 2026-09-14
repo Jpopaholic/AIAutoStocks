@@ -1,7 +1,7 @@
 # Path: src/services/broker_connector.py
 import threading
 import time
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from typing import Dict, Any, Optional
 from src.config import config
 from src.services.supabase_client import (
@@ -645,7 +645,8 @@ def sync_broker_orders(exclude_from_failed_log: bool = False) -> None:
                     "quantity": total_deal_qty,
                     "fee": actual_fee,
                     "total_amount": actual_total_amount,
-                    "realized_pnl": realized_pnl
+                    "realized_pnl": realized_pnl,
+                    "executed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
                 }
                 update_order_status(order_db_id, updates)
                 

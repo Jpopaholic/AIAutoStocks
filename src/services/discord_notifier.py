@@ -255,15 +255,10 @@ def send_daily_report(
             if sim_active:
                 today_orders = get_orders(sim_date=get_effective_date_str())
             else:
-                # 包含前一交易日至今的時間區間，確保能捕捉昨日盤後下單並於今日盤中成交的項目
-                from datetime import datetime, timedelta
-                from src.time_manager import get_taiwan_timezone
-                tz = get_taiwan_timezone()
+                # 動態推算前一營業日盤後至今日的時間區間，確保能跨週末/假日捕捉前次盤後下單並於今日盤中成交的項目
+                from src.time_manager import get_report_lookback_range
                 today_date_str = get_local_taiwan_date_str()
-                today_dt = datetime.fromisoformat(today_date_str).replace(tzinfo=tz)
-                yesterday_str = (today_dt - timedelta(days=1)).strftime("%Y-%m-%d")
-                start_utc, _ = get_local_taiwan_midnight_utc_range(yesterday_str)
-                _, end_utc = get_local_taiwan_midnight_utc_range(today_date_str)
+                start_utc, end_utc = get_report_lookback_range(today_date_str)
                 today_orders = get_orders(start_date=start_utc, end_date=end_utc)
         except Exception as e:
             print(f" [Discord通知器] 無法取得交易紀錄: {str(e)}")
@@ -277,14 +272,9 @@ def send_daily_report(
             if sim_active:
                 today_unfilled = get_unfilled_orders(sim_date=get_effective_date_str())
             else:
-                from datetime import datetime, timedelta
-                from src.time_manager import get_taiwan_timezone
-                tz = get_taiwan_timezone()
+                from src.time_manager import get_report_lookback_range
                 today_date_str = get_local_taiwan_date_str()
-                today_dt = datetime.fromisoformat(today_date_str).replace(tzinfo=tz)
-                yesterday_str = (today_dt - timedelta(days=1)).strftime("%Y-%m-%d")
-                start_utc, _ = get_local_taiwan_midnight_utc_range(yesterday_str)
-                _, end_utc = get_local_taiwan_midnight_utc_range(today_date_str)
+                start_utc, end_utc = get_report_lookback_range(today_date_str)
                 today_unfilled = get_unfilled_orders(start_date=start_utc, end_date=end_utc)
         except Exception as e:
             print(f" [Discord通知器] 無法取得未成交紀錄: {str(e)}")
