@@ -300,11 +300,13 @@ def send_daily_report(
     # ── 2.8 獲取目前持股明細與未實現損益 ─────────────────────────────
     holdings_lines = []
     held_stock_codes = set()
+    holdings_by_code = {}
     try:
         from src.services.stock_fetcher import get_display_price, fetch_realtime_quotes_batch
 
         current_holdings = get_holdings()
         if current_holdings:
+            holdings_by_code = {h["stock_code"]: h for h in current_holdings if h.get("stock_code")}
             held_stock_codes = {h["stock_code"] for h in current_holdings if h.get("stock_code") and float(h.get("quantity") or 0.0) > 0}
             hold_codes = [h["stock_code"] for h in current_holdings if h.get("stock_code")]
             if hold_codes:
@@ -392,21 +394,37 @@ def send_daily_report(
     )
 
     # 交易列表 (使用 diff 美化)
+    # 規範：獲利為紅色 (- 前綴渲染紅色)、虧損為綠色 (+ 前綴渲染綠色)、買進與無損益為白色 (空格前綴渲染白色)
     trades_lines = []
     for o in executed_orders:
         status = o.get("status", "FILLED")
-        action_label = "買" if o["action"] == "BUY" else "賣"
+        action = o.get("action", "BUY")
+        action_label = "買" if action == "BUY" else "賣"
         stock_name = get_stock_name(o['stock_code'])
         name_display = f"({stock_name})" if stock_name else ""
         qty = float(o.get("quantity") or 0.0)
         limit_price = float(o.get("price") or 0.0)
         exec_price = float(o.get("execution_price") or 0.0) if status == "FILLED" else limit_price
         
-        prefix = "+" if o["action"] == "BUY" else "-"
+        if action == "BUY":
+            prefix = " "  # 買進踩白色 (空格前綴)
+        else:
+            # 賣出：依據實現損益判斷色彩
+            if status == "FILLED":
+                realized = float(o.get("realized_pnl") or 0.0)
+                if realized > 0:
+                    prefix = "-"  # 獲利為紅色 (Discord diff 中 '-' 渲染為紅色)
+                elif realized < 0:
+                    prefix = "+"  # 虧損為綠色 (Discord diff 中 '+' 渲染為綠色)
+                else:
+                    prefix = " "  # 無獲利或虧損 (平盤) 踩白色
+            else:
+                prefix = " "  # 未成交/取消之賣單踩白色
+        
         status_str = "已成交" if status == "FILLED" else ("已取消" if status == "CANCELLED" else "委託中")
         
         line = f"{prefix} {action_label} {o['stock_code']}{name_display} | {qty:,.0f}股 | 均價:{exec_price:,.2f} | {status_str}"
-        if o["action"] == "SELL" and status == "FILLED":
+        if action == "SELL" and status == "FILLED":
             realized = float(o.get("realized_pnl") or 0.0)
             line += f" (已實現損益: {realized:+,.0f})"
         trades_lines.append(line)
@@ -466,6 +484,7 @@ def send_daily_report(
     unfilled_text = "\n".join(unfilled_lines) if unfilled_lines else ""
 
     # ── 3.7 本日 AI 擬定之次日預約委託單 (預計執行決策) ──────────────────────
+    # 規範：停利紅色 (- 前綴渲染紅色)、停損綠色 (+ 前綴渲染綠色)、買進白色 (空格前綴渲染白色)
     next_day_orders_lines = []
     if portfolio_decision and "decisions" in portfolio_decision:
         for d in portfolio_decision.get("decisions", []):
@@ -476,9 +495,43 @@ def send_daily_report(
                 stock_name = get_stock_name(code)
                 name_display = f"({stock_name})" if stock_name else ""
                 price = float(d.get("price") or 0.0)
-                prefix = "+" if action == "BUY" else "-"
                 action_label = "買" if action == "BUY" else "賣"
-                line = f"{prefix} {action_label} {code}{name_display} | {qty:,.0f}股 | 委託價:{price:,.2f} | 預約下單中 (次日生效)"
+                
+                if action == "BUY":
+                    prefix = " "  # 買進踩白色 (空格前綴)
+                    type_label = ""
+                else:
+                    # 賣出：依據停利 / 停損判斷色彩
+                    reason_text = (str(d.get("reason") or "") + " " + str(d.get("pm_reason") or "")).lower()
+                    hold_info = holdings_by_code.get(code, {})
+                    avg_cost = float(hold_info.get("average_price") or 0.0)
+                    
+                    is_take_profit = False
+                    is_stop_loss = False
+                    
+                    # 關鍵字檢查優先
+                    if any(k in reason_text for k in ("停利", "鎖利", "獲利了結", "take_profit", "tp")):
+                        is_take_profit = True
+                    elif any(k in reason_text for k in ("停損", "止損", "硬體停損", "風控強制", "stop_loss", "sl", "跌破")):
+                        is_stop_loss = True
+                    elif avg_cost > 0:
+                        if price > avg_cost:
+                            is_take_profit = True
+                        elif price < avg_cost:
+                            is_stop_loss = True
+                    
+                    if is_take_profit:
+                        prefix = "-"  # 停利為紅色 (Discord diff 中 '-' 渲染為紅色)
+                        type_label = "(停利)"
+                    elif is_stop_loss:
+                        prefix = "+"  # 停損為綠色 (Discord diff 中 '+' 渲染為綠色)
+                        type_label = "(停損)"
+                    else:
+                        prefix = " "  # 無明確損益或平手為白色
+                        type_label = ""
+                
+                action_desc = f"{action_label}{type_label}"
+                line = f"{prefix} {action_desc} {code}{name_display} | {qty:,.0f}股 | 委託價:{price:,.2f} | 預約下單中 (次日生效)"
                 next_day_orders_lines.append(line)
 
     next_day_orders_text = "\n".join(next_day_orders_lines) if next_day_orders_lines else "🟢 今日 AI 評估無需新增買賣委託單 (全數觀望/續抱)。"

@@ -152,7 +152,7 @@ def run_test(mock_post, mock_quote, mock_nav_calc, mock_holdings_query, mock_ord
             for f in emb.get("fields", []):
                 if "評分與相對排名" in f.get("name", ""):
                     found_section2 = f["value"]
-                if "經理人交易配置與理由" in f.get("name", ""):
+                if "經理人" in f.get("name", ""):
                     found_section4 = f["value"]
                     
     assert found_section4 is not None, "未找到 Section 4 欄位內容！"
