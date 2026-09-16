@@ -154,6 +154,71 @@ class TestWeekendLookback(unittest.TestCase):
         self.assertTrue(kwargs["start_date"].startswith("2026-09-11T06:00:00"))
         self.assertTrue(kwargs["end_date"].startswith("2026-09-14T15:59:59"))
 
+    @patch("src.services.discord_notifier._send_discord_webhook", return_value=True)
+    @patch("src.services.discord_notifier.get_orders")
+    @patch("src.services.discord_notifier.get_unfilled_orders", return_value=[])
+    @patch("src.services.discord_notifier.get_holdings", return_value=[])
+    @patch("src.services.nav_calculator.calculate_nav", return_value=(100000.0, 0.0, 100000.0))
+    @patch("src.services.sandbox_simulator.is_simulation_active", return_value=False)
+    @patch("src.time_manager.get_local_taiwan_date_str", return_value="2026-09-16")  # Wednesday
+    @patch("src.services.supabase_client.supabase")
+    def test_stale_executed_orders_filtered_out_on_next_day(
+        self, mock_sb, mock_date_str, mock_sim, mock_nav, mock_holdings, mock_unfilled, mock_get_orders, mock_send_webhook
+    ):
+        from src.services.discord_notifier import send_daily_report
+
+        # 模擬資料庫中前一次每日分析完成於 2026-09-15 15:05:10 (07:05:10 UTC)
+        mock_table = MagicMock()
+        mock_select = MagicMock()
+        mock_lt = MagicMock()
+        mock_eq = MagicMock()
+        mock_order1 = MagicMock()
+        mock_order2 = MagicMock()
+        mock_limit = MagicMock()
+        mock_limit.execute.return_value.data = [{
+            "id": 113,
+            "analysis_date": "2026-09-15",
+            "created_at": "2026-09-15T07:05:10.374458+00:00"
+        }]
+
+        mock_sb.table.return_value = mock_table
+        mock_table.select.return_value = mock_select
+        mock_select.lt.return_value = mock_lt
+        mock_lt.eq.return_value = mock_eq
+        mock_eq.order.return_value = mock_order1
+        mock_order1.order.return_value = mock_order2
+        mock_order2.limit.return_value = mock_limit
+
+        # 查詢回傳的訂單是前一天 (2026-09-15 07:00:10 UTC) 已成交項目
+        stale_order = {
+            "id": 400,
+            "stock_code": "2891",
+            "action": "BUY",
+            "price": 68.3,
+            "execution_price": 68.3,
+            "quantity": 100.0,
+            "fee": 20.0,
+            "total_amount": 6850.0,
+            "realized_pnl": 0.0,
+            "status": "FILLED",
+            "executed_at": "2026-09-15T07:00:10.250959+00:00"
+        }
+        mock_get_orders.return_value = [stale_order]
+
+        send_daily_report(ai_outlook="今日全數觀望")
+
+        # 驗證送出報告
+        mock_send_webhook.assert_called_once()
+        call_args = mock_send_webhook.call_args
+        file_tuple = call_args[1].get("file_tuple")
+        self.assertIsNotNone(file_tuple)
+        report_filename, full_report_md, _ = file_tuple
+
+        # 驗證前一日已成交之 2891 被準確排除，今日交易明細顯示無成交，今日實現損益為 0
+        self.assertIn("今日無任何交易委託成交。", full_report_md)
+        self.assertNotIn("買 2891", full_report_md)
+        self.assertIn("今日實現損益**: **`+0`** 元", full_report_md)
+
 
 if __name__ == "__main__":
     unittest.main()

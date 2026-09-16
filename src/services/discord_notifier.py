@@ -1,6 +1,6 @@
 import json
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 from typing import Dict, List, Any, Optional
 
 from src.config import config, get_stock_name, safe_int, safe_float
@@ -9,10 +9,12 @@ from src.services.supabase_client import get_orders, get_holdings, log_system_ev
 # 它會自動根據當前系統狀態，透明切換即時報價或歷史模擬報價
 from src.services import sandbox_simulator
 from src.time_manager import (
+    get_local_taiwan_datetime,
     get_local_taiwan_date_str,
     get_local_taiwan_datetime_str,
     get_local_taiwan_midnight_utc_range,
     get_effective_date_str,
+    get_taiwan_timezone,
 )
 
 def _sanitize_payload_embeds(payload: dict) -> dict:
@@ -248,6 +250,37 @@ def send_daily_report(
 
     # ── 2. 獲取今日交易委託與成交狀態 ──────────────────────────────────
     # ── 2. 獲取今日與前次預約委託與成交狀態 ──────────────────────────────
+    if sim_active:
+        report_target_date = get_effective_date_str()
+    else:
+        tw_now = get_local_taiwan_datetime()
+        weekday = tw_now.weekday()
+        if weekday == 5:  # 週六 -> 最近營業日週五
+            report_target_date = (tw_now - timedelta(days=1)).strftime("%Y-%m-%d")
+        elif weekday == 6:  # 週日 -> 最近營業日週五
+            report_target_date = (tw_now - timedelta(days=2)).strftime("%Y-%m-%d")
+        else:
+            report_target_date = tw_now.strftime("%Y-%m-%d")
+
+    # 查詢資料庫前一次分析/擬定委託紀錄 (daily_analysis)，取得前次週期結算點以判定成交歸屬
+    prev_analysis_cutoff_utc = None
+    try:
+        from src.services.supabase_client import supabase, execute_with_retry
+        prev_res = execute_with_retry(
+            lambda: supabase.table("daily_analysis")
+            .select("id, analysis_date, created_at")
+            .lt("analysis_date", report_target_date)
+            .eq("is_paper", is_paper)
+            .order("analysis_date", desc=True)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if isinstance(prev_res, list) and prev_res and prev_res[0].get("created_at"):
+            prev_analysis_cutoff_utc = prev_res[0]["created_at"]
+    except Exception as prev_err:
+        print(f" [Discord通知器] 查詢前次分析擬定紀錄失敗: {str(prev_err)}")
+
     if override_orders is not None:
         today_orders = override_orders
     else:
@@ -280,8 +313,78 @@ def send_daily_report(
             print(f" [Discord通知器] 無法取得未成交紀錄: {str(e)}")
             today_unfilled = []
 
-    # 區分盤中真正成交項目 (FILLED / PARTFILLED)
-    executed_orders = today_orders if override_orders is not None else [o for o in today_orders if o.get("status", "FILLED") in ("FILLED", "PARTFILLED")]
+    # 依據資料庫前次分析/擬定時間與台灣本地日期，精準過濾屬於本日的未成交/取消訂單
+    if override_orders is None and today_unfilled:
+        filtered_unfilled = []
+        from src.time_manager import get_taiwan_timezone
+        tw_tz = get_taiwan_timezone()
+        cutoff_dt = None
+        if prev_analysis_cutoff_utc:
+            try:
+                cutoff_dt = datetime.fromisoformat(str(prev_analysis_cutoff_utc).replace("Z", "+00:00"))
+            except Exception:
+                cutoff_dt = None
+        for u in today_unfilled:
+            u_exec_at = u.get("executed_at")
+            if u_exec_at:
+                try:
+                    u_dt = datetime.fromisoformat(str(u_exec_at).replace("Z", "+00:00"))
+                    if cutoff_dt and u_dt <= cutoff_dt:
+                        continue
+                    if not sim_active and u_dt.astimezone(tw_tz).strftime("%Y-%m-%d") < report_target_date:
+                        continue
+                except Exception:
+                    pass
+            filtered_unfilled.append(u)
+        today_unfilled = filtered_unfilled
+
+    # 區分盤中真正成交項目 (FILLED / PARTFILLED)，精準判定成交是否屬於本次週期/本日
+    if override_orders is not None:
+        executed_orders = override_orders
+    else:
+        executed_orders = []
+        from src.time_manager import get_taiwan_timezone
+        tw_tz = get_taiwan_timezone()
+        cutoff_dt = None
+        if prev_analysis_cutoff_utc:
+            try:
+                cutoff_dt = datetime.fromisoformat(str(prev_analysis_cutoff_utc).replace("Z", "+00:00"))
+            except Exception:
+                cutoff_dt = None
+
+        for o in today_orders:
+            if o.get("status") not in ("FILLED", "PARTFILLED"):
+                continue
+
+            # 若處於沙盒模擬演練，訂單已由 sim_date 鎖定，直接納入
+            if sim_active:
+                executed_orders.append(o)
+                continue
+
+            exec_at = o.get("executed_at")
+            if not exec_at:
+                executed_orders.append(o)
+                continue
+
+            # 1. 若資料庫有前次每日分析/擬定成交紀錄，凡早於或等於該次分析完成時間戳者，代表為前次週期已結算之成交，絕不可計入本日
+            if cutoff_dt:
+                try:
+                    o_dt = datetime.fromisoformat(str(exec_at).replace("Z", "+00:00"))
+                    if o_dt <= cutoff_dt:
+                        continue
+                except Exception:
+                    pass
+
+            # 2. 檢驗成交日期（台灣本地時間）是否為本日報告基準日
+            try:
+                o_dt = datetime.fromisoformat(str(exec_at).replace("Z", "+00:00")).astimezone(tw_tz)
+                if o_dt.strftime("%Y-%m-%d") != report_target_date:
+                    continue
+            except Exception:
+                if str(exec_at)[:10] != report_target_date:
+                    continue
+
+            executed_orders.append(o)
 
     # 計算今日盤中實際實現損益
     today_realized_pnl = 0.0
