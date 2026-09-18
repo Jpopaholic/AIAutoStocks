@@ -26,17 +26,20 @@ class TestDiscordDiffColors(unittest.TestCase):
             webhook_live="https://discord.com/api/webhooks/mock"
         ))
 
-        # 1. 設置持股 (2330 成本 1000, 2454 成本 1500)
+        # 1. 設置持股 (2330 成本 1000, 2454 成本 1500, 2303 成本 140.5)
         mock_get_holdings.return_value = [
             {"stock_code": "2330", "quantity": 1000, "average_price": 1000.0},
             {"stock_code": "2454", "quantity": 1000, "average_price": 1500.0},
+            {"stock_code": "2303", "quantity": 87, "average_price": 140.5},
         ]
-        # 設置現價：2330 現價 1050 (獲利), 2454 現價 1400 (虧損)
+        # 設置現價：2330 現價 1050 (獲利), 2454 現價 1400 (虧損), 2303 現價 156 (獲利)
         def fake_display_price(code, fallback_price=0.0):
             if code == "2330":
                 return 1050.0
             elif code == "2454":
                 return 1400.0
+            elif code == "2303":
+                return 156.0
             return fallback_price
         mock_disp_price.side_effect = fake_display_price
 
@@ -56,11 +59,13 @@ class TestDiscordDiffColors(unittest.TestCase):
         # 決策 1: 買進 2308 -> 應為白色 (" ")
         # 決策 2: 賣出 2330 停利 (委託價 1100 > 成本 1000) -> 應為紅色 ("-") 且標示 賣(停利)
         # 決策 3: 賣出 2454 停損 (理由包含停損) -> 應為綠色 ("+") 且標示 賣(停損)
+        # 決策 4: 賣出 2303 停利 (委託價 155.5 > 成本 140.5，且 Skills 包含「停損線上移」) -> 應為紅色 ("-") 且標示 賣(停利)
         mock_portfolio_decision = {
             "decisions": [
                 {"stock_code": "2308", "action": "BUY", "quantity": 100, "price": 350.0, "reason": "看好動能進場配置", "total_score": 85.0, "trend_score": 20, "momentum_score": 20, "volume_score": 15, "safety_score": 15, "regime_score": 15},
                 {"stock_code": "2330", "action": "SELL", "quantity": 1000, "price": 1100.0, "reason": "達波段滿足點，獲利了結平倉", "total_score": 75.0, "trend_score": 15, "momentum_score": 15, "volume_score": 15, "safety_score": 15, "regime_score": 15},
                 {"stock_code": "2454", "action": "SELL", "quantity": 1000, "price": 1380.0, "reason": "跌破均線支撐，執行嚴格風控強制停損", "total_score": 60.0, "trend_score": 10, "momentum_score": 10, "volume_score": 15, "safety_score": 15, "regime_score": 10},
+                {"stock_code": "2303", "action": "SELL", "quantity": 87, "price": 155.5, "reason": "【經理人決策賣出】帳面獲利達10%時先調節至少三分之一，並將剩餘部位停損線上移至成本或成本上方", "total_score": 84.0, "trend_score": 19, "momentum_score": 18, "volume_score": 18, "safety_score": 11, "regime_score": 18},
             ]
         }
 
@@ -113,6 +118,8 @@ class TestDiscordDiffColors(unittest.TestCase):
         self.assertIn("- 賣(停利) 2330", next_day_f, "預約 2330 停利應為 '-' 前綴 (紅色) 且標註 (停利)")
         # 2454 停損 -> 綠色 ('+') 且標註 (停損)
         self.assertIn("+ 賣(停損) 2454", next_day_f, "預約 2454 停損應為 '+' 前綴 (綠色) 且標註 (停損)")
+        # 2303 停利 (即使描述包含停損字眼) -> 紅色 ('-') 且標註 (停利)
+        self.assertIn("- 賣(停利) 2303", next_day_f, "預約 2303 停利應為 '-' 前綴 (紅色) 且標註 (停利)")
 
         print("\n🎉 全部紅綠白色彩邏輯驗證成功通過！")
 

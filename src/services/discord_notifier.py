@@ -604,33 +604,32 @@ def send_daily_report(
                     prefix = " "  # 買進踩白色 (空格前綴)
                     type_label = ""
                 else:
-                    # 賣出：依據停利 / 停損判斷色彩
-                    reason_text = (str(d.get("reason") or "") + " " + str(d.get("pm_reason") or "")).lower()
+                    # 賣出：直接以委託價/現價與持股成本進行純數學損益計算 (一番兩瞪眼，絕不依賴關鍵字匹配)
                     hold_info = holdings_by_code.get(code, {})
                     avg_cost = float(hold_info.get("average_price") or 0.0)
                     
-                    is_take_profit = False
-                    is_stop_loss = False
-                    
-                    # 關鍵字檢查優先
-                    if any(k in reason_text for k in ("停利", "鎖利", "獲利了結", "take_profit", "tp")):
-                        is_take_profit = True
-                    elif any(k in reason_text for k in ("停損", "止損", "硬體停損", "風控強制", "stop_loss", "sl", "跌破")):
-                        is_stop_loss = True
-                    elif avg_cost > 0:
-                        if price > avg_cost:
-                            is_take_profit = True
-                        elif price < avg_cost:
-                            is_stop_loss = True
-                    
-                    if is_take_profit:
-                        prefix = "-"  # 停利為紅色 (Discord diff 中 '-' 渲染為紅色)
-                        type_label = "(停利)"
-                    elif is_stop_loss:
-                        prefix = "+"  # 停損為綠色 (Discord diff 中 '+' 渲染為綠色)
-                        type_label = "(停損)"
+                    eval_price = price
+                    if eval_price <= 0 and avg_cost > 0:
+                        try:
+                            from src.services.stock_fetcher import get_display_price
+                            eval_price = get_display_price(code, fallback_price=avg_cost)
+                        except Exception:
+                            eval_price = avg_cost
+
+                    # 依據實質損益價差 (eval_price - avg_cost) 嚴格判定：
+                    # 台股慣例：獲利為紅色 ('-') 標示 (停利)，虧損為綠色 ('+') 標示 (停損)，平手或無成本為白色 (' ')
+                    if avg_cost > 0 and eval_price > 0:
+                        if eval_price > avg_cost:
+                            prefix = "-"  # 停利為紅色 (Discord diff 中 '-' 渲染為紅色)
+                            type_label = "(停利)"
+                        elif eval_price < avg_cost:
+                            prefix = "+"  # 停損為綠色 (Discord diff 中 '+' 渲染為綠色)
+                            type_label = "(停損)"
+                        else:
+                            prefix = " "  # 平盤為白色
+                            type_label = "(平盤)"
                     else:
-                        prefix = " "  # 無明確損益或平手為白色
+                        prefix = " "  # 無持股成本紀錄或價格異常時維持客觀中立白色
                         type_label = ""
                 
                 action_desc = f"{action_label}{type_label}"
