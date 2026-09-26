@@ -2,7 +2,7 @@
 import time
 import math
 import requests
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any
 
 from src.time_manager import get_local_taiwan_date_str, get_utc_now
@@ -244,6 +244,12 @@ def fetch_stock_klines(stock_code: str, date_str: str = None) -> List[Dict[str, 
     if is_today_query:
         try:
             today_str = get_local_taiwan_date_str()
+            # 休市日防線：若今日為台股休市日（週末或國定假日），絕不偽造補建今日 K 線
+            from src.services.market_calendar import is_market_closed
+            is_closed, _ = is_market_closed(today_str)
+            if is_closed:
+                return klines
+
             latest_k_date = klines[-1]["date"] if klines else None
             if latest_k_date != today_str:
                 quote = fetch_realtime_quote(stock_code, force_refresh=True)
@@ -271,6 +277,28 @@ def fetch_stock_klines(stock_code: str, date_str: str = None) -> List[Dict[str, 
             print(f" [數據擷取器] 嘗試補建今日 {stock_code} 的 K 線時發生異常: {quote_err}")
 
     return klines
+
+def _extract_snap_date(snap) -> str:
+    """
+    從永豐證券 Shioaji snapshot 物件解析其真實撮合時間戳，返回台灣時間 'YYYY-MM-DD'。
+    若無撮合時間或解析失敗則返回空字串。
+    """
+    snap_ts = getattr(snap, "ts", 0)
+    if snap_ts and snap_ts > 0:
+        try:
+            if snap_ts > 1e16:
+                ts_sec = snap_ts / 1e9
+            elif snap_ts > 1e13:
+                ts_sec = snap_ts / 1e6
+            elif snap_ts > 1e10:
+                ts_sec = snap_ts / 1e3
+            else:
+                ts_sec = float(snap_ts)
+            snap_dt = datetime.fromtimestamp(ts_sec, tz=timezone.utc).astimezone(timezone(timedelta(hours=8)))
+            return snap_dt.strftime("%Y-%m-%d")
+        except Exception:
+            pass
+    return ""
 
 _QUOTE_CACHE = {}  # maps stock_code -> (quote_dict, timestamp)
 QUOTE_CACHE_TTL = 60.0  # cache for 60 seconds
@@ -322,6 +350,10 @@ def fetch_realtime_quotes_batch(stock_codes: List[str], force_refresh: bool = Fa
                         volume = int(getattr(snap, "total_volume", 0)) * 1000
                         bids = [float(snap.buy_price)] if getattr(snap, "buy_price", 0) > 0 else []
                         asks = [float(snap.sell_price)] if getattr(snap, "sell_price", 0) > 0 else []
+                        
+                        snap_date = _extract_snap_date(snap)
+                        quote_date = snap_date if snap_date else today_str
+                        
                         quote = {
                             "stockCode": code,
                             "price": price,
@@ -332,7 +364,7 @@ def fetch_realtime_quotes_batch(stock_codes: List[str], force_refresh: bool = Fa
                             "bids": bids,
                             "asks": asks,
                             "timestamp": get_utc_now().isoformat().replace("+00:00", "Z"),
-                            "date": today_str
+                            "date": quote_date
                         }
                         _QUOTE_CACHE[code] = (quote, now)
                         results[code] = quote
@@ -475,6 +507,8 @@ def fetch_taiex_realtime_quote() -> Dict[str, Any]:
                     high_val = float(snap.high) if getattr(snap, "high", 0) > 0 else price
                     low_val = float(snap.low) if getattr(snap, "low", 0) > 0 else price
                     today_str = get_local_taiwan_date_str()
+                    snap_date = _extract_snap_date(snap)
+                    quote_date = snap_date if snap_date else today_str
                     return {
                         "stockCode": "TAIEX",
                         "price": price,
@@ -482,7 +516,7 @@ def fetch_taiex_realtime_quote() -> Dict[str, Any]:
                         "high": high_val,
                         "low": low_val,
                         "volume": 0,
-                        "date": today_str
+                        "date": quote_date
                     }
     except Exception:
         pass
@@ -606,6 +640,11 @@ def fetch_taiex_klines(date_str: str = None) -> List[Dict[str, Any]]:
     if is_today_query:
         try:
             today_str = get_local_taiwan_date_str()
+            # 休市日防線：若今日為台股休市日（週末或國定假日），絕不偽造補建今日大盤 K 線
+            from src.services.market_calendar import is_market_closed
+            is_closed, _ = is_market_closed(today_str)
+            if is_closed:
+                return klines
             latest_k_date = klines[-1]["date"] if klines else None
             if latest_k_date != today_str:
                 quote = fetch_taiex_realtime_quote()

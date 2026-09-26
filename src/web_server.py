@@ -263,10 +263,12 @@ def run_trading_job_in_background(is_startup: bool = False):
                 tw_time = tw_now.time()
                 
                 # ---------------------------------------------------------
-                # 1. 平日自動下單排程 (週一至週五 15:00 - 18:00)
+                # 1. 交易日盤後自動下單排程 (開市交易日 15:00 - 18:00，排除週末與國定假日)
                 # ---------------------------------------------------------
                 in_pre_order_window = (dt_time(15, 0) <= tw_time <= dt_time(18, 0))
-                if in_pre_order_window and tw_now.weekday() not in (5, 6):
+                from src.services.market_calendar import is_market_closed
+                is_closed, _ = is_market_closed(tw_now)
+                if in_pre_order_window and not is_closed:
                     # 若今日尚未執行過 (記憶體層級判斷)
                     if last_run_date_memory != current_date:
                         # 從資料庫進行去重校驗，防止重新部署後重複執行

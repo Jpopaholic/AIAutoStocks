@@ -37,9 +37,11 @@ def run_live_trading_job(stock_codes: List[str], is_manual: bool = False) -> Non
     except Exception as prune_err:
         print(f" [排程引擎] 警告: 自動清理舊分析紀錄失敗: {prune_err}")
         
-    # 1. 跳過週末非交易日
-    if tw_now.weekday() in (5, 6):
-        msg = f"今日 {tw_now.strftime('%Y-%m-%d')} 為週末非交易日，主動跳過排程任務。"
+    # 1. 休市日防護（週末非交易日與國定假日行事曆自檢）
+    from src.services.market_calendar import is_market_closed
+    is_closed, close_reason = is_market_closed(tw_now)
+    if is_closed:
+        msg = f"今日 {tw_now.strftime('%Y-%m-%d')} 為台股休市日（{close_reason}），主動跳過排程任務。"
         print(f" [排程引擎] {msg}")
         supabase_client.log_system_event("INFO", msg)
         return
