@@ -1293,6 +1293,32 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
     atr_mean_val = metrics.get('portfolio_mean_atr_pct')
     atr_summary_line = f"• 標的平均波動度 (ATR%): **{atr_mean_val:.2f}%** (高波動: **{metrics.get('high_volatility_stock_count', 0)}** 檔 | 標準: **{metrics.get('normal_volatility_stock_count', 0)}** 檔 | 低波動: **{metrics.get('low_volatility_stock_count', 0)}** 檔)\n" if atr_mean_val is not None else ""
 
+    l3_meta_section = ""
+    if monthly_skills_retrospective:
+        traj_sum = monthly_skills_retrospective.get("trajectory_summary", "")
+        overfit = monthly_skills_retrospective.get("overfitting_verdict", "")
+        adj_verdicts = monthly_skills_retrospective.get("monthly_adjustments_verdict", [])
+        conflict_res = monthly_skills_retrospective.get("rule_conflict_resolutions", [])
+        strat_takeaways = monthly_skills_retrospective.get("strategic_takeaways", [])
+
+        adj_text = "\n".join([f"• {v}" for v in adj_verdicts]) if adj_verdicts else "無特別調整"
+        conflict_text = "\n".join([f"• {c}" for c in conflict_res]) if conflict_res else "無規則衝突"
+        takeaways_text = "\n".join([f"• {t}" for t in strat_takeaways]) if strat_takeaways else "無宏觀教訓"
+
+        l3_meta_section = (
+            f"---\n\n"
+            f"## 🧠 Layer 3 月度技能演化深度復盤與超參數審議 (策略委員會)\n"
+            f"**【演化軌跡回顧】**\n{traj_sum}\n\n"
+            f"**【過度擬合 (Overfitting) 審查】**\n{overfit}\n\n"
+            f"**【逐月調參成效裁定】**\n{adj_text}\n\n"
+            f"**【規則語義與優先權裁決】**\n{conflict_text}\n\n"
+            f"**【跨季宏觀戰略教訓】**\n{takeaways_text}\n\n"
+        )
+        l4_header = f"## 🏆 Layer 4 {period_label}整體策略與 Skills 演化總結"
+    else:
+        l3_meta_section = ""
+        l4_header = f"## 🏆 Layer 3 {period_label}整體策略總結"
+
     periodic_report_md = (
         f"# 🏆 {period_label} AI 復盤與戰術演化報告 (期間: {review_month})\n\n"
         f"## 📊 當期實盤硬指標統計\n"
@@ -1313,8 +1339,9 @@ def send_periodic_review_notification(review_result: Dict[str, Any], review_type
         f"## 🛡️ Layer 2 CIO 交易執行與部位風控總評\n{cio_summary}\n\n"
         f"**【交易執行核心學習點】**\n{learnings_text}\n\n"
         f"### ⚔️ 各標的 Layer 2 個股交易與執行風控診斷報告\n{exe_reports_md}\n\n"
+        f"{l3_meta_section}"
         f"---\n\n"
-        f"## 🏆 Layer 3 {period_label}整體策略總結\n{overall_summary}\n\n"
+        f"{l4_header}\n{overall_summary}\n\n"
         f"**【下期關鍵戰術執行守則】**\n{tactical_text}\n\n"
         f"---\n\n"
         f"## ⚙️ 演化下期動態戰術 Skills (JSON)\n```json\n{json.dumps(review_result.get('skills') or review_result.get('skills_json', {}), ensure_ascii=False, indent=2)}\n```\n"
