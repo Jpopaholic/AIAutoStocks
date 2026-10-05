@@ -206,18 +206,44 @@ def aggregate_quarterly_data(year: int, quarter: int, is_paper: bool = False) ->
         }
 
     # 門檻滿足，進行全季度資料庫撈取
-    # 1. 撈取全季度 daily_analysis
-    raw_analysis_res = supabase.table("daily_analysis") \
-        .select("id, stock_code, analysis_date, trend_score, momentum_score, volume_score, safety_score, regime_score, total_score, decision, action, created_at") \
-        .gte("analysis_date", start_str) \
-        .lte("analysis_date", end_str) \
-        .order("analysis_date", desc=False) \
-        .execute()
-    raw_scores_list = raw_analysis_res.data or []
-    scores_list = aggregate_daily_scores(raw_scores_list)
+    # 1. 撈取全季度 daily_analysis 與關聯之 stock_analysis_scores
+    daily_analyses: List[Dict[str, Any]] = []
+    daily_analysis_ids: List[int] = []
+    try:
+        da_res = supabase.table("daily_analysis") \
+            .select("id, analysis_date, regime, posture, risk_multiplier") \
+            .eq("is_paper", is_paper) \
+            .gte("analysis_date", start_str) \
+            .lte("analysis_date", end_str) \
+            .order("analysis_date", desc=False) \
+            .execute()
+        daily_analyses = da_res.data or []
+        daily_analysis_ids = [d["id"] for d in daily_analyses if "id" in d]
+    except Exception as e:
+        print(f" [Quarterly Aggregator] 撈取 daily_analysis 失敗: {e}")
 
-    daily_analysis_ids = list(set([s.get("id") for s in raw_scores_list if s.get("id")]))
-    daily_analysis_count = len(set([str(s.get("analysis_date")) for s in scores_list]))
+    raw_scores_list: List[Dict[str, Any]] = []
+    if daily_analysis_ids:
+        try:
+            page_size = 1000
+            offset = 0
+            while True:
+                sa_res = supabase.table("stock_analysis_scores") \
+                    .select("*") \
+                    .in_("daily_analysis_id", daily_analysis_ids) \
+                    .eq("is_paper", is_paper) \
+                    .range(offset, offset + page_size - 1) \
+                    .execute()
+                batch = sa_res.data or []
+                raw_scores_list.extend(batch)
+                if len(batch) < page_size:
+                    break
+                offset += page_size
+        except Exception as e:
+            print(f" [Quarterly Aggregator] 撈取 stock_analysis_scores 失敗: {e}")
+
+    scores_list = aggregate_daily_scores(raw_scores_list)
+    daily_analysis_count = len(set([str(d.get("analysis_date")) for d in daily_analyses]))
 
     # 2. 撈取全季度訂單 (orders)
     local_tz = TAIWAN_TZ
@@ -240,16 +266,36 @@ def aggregate_quarterly_data(year: int, quarter: int, is_paper: bool = False) ->
         [o["stock_code"] for o in all_orders if o.get("stock_code")]
     )))
 
-    # 4. 抓取各標的全季度歷史日 K 線
-    from src.services.sinopac_client import sinopac_client
+    # 4. 抓取各標的全季度歷史日 K 線 (自 Supabase stock_klines 資料表批次分頁撈取)
     klines_map: Dict[str, List[Dict[str, Any]]] = {}
-    for sc in active_stocks:
+    if active_stocks:
         try:
-            klines = sinopac_client.get_daily_klines(sc, start_date=start_str, end_date=end_str)
-            klines_map[sc] = klines or []
+            page_size = 1000
+            offset = 0
+            all_klines = []
+            while True:
+                res = supabase.table("stock_klines") \
+                    .select("*") \
+                    .in_("stock_code", active_stocks) \
+                    .gte("date", start_str) \
+                    .lte("date", end_str) \
+                    .order("date", desc=False) \
+                    .range(offset, offset + page_size - 1) \
+                    .execute()
+                batch = res.data or []
+                all_klines.extend(batch)
+                if len(batch) < page_size:
+                    break
+                offset += page_size
+
+            for k in all_klines:
+                sc = k.get("stock_code")
+                if sc:
+                    if sc not in klines_map:
+                        klines_map[sc] = []
+                    klines_map[sc].append(k)
         except Exception as e:
-            print(f" [Quarterly Aggregator] 抓取個股 {sc} K線失敗: {e}")
-            klines_map[sc] = []
+            print(f" [Quarterly Aggregator] 警告: 撈取 stock_klines 失敗: {e}")
 
     # 5. 計算全季度平倉交易硬指標 (Realized PnL, Win Rate, Payoff, Profit Factor)
     closed_trades = [o for o in filled_orders if str(o.get("action") or "").upper() == "SELL" and o.get("realized_pnl") is not None]

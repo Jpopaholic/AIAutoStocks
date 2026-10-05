@@ -174,11 +174,13 @@ def save_stock_klines(klines: List[Dict[str, Any]]) -> Any:
 # 3. 交易訂單與持股明細 相關資料庫操作
 # ==========================================================================
 
-def get_holdings() -> List[Dict[str, Any]]:
+def get_holdings(is_paper: Optional[bool] = None) -> List[Dict[str, Any]]:
     """
     取得目前的持股明細。
+    :param is_paper: 是否為模擬交易持股，若為 None 則讀取 config.limits.is_paper_trading
     """
-    is_paper = config.limits.is_paper_trading
+    if is_paper is None:
+        is_paper = config.limits.is_paper_trading
     return execute_with_retry(
         lambda: supabase.table("holdings")
         .select("stock_code, quantity, average_price, updated_at")
@@ -190,15 +192,18 @@ def get_holdings() -> List[Dict[str, Any]]:
 def get_orders(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
-    sim_date: Optional[str] = None
+    sim_date: Optional[str] = None,
+    is_paper: Optional[bool] = None
 ) -> List[Dict[str, Any]]:
     """
     取得特定時間區間內的交易訂單。
     :param start_date: 依真實 executed_at 篩選起始時間（真實操盤模式用）
     :param end_date: 依真實 executed_at 篩選結束時間
     :param sim_date: 依沙盒虛擬日期精準篩選（如 '2026-05-05'，沙盒模式用）
+    :param is_paper: 是否為模擬交易訂單，若為 None 則讀取 config.limits.is_paper_trading
     """
-    is_paper = config.limits.is_paper_trading
+    if is_paper is None:
+        is_paper = config.limits.is_paper_trading
     query = supabase.table("trade_orders").select(
         "id, stock_code, action, price, quantity, fee, total_amount, executed_at, realized_pnl, status, execution_price, order_id"
     ).eq("is_paper", is_paper)

@@ -138,6 +138,18 @@ def _safe_embed_description(text: str, max_len: int = 3900) -> str:
     return text[:max_len - 60] + "\n\n...(字數超出限制已自動截斷，完整細節請參閱附件 .md 檔案)..."
 
 
+def _safe_embed_value(text: str, max_len: int = 1000) -> str:
+    """
+    將 Discord Embed Field Value 文字限制在安全字數內 (Discord 限制 1024 字元)，
+    防範超長文字引發 HTTP 400 Bad Request 錯誤。
+    """
+    if not text:
+        return "無"
+    if len(text) <= max_len:
+        return text
+    return text[:max_len - 30] + "\n...(超出字數已截斷)..."
+
+
 def _split_text_by_length(text: str, max_len: int = 1000) -> List[str]:
     """
     將一段長文字切割成多個符合 Discord 欄位限制 (1024字) 的字串區塊。
